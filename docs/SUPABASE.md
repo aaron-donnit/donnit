@@ -75,10 +75,12 @@ external is reading them. **Do not include those drops in `0002`** — keep
 - `server/routes.ts` routes both bootstrap, chat, tasks, events, and email
   suggestions through `DonnitStore` when authenticated. The Gmail scan
   endpoint also writes its suggestions into the authenticated user's org.
-- `client/src/lib/supabase.ts` builds the browser-safe Supabase client. It
-  detects sandboxes that block `localStorage` and falls back to in-memory
-  session storage; in those previews the user must sign in again after a
-  reload (see banner in the auth screen).
+- `client/src/lib/supabase.ts` is a tiny GoTrue REST wrapper (no
+  `@supabase/supabase-js` dependency). Sessions live only in module memory:
+  the deploy validator forbids `localStorage`, `sessionStorage`, `indexedDB`,
+  and similar APIs in the bundle, so we cannot persist sessions in the
+  browser. Reloading the page or closing the tab signs the user out — this
+  trade-off is surfaced on the auth screen.
 - `client/src/components/AuthGate.tsx` renders the sign-in / sign-up form,
   the first-time bootstrap form (calls `POST /api/auth/bootstrap` →
   `donnit.bootstrap_workspace(...)`), and a loading state. It then renders

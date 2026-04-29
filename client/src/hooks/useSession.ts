@@ -1,43 +1,35 @@
 import { useEffect, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { getSupabase, supabaseConfig } from "@/lib/supabase";
+import {
+  getCurrentSession,
+  onAuthChange,
+  supabaseConfig,
+  type DonnitSession,
+} from "@/lib/supabase";
 
 export type DonnitSessionState = {
   configured: boolean;
   loading: boolean;
-  session: Session | null;
+  session: DonnitSession | null;
   accessToken: string | null;
 };
 
 export function useSession(): DonnitSessionState {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState<boolean>(supabaseConfig.configured);
+  const [session, setSession] = useState<DonnitSession | null>(getCurrentSession());
+  // Auth state lives in module memory, so there is nothing to load
+  // asynchronously the way the supabase-js client did.
+  const [loading] = useState<boolean>(false);
 
   useEffect(() => {
-    const client = getSupabase();
-    if (!client) {
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    client.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session ?? null);
-      setLoading(false);
+    const unsubscribe = onAuthChange((next) => {
+      setSession(next);
     });
-    const { data: sub } = client.auth.onAuthStateChange((_event, next) => {
-      setSession(next ?? null);
-    });
-    return () => {
-      active = false;
-      sub.subscription.unsubscribe();
-    };
+    return unsubscribe;
   }, []);
 
   return {
     configured: supabaseConfig.configured,
     loading,
     session,
-    accessToken: session?.access_token ?? null,
+    accessToken: session?.accessToken ?? null,
   };
 }

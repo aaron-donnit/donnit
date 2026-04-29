@@ -6,7 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useSession } from "@/hooks/useSession";
-import { getSupabase, supabaseConfig, usingPersistentSession } from "@/lib/supabase";
+import {
+  signInWithPassword,
+  signUpWithPassword,
+  signOut as supabaseSignOut,
+  supabaseConfig,
+} from "@/lib/supabase";
 import { apiRequest, setAuthAccessToken } from "@/lib/queryClient";
 
 type Mode = "signin" | "signup";
@@ -39,7 +44,7 @@ export function AuthGate({ children }: AuthShellProps) {
   // After signin/signup, ensure the user has a profile + default org.
   useEffect(() => {
     let cancelled = false;
-    if (!session?.access_token) {
+    if (!session?.accessToken) {
       setBootstrapStatus("unknown");
       return;
     }
@@ -60,7 +65,7 @@ export function AuthGate({ children }: AuthShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [session?.access_token]);
+  }, [session?.accessToken]);
 
   async function handleBootstrap() {
     setBusy(true);
@@ -81,17 +86,18 @@ export function AuthGate({ children }: AuthShellProps) {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const client = getSupabase();
-    if (!client) return;
+    if (!supabaseConfig.configured) return;
     setBusy(true);
     setError(null);
     try {
       if (mode === "signup") {
-        const { error } = await client.auth.signUp({ email, password });
-        if (error) throw error;
+        const session = await signUpWithPassword(email, password);
+        if (!session) {
+          setError("Check your email to confirm your account, then sign in.");
+          setMode("signin");
+        }
       } else {
-        const { error } = await client.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        await signInWithPassword(email, password);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Authentication failed.");
@@ -101,9 +107,7 @@ export function AuthGate({ children }: AuthShellProps) {
   }
 
   async function signOut() {
-    const client = getSupabase();
-    if (!client) return;
-    await client.auth.signOut();
+    await supabaseSignOut();
   }
 
   // Demo mode — Supabase env vars not set. Render the existing app with
@@ -182,11 +186,9 @@ export function AuthGate({ children }: AuthShellProps) {
                 </button>
                 <Badge variant="outline" className="font-normal">Supabase Auth</Badge>
               </div>
-              {!usingPersistentSession && (
-                <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-                  Preview environment limits browser storage; you may need to sign in again after a reload.
-                </p>
-              )}
+              <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+                This preview keeps your session only in page memory, so reloading or closing the tab will sign you out.
+              </p>
             </form>
           </CardContent>
         </Card>
