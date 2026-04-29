@@ -150,14 +150,55 @@ export async function signOut(): Promise<void> {
   }
 }
 
-// Build the redirect target for password recovery. The link in the email
-// brings the user back to the same origin + path, where GoTrue appends the
-// recovery tokens as a URL fragment. We strip any existing query/hash so the
-// returned URL is deterministic across deploy proxies.
+// Build the redirect target for password recovery. Supabase will append the
+// recovery tokens as a URL fragment to whatever URL we hand it, so the URL
+// must be the canonical public address of the deployed app.
+//
+// Resolution order:
+//   1. `VITE_AUTH_REDIRECT_URL` — explicit override. Use this in any
+//      environment where `window.location.origin` is not the public URL
+//      (preview proxies, Perplexity Computer sandbox, local dev tunnels).
+//   2. `VITE_SITE_URL` — generic site URL fallback if the more specific
+//      auth redirect var is not set.
+//   3. `window.location.origin + pathname` — last resort. This is what got
+//      us into trouble before: in the Perplexity preview the runtime origin
+//      is an internal `*.sites.pplx` URL (or even `localhost`) that the
+//      mail recipient cannot reach, so the recovery link 404s or hits
+//      ERR_CONNECTION_REFUSED.
+//
+// Whichever URL we resolve, we strip any trailing slash + existing query/
+// hash so Supabase can append `#access_token=...&type=recovery` cleanly.
 export function recoveryRedirectUrl(): string {
+  const explicit =
+    (import.meta.env.VITE_AUTH_REDIRECT_URL as string | undefined) ??
+    (import.meta.env.VITE_SITE_URL as string | undefined) ??
+    "";
+  if (explicit) return normalizeRedirect(explicit);
   if (typeof window === "undefined") return "";
   const { origin, pathname } = window.location;
-  return `${origin}${pathname}`;
+  return normalizeRedirect(`${origin}${pathname}`);
+}
+
+function normalizeRedirect(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  // Drop any existing query string or fragment — Supabase will append its
+  // own. Keep the path so deep links (e.g. `/computer/a/<slug>`) survive.
+  const noHash = trimmed.split("#")[0];
+  const noQuery = noHash.split("?")[0];
+  // Strip a single trailing slash unless the URL is just the origin
+  // (e.g. `https://app.example.com/`). For `https://example.com/path/`
+  // we want `https://example.com/path`.
+  if (noQuery.endsWith("/")) {
+    try {
+      const u = new URL(noQuery);
+      if (u.pathname === "/" || u.pathname === "") return noQuery;
+    } catch {
+      // Fall through and return as-is if URL parsing fails.
+    }
+    return noQuery.replace(/\/+$/, "");
+  }
+  return noQuery;
 }
 
 export async function requestPasswordRecovery(email: string): Promise<void> {

@@ -138,9 +138,74 @@ SUPABASE_ANON_KEY=<anon key>
 # client-side (Vite injects only VITE_-prefixed vars into the browser)
 VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key>
+
+# Canonical public URL the password-recovery email should return users to.
+# Required in any non-localhost build (see "Password recovery redirect URL"
+# below). Production should be the donnit.ai URL.
+VITE_AUTH_REDIRECT_URL=https://donnit.ai
+# Optional generic fallback if VITE_AUTH_REDIRECT_URL is unset.
+VITE_SITE_URL=https://donnit.ai
 ```
 
 No schema-related env var is needed — the schema is hard-coded to `donnit`
 because changing it would require a coordinated migration. The anon key is
 public by design and paired with RLS; never put a service role key in any
 file checked into the repo.
+
+## Password recovery redirect URL
+
+The "Forgot password?" flow calls `POST {SUPABASE_URL}/auth/v1/recover`
+with a `redirect_to` field. Supabase emails a magic link of the form
+`{SUPABASE_URL}/auth/v1/verify?token=...&redirect_to={redirect_to}`; once
+GoTrue verifies the token it 302s the browser to `redirect_to` with the
+recovery `access_token`, `refresh_token`, `expires_in`, and `type=recovery`
+appended in the URL fragment. `client/src/main.tsx` then calls
+`consumeRecoveryFromUrl()` which lifts the tokens out of the fragment, hands
+them to the auth layer, and scrubs them from the address bar. The "set new
+password" form in `AuthGate.tsx` uses the recovery `access_token` to call
+`PUT /auth/v1/user` and update the password.
+
+For that round-trip to work the `redirect_to` URL MUST be reachable from the
+recipient's browser. The previous implementation just used
+`window.location.origin + pathname`, which fails in two situations we now
+care about:
+
+1. **Local dev** — the browser sees `http://localhost:5173/...`. The email
+   recipient has no localhost server, so the link errors with
+   `ERR_CONNECTION_REFUSED`.
+2. **Perplexity Computer preview** — the runtime origin is an internal
+   `*.sites.pplx` URL (or worse, a `localhost` proxy origin) that only
+   the sandbox can resolve. Mail recipients land on the same dead URL.
+
+`client/src/lib/supabase.ts` → `recoveryRedirectUrl()` now resolves the URL
+in this order:
+
+1. `VITE_AUTH_REDIRECT_URL` (preferred, explicit override)
+2. `VITE_SITE_URL` (generic fallback)
+3. `window.location.origin + pathname` (last resort, for local dev only)
+
+It strips any trailing slash, query, or fragment from the resolved value so
+Supabase can append `#access_token=...&type=recovery` cleanly. Deep paths
+on the URL are preserved (`/computer/a/<slug>` survives).
+
+### Required Supabase dashboard configuration
+
+In **Supabase → Authentication → URL Configuration**:
+
+- **Site URL** — set to the canonical app URL (eventually `https://donnit.ai`).
+- **Redirect URLs** — add every URL that any deployed build will pass as
+  `redirect_to`. GoTrue silently rewrites a redirect that is not on this
+  allow-list back to Site URL, which is the second-most-common reason
+  recovery emails seem to point at the wrong place. Entries to add today:
+  - `https://donnit.ai`
+  - `https://donnit.ai/*` (covers any sub-path)
+  - `https://www.perplexity.ai/computer/a/donnit-mvp-preview-_VxG11WdRGCG2xmRPTxflg`
+  - `http://localhost:5173/*` (for local dev only; remove for prod project)
+
+### Per-environment values
+
+| Environment           | `VITE_AUTH_REDIRECT_URL`                                                                  |
+|-----------------------|-------------------------------------------------------------------------------------------|
+| Production            | `https://donnit.ai`                                                                       |
+| Perplexity preview    | `https://www.perplexity.ai/computer/a/donnit-mvp-preview-_VxG11WdRGCG2xmRPTxflg`          |
+| Local dev             | (unset — falls back to `window.location.origin`, which is fine when you click the link in the same browser session) |
