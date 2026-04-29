@@ -7,6 +7,7 @@ import {
   taskCreateRequestSchema,
 } from "@shared/schema";
 import type { InsertTask, Task, User } from "@shared/schema";
+import { getIntegrationStatus, scanGmailForTaskCandidates } from "./integrations";
 import { storage } from "./storage";
 
 const CURRENT_USER_ID = 1;
@@ -162,6 +163,7 @@ async function bootstrap() {
     messages,
     suggestions,
     agenda: buildAgenda(tasks),
+    integrations: getIntegrationStatus(),
   };
 }
 
@@ -296,6 +298,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/agenda", async (_req, res) => {
     const tasks = await storage.listTasks();
     res.json(buildAgenda(tasks));
+  });
+
+  app.get("/api/integrations", async (_req, res) => {
+    res.json(getIntegrationStatus());
+  });
+
+  app.post("/api/integrations/gmail/scan", async (_req, res) => {
+    const result = await scanGmailForTaskCandidates();
+    if (!result.ok) {
+      res.status(424).json(result);
+      return;
+    }
+    res.json(result);
   });
 
   return httpServer;

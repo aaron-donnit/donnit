@@ -1,0 +1,18 @@
+{
+  "name": "Donnit",
+  "short_name": "Donnit",
+  "description": "AI task command center for chat-based task capture, reminders, assignments, and daily agenda planning.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F6F2",
+  "theme_color": "#01696F",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

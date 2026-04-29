@@ -66,6 +66,27 @@ type Bootstrap = {
   messages: ChatMessage[];
   suggestions: EmailSuggestion[];
   agenda: AgendaItem[];
+  integrations: {
+    auth: {
+      provider: string;
+      status: string;
+      projectId: string;
+    };
+    email: {
+      provider: string;
+      sourceId: string;
+      status: string;
+      mode: string;
+    };
+    reminders: {
+      channelOrder: string[];
+      reminderOrder: string[];
+    };
+    app: {
+      delivery: string;
+      native: string;
+    };
+  };
 };
 
 const urgencyTone: Record<string, string> = {
@@ -473,6 +494,40 @@ function AgendaPanel({ agenda }: { agenda: AgendaItem[] }) {
   );
 }
 
+function IntegrationStatus({ integrations }: { integrations: Bootstrap["integrations"] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="size-5" />
+          v0.2 foundation
+        </CardTitle>
+        <CardDescription>Approved production direction captured in the codebase.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
+          <span>Auth</span>
+          <Badge variant="outline">{integrations.auth.provider}: {integrations.auth.status}</Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
+          <span>Email</span>
+          <Badge variant="outline">{integrations.email.provider}: approval loop</Badge>
+        </div>
+        <div className="rounded-md bg-muted px-3 py-2">
+          <p className="font-medium">Reminder order</p>
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="text-reminder-order">
+            {integrations.reminders.channelOrder.join(" → ")}
+          </p>
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
+          <span>App strategy</span>
+          <Badge variant="outline">{integrations.app.delivery.replace(/_/g, " ")}</Badge>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ActivityLog({ events, tasks, users, compact = false }: { events: TaskEvent[]; tasks: Task[]; users: User[]; compact?: boolean }) {
   const visibleEvents = compact ? events.slice(0, 5) : events;
   return (
@@ -582,6 +637,7 @@ function CommandCenter() {
           <ChatPanel messages={data.messages} />
 
           <div className="space-y-5">
+            <IntegrationStatus integrations={data.integrations} />
             <AgendaPanel agenda={data.agenda} />
             <EmailSuggestions suggestions={data.suggestions} />
             <ActivityLog events={data.events} tasks={data.tasks} users={data.users} compact />
