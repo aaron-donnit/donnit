@@ -142,9 +142,19 @@ export type GmailScanResult =
       ok: false;
       reason:
         | "gmail_auth_required"
+        | "gmail_runtime_unavailable"
         | "gmail_not_connected_or_tool_unavailable";
       message: string;
     };
+
+// When the Gmail connector is configured at the platform layer but the
+// running app server cannot reach the external-tool runtime (e.g. the
+// hosted preview process does not have a usable programmatic credential),
+// the CLI fails with UNAUTHORIZED before ever reaching Gmail. We treat
+// that case as a runtime-token problem, not a connector reauthorize one,
+// so the user is not told to reconnect Gmail.
+const RUNTIME_UNAVAILABLE_MESSAGE =
+  "Email scan is connected in Computer, but this preview server cannot access the Gmail runtime token. Try again after redeploy or use Manual email import for now.";
 
 function toCandidate(email: GmailEmail) {
   return {
@@ -158,6 +168,33 @@ function toCandidate(email: GmailEmail) {
     assignedToId: 1,
     receivedAt: email.date ?? null,
   };
+}
+
+// Build a task candidate from a manually pasted email subject/body. Used by
+// the UI fallback when the hosted preview cannot reach the external-tool
+// runtime. The synthetic source id keeps these rows trivially distinguishable
+// from real Gmail-derived suggestions and namespaces them so dedupe still
+// works when a user later re-runs the live scan.
+export function buildManualEmailCandidate(input: {
+  subject: string;
+  body: string;
+  fromEmail?: string;
+}) {
+  const subject = input.subject.trim().slice(0, 240) || "Pasted email";
+  const body = input.body.trim().slice(0, 4000);
+  const from = (input.fromEmail ?? "manual import").trim().slice(0, 240) || "manual import";
+  const synthetic = `manual:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  // Strip the body to a short preview — never persist full pasted content
+  // beyond what the existing preview field is sized for.
+  const preview = body.slice(0, 240);
+  const email: GmailEmail = {
+    email_id: synthetic,
+    from_: from,
+    subject,
+    snippet: preview,
+    body,
+  };
+  return toCandidate(email);
 }
 
 export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
@@ -184,16 +221,24 @@ export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
     stdout = result.stdout;
   } catch (error) {
     const failure = parseToolFailure(error);
-    if (
-      failure.status === 401 ||
-      failure.errorCode === "UNAUTHORIZED" ||
-      failure.errorCode === "auth_required"
-    ) {
+    // A real connector-side reauthorize is signalled by `error: auth_required`
+    // (often with an `auth_url`). A bare UNAUTHORIZED from the CLI without an
+    // auth_url means this app process cannot reach the external-tool runtime
+    // token at all — telling the user to reconnect Gmail in that case is a
+    // lie. Treat it as a runtime-token problem instead.
+    if (failure.errorCode === "auth_required" || failure.authUrl) {
       return {
         ok: false,
         reason: "gmail_auth_required",
         message:
           "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again.",
+      };
+    }
+    if (failure.status === 401 || failure.errorCode === "UNAUTHORIZED") {
+      return {
+        ok: false,
+        reason: "gmail_runtime_unavailable",
+        message: RUNTIME_UNAVAILABLE_MESSAGE,
       };
     }
     return {

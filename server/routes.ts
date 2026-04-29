@@ -6,7 +6,12 @@ import {
   taskCreateRequestSchema,
 } from "@shared/schema";
 import type { InsertTask, Task, User } from "@shared/schema";
-import { getIntegrationStatus, scanGmailForTaskCandidates } from "./integrations";
+import {
+  buildManualEmailCandidate,
+  getIntegrationStatus,
+  scanGmailForTaskCandidates,
+} from "./integrations";
+import { z } from "zod";
 import { storage } from "./storage";
 import { attachSupabaseAuth, requireDonnitAuth } from "./auth-supabase";
 import { DonnitStore, type DonnitTask } from "./donnit-store";
@@ -802,7 +807,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/integrations/gmail/scan", async (req: Request, res: Response) => {
     const result = await scanGmailForTaskCandidates();
     if (!result.ok) {
-      const status = result.reason === "gmail_auth_required" ? 401 : 424;
+      const status =
+        result.reason === "gmail_auth_required"
+          ? 401
+          : result.reason === "gmail_runtime_unavailable"
+            ? 503
+            : 424;
       res.status(status).json({
         ok: false,
         reason: result.reason,
@@ -867,6 +877,62 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       created.push(suggestion);
     }
     res.json({ ok: true, scannedCandidates: candidates.length, createdSuggestions: created.length, suggestions: created });
+  });
+
+  // Manual email import — used as a fallback when the hosted preview cannot
+  // talk to the external-tool runtime. Persists exactly one email_suggestion
+  // row from a pasted subject/body so product testing can continue end-to-end.
+  const manualEmailSchema = z.object({
+    subject: z.string().trim().min(1).max(240),
+    body: z.string().trim().min(1).max(4000),
+    fromEmail: z.string().trim().max(240).optional(),
+  });
+
+  app.post("/api/integrations/email/manual", async (req: Request, res: Response) => {
+    const parsed = manualEmailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Provide a subject (1–240 chars) and body (1–4000 chars)." });
+      return;
+    }
+    const candidate = buildManualEmailCandidate(parsed.data);
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const orgId = await store.getDefaultOrgId();
+        if (!orgId) {
+          res.status(409).json({ message: "Workspace not bootstrapped." });
+          return;
+        }
+        const suggestion = await store.createEmailSuggestion(orgId, {
+          gmail_message_id: candidate.gmailMessageId ?? null,
+          from_email: candidate.fromEmail,
+          subject: candidate.subject,
+          preview: candidate.preview,
+          suggested_title: candidate.suggestedTitle,
+          suggested_due_date: candidate.suggestedDueDate,
+          urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
+          assigned_to: auth.userId,
+        });
+        res.status(201).json({ ok: true, suggestion });
+        return;
+      } catch (error) {
+        const payload = serializeSupabaseError(error);
+        console.error("[donnit] manual email import failed", { userId: req.donnitAuth?.userId, ...payload });
+        res.status(500).json({ ok: false, ...payload });
+        return;
+      }
+    }
+    const suggestion = await storage.createEmailSuggestion({
+      fromEmail: candidate.fromEmail,
+      subject: candidate.subject,
+      preview: candidate.preview,
+      suggestedTitle: candidate.suggestedTitle,
+      suggestedDueDate: candidate.suggestedDueDate,
+      urgency: candidate.urgency,
+      assignedToId: candidate.assignedToId,
+    });
+    res.status(201).json({ ok: true, suggestion });
   });
 
   return httpServer;

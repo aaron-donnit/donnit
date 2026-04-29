@@ -33,6 +33,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import NotFound from "@/pages/not-found";
 
 type Id = string | number;
@@ -696,8 +705,124 @@ function DoneLogPanel({
   );
 }
 
+function ManualEmailImportDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [fromEmail, setFromEmail] = useState("");
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/email/manual", {
+        subject: subject.trim(),
+        body: body.trim(),
+        fromEmail: fromEmail.trim() || undefined,
+      });
+      return (await res.json()) as { ok: boolean };
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "Email added",
+        description: "Pasted email is queued in Waiting on you.",
+      });
+      setSubject("");
+      setBody("");
+      setFromEmail("");
+      onOpenChange(false);
+    },
+    onError: () => {
+      toast({
+        title: "Could not import email",
+        description: "Check the subject and body and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const ready = subject.trim().length >= 1 && body.trim().length >= 1;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Manual email import</DialogTitle>
+          <DialogDescription>
+            Paste an email subject and body to create an actionable suggestion. Useful when the
+            hosted preview cannot reach the Gmail runtime token.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label htmlFor="manual-email-from" className="ui-label mb-1.5 block">
+              From (optional)
+            </Label>
+            <Input
+              id="manual-email-from"
+              value={fromEmail}
+              onChange={(event) => setFromEmail(event.target.value)}
+              placeholder="alex@example.com"
+              data-testid="input-manual-email-from"
+            />
+          </div>
+          <div>
+            <Label htmlFor="manual-email-subject" className="ui-label mb-1.5 block">
+              Subject
+            </Label>
+            <Input
+              id="manual-email-subject"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              placeholder="Action required: review Q2 contract"
+              maxLength={240}
+              data-testid="input-manual-email-subject"
+            />
+          </div>
+          <div>
+            <Label htmlFor="manual-email-body" className="ui-label mb-1.5 block">
+              Body
+            </Label>
+            <Textarea
+              id="manual-email-body"
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              placeholder="Paste the relevant excerpt — the suggested task title, due date, and urgency will be inferred."
+              className="min-h-[140px]"
+              maxLength={4000}
+              data-testid="input-manual-email-body"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            data-testid="button-manual-email-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => create.mutate()}
+            disabled={!ready || create.isPending}
+            data-testid="button-manual-email-submit"
+          >
+            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <MailPlus className="size-4" />}
+            Add to queue
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
+  const [manualImportOpen, setManualImportOpen] = useState(false);
 
   const scan = useMutation({
     mutationFn: async () => {
@@ -736,16 +861,27 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           // body wasn't JSON; fall through to generic copy
         }
       }
-      const isAuth = parsed.reason === "gmail_auth_required" || message.startsWith("401:");
+      const reason = parsed.reason;
+      const isAuth = reason === "gmail_auth_required";
+      const isRuntime = reason === "gmail_runtime_unavailable" || message.startsWith("503:");
+      const title = isAuth
+        ? "Reconnect Gmail"
+        : isRuntime
+          ? "Use manual import for now"
+          : "Email scan unavailable";
+      const description =
+        parsed.message ??
+        (isAuth
+          ? "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again."
+          : isRuntime
+            ? "Email scan is connected in Computer, but this preview server cannot access the Gmail runtime token. Try again after redeploy or use Manual email import for now."
+            : "Gmail scan is unavailable right now. Try again shortly.");
       toast({
-        title: isAuth ? "Reconnect Gmail" : "Email scan unavailable",
-        description:
-          parsed.message ??
-          (isAuth
-            ? "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again."
-            : "Gmail scan is unavailable right now. Try again shortly."),
+        title,
+        description,
         variant: "destructive",
       });
+      if (isRuntime) setManualImportOpen(true);
     },
   });
 
@@ -817,6 +953,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: Inbox,
       onClick: () => scan.mutate(),
       loading: scan.isPending,
+    },
+    {
+      id: "manual-email-import",
+      label: "Manual email import",
+      icon: MailPlus,
+      onClick: () => setManualImportOpen(true),
+      hint: "Paste an email to queue it manually",
     },
     {
       id: "build-agenda",
@@ -930,6 +1073,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           </div>
         </div>
       </section>
+
+      <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
 
       <footer className="border-t border-border bg-background/80">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
