@@ -326,7 +326,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   });
 
   return (
-    <Card className="flex min-h-[480px] flex-col">
+    <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -341,14 +341,13 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4">
-        <div className="flex-1 space-y-3 rounded-md bg-muted/60 p-3" data-testid="panel-chat-history">
+      <CardContent className="flex flex-col gap-4">
+        <div className="min-h-56 space-y-3 rounded-md bg-muted/60 p-3" data-testid="panel-chat-history">
           {messages.length === 0 ? (
-            <div className="flex h-full min-h-48 flex-col items-center justify-center text-center text-muted-foreground">
+            <div className="flex min-h-48 flex-col items-center justify-center text-center text-muted-foreground">
               <MessageSquareText className="mb-3 size-8" />
-              <p className="max-w-sm text-sm">
-                Try: “Add urgent payroll reset ticket for Jordan tomorrow 45 minutes.”
-              </p>
+              <p className="max-w-sm text-sm">Start by dictating one task, due date, assignee, and urgency in a single sentence.</p>
+              <p className="mt-2 max-w-sm text-xs">Example: “Add urgent payroll reset ticket for Jordan tomorrow 45 minutes.”</p>
             </div>
           ) : (
             messages.slice(-8).map((item) => (
