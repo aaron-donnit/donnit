@@ -158,9 +158,14 @@ function invalidateWorkspace() {
 
 function Wordmark() {
   return (
-    <span className="wordmark text-2xl" aria-label="Donnit">
-      <span aria-hidden="true">Donn</span>
-      <span className="accent" aria-hidden="true">it</span>
+    <span className="brand-lockup" aria-label="Donnit">
+      <span className="brand-mark" aria-hidden="true">
+        <Check className="size-4" strokeWidth={3.25} />
+      </span>
+      <span className="brand-text" aria-hidden="true">
+        <span className="brand-text-base">Donn</span>
+        <span className="brand-text-accent">it</span>
+      </span>
     </span>
   );
 }
@@ -539,6 +544,16 @@ function AcceptancePanel({
   const waiting = tasks.filter((task) => task.status === "pending_acceptance");
   const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
 
+  const VISIBLE_LIMIT = 2;
+  const visibleWaiting = waiting.slice(0, VISIBLE_LIMIT);
+  const remainingWaiting = Math.max(0, waiting.length - visibleWaiting.length);
+  const remainingSuggestions = pendingSuggestions.length;
+  const overflowTotal = remainingWaiting + remainingSuggestions;
+  const overflowLabel =
+    overflowTotal > 0
+      ? `+${overflowTotal} more in email queue`
+      : null;
+
   const accept = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/accept`),
     onSuccess: invalidateWorkspace,
@@ -568,7 +583,7 @@ function AcceptancePanel({
           <p className="text-sm text-muted-foreground">Nothing waiting. Nice.</p>
         )}
 
-        {waiting.map((task) => (
+        {visibleWaiting.map((task) => (
           <div
             key={task.id}
             className={`task-row ${urgencyClass(task.urgency)} flex-col items-stretch`}
@@ -596,37 +611,22 @@ function AcceptancePanel({
           </div>
         ))}
 
-        {pendingSuggestions.map((suggestion) => (
-          <div
-            key={suggestion.id}
-            className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
-            data-testid={`row-suggestion-${suggestion.id}`}
+        {overflowLabel && (
+          <button
+            type="button"
+            onClick={() => {
+              window.location.hash = "/log";
+            }}
+            className="flex w-full items-center justify-between rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-brand-green hover:text-foreground"
+            data-testid="button-waiting-overflow"
           >
-            <div className="flex items-center gap-2">
-              <MailPlus className="size-3.5 text-muted-foreground" />
-              <span className="ui-label">From email</span>
-            </div>
-            <p className="mt-1 text-sm font-medium text-foreground break-words">{suggestion.suggestedTitle}</p>
-            <p className="text-xs text-muted-foreground break-words">{suggestion.subject}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                onClick={() => approveSuggestion.mutate(suggestion.id)}
-                data-testid={`button-approve-suggestion-${suggestion.id}`}
-              >
-                <Check className="size-4" /> Add
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => dismissSuggestion.mutate(suggestion.id)}
-                data-testid={`button-dismiss-suggestion-${suggestion.id}`}
-              >
-                Dismiss
-              </Button>
-            </div>
-          </div>
-        ))}
+            <span className="inline-flex items-center gap-1.5">
+              <MailPlus className="size-3.5" />
+              {overflowLabel}
+            </span>
+            <span className="ui-label">Open</span>
+          </button>
+        )}
       </div>
     </div>
   );
