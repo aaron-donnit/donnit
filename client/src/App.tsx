@@ -22,8 +22,9 @@ import {
   UserRoundCheck,
   X,
 } from "lucide-react";
-import type { ChatMessage, EmailSuggestion, Task, TaskEvent, User } from "@shared/schema";
 import { queryClient, apiRequest } from "./lib/queryClient";
+import { AuthGate, type AuthedContext } from "@/components/AuthGate";
+import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -49,8 +50,10 @@ import {
 } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 
+type Id = string | number;
+
 type AgendaItem = {
-  taskId: number;
+  taskId: Id;
   order: number;
   title: string;
   estimatedMinutes: number;
@@ -58,8 +61,72 @@ type AgendaItem = {
   urgency: string;
 };
 
+type User = {
+  id: Id;
+  name: string;
+  email: string;
+  role: string;
+  persona: string;
+  managerId: Id | null;
+  canAssign: boolean;
+};
+
+type Task = {
+  id: Id;
+  title: string;
+  description: string;
+  status: string;
+  urgency: string;
+  dueDate: string | null;
+  estimatedMinutes: number;
+  assignedToId: Id;
+  assignedById: Id;
+  source: string;
+  recurrence: string;
+  reminderDaysBefore: number;
+  acceptedAt: string | null;
+  deniedAt: string | null;
+  completedAt: string | null;
+  completionNotes: string;
+  createdAt: string;
+};
+
+type TaskEvent = {
+  id: Id;
+  taskId: Id;
+  actorId: Id;
+  type: string;
+  note: string;
+  createdAt: string;
+};
+
+type ChatMessage = {
+  id: Id;
+  role: string;
+  content: string;
+  taskId: Id | null;
+  createdAt: string;
+};
+
+type EmailSuggestion = {
+  id: Id;
+  fromEmail: string;
+  subject: string;
+  preview: string;
+  suggestedTitle: string;
+  suggestedDueDate: string | null;
+  urgency: string;
+  status: string;
+  assignedToId: Id | null;
+  createdAt: string;
+};
+
 type Bootstrap = {
-  currentUserId: number;
+  authenticated?: boolean;
+  bootstrapped?: boolean;
+  currentUserId: Id;
+  email?: string | null;
+  orgId?: string;
   users: User[];
   tasks: Task[];
   events: TaskEvent[];
@@ -71,6 +138,7 @@ type Bootstrap = {
       provider: string;
       status: string;
       projectId: string;
+      schema?: string;
     };
     email: {
       provider: string;
@@ -411,11 +479,11 @@ function EmailSuggestions({ suggestions }: { suggestions: EmailSuggestion[] }) {
     onSuccess: invalidateWorkspace,
   });
   const approve = useMutation({
-    mutationFn: async (id: number) => apiRequest("POST", `/api/suggestions/${id}/approve`),
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/approve`),
     onSuccess: invalidateWorkspace,
   });
   const dismiss = useMutation({
-    mutationFn: async (id: number) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
     onSuccess: invalidateWorkspace,
   });
 
@@ -519,8 +587,18 @@ function IntegrationStatus({ integrations }: { integrations: Bootstrap["integrat
       <CardContent className="space-y-3 text-sm">
         <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
           <span>Auth</span>
-          <Badge variant="outline">{integrations.auth.provider}: {integrations.auth.status}</Badge>
+          <Badge variant="outline" data-testid="badge-auth-status">
+            {integrations.auth.provider}: {integrations.auth.status}
+          </Badge>
         </div>
+        {integrations.auth.schema && (
+          <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
+            <span>Schema</span>
+            <Badge variant="outline" data-testid="badge-auth-schema">
+              {integrations.auth.schema}
+            </Badge>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
           <span>Email</span>
           <Badge variant="outline">{integrations.email.provider}: approval loop</Badge>
@@ -688,7 +766,7 @@ function AppRouter() {
   );
 }
 
-function AppShell() {
+function AppShell({ auth }: { auth: AuthedContext }) {
   const style = {
     "--sidebar-width": "17rem",
     "--sidebar-width-icon": "4rem",
@@ -703,9 +781,22 @@ function AppShell() {
             <div className="flex items-center gap-2">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
               <Separator orientation="vertical" className="h-5" />
-              <span className="text-sm text-muted-foreground">donnit.ai build preview</span>
+              <span className="text-sm text-muted-foreground" data-testid="text-app-mode">
+                {auth.authenticated
+                  ? `signed in as ${auth.email ?? "you"}`
+                  : supabaseConfig.configured
+                  ? "donnit.ai build preview"
+                  : "donnit.ai demo (Supabase not configured)"}
+              </span>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              {auth.authenticated && (
+                <Button variant="outline" size="sm" onClick={() => auth.signOut()} data-testid="button-signout">
+                  Sign out
+                </Button>
+              )}
+              <ThemeToggle />
+            </div>
           </header>
           <Router hook={useHashLocation}>
             <AppRouter />
@@ -720,7 +811,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AppShell />
+        <AuthGate>{(auth) => <AppShell auth={auth} />}</AuthGate>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
