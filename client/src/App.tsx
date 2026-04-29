@@ -715,6 +715,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     };
   }, [data?.tasks]);
 
+  const todayLabel = useMemo(
+    () =>
+      new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    [],
+  );
+
   if (isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
@@ -832,7 +838,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
           <FunctionBar actions={actions} />
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
-            <span className="ui-label">Today</span>
+            <span className="ui-label">Today · {todayLabel}</span>
             <Stat label="Open" value={metrics.open} />
             <Stat label="Due today" value={metrics.dueToday} />
             <Stat label="Waiting" value={metrics.waiting} />

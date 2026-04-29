@@ -132,8 +132,6 @@ function seedIfEmpty() {
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
-    const nextWeek = new Date(today);
-    nextWeek.setDate(today.getDate() + 7);
 
     const seededTasks: InsertTask[] = [
       {
@@ -164,10 +162,10 @@ function seedIfEmpty() {
       },
       {
         title: "Spouse birthday reminder",
-        description: "Annual reminder example with a 15-day advance notice.",
+        description: "Birthday on 2026-05-30; reminder fires 15 days before.",
         status: "open",
         urgency: "normal",
-        dueDate: nextWeek.toISOString().slice(0, 10),
+        dueDate: "2026-05-15",
         estimatedMinutes: 15,
         assignedToId: 1,
         assignedById: 1,
