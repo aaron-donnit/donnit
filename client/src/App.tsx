@@ -253,7 +253,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const recent = messages.slice(-12);
 
   return (
-    <div className="panel flex h-full min-h-[520px] flex-col" data-testid="panel-chat">
+    <div className="panel flex h-full min-h-[440px] flex-col" data-testid="panel-chat">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-brand-green" />
@@ -548,11 +548,18 @@ function AcceptancePanel({
   const visibleWaiting = waiting.slice(0, VISIBLE_LIMIT);
   const remainingWaiting = Math.max(0, waiting.length - visibleWaiting.length);
   const remainingSuggestions = pendingSuggestions.length;
-  const overflowTotal = remainingWaiting + remainingSuggestions;
-  const overflowLabel =
-    overflowTotal > 0
-      ? `+${overflowTotal} more in email queue`
-      : null;
+  const overflowParts: string[] = [];
+  if (remainingWaiting > 0) {
+    overflowParts.push(
+      `+${remainingWaiting} more acceptance${remainingWaiting === 1 ? "" : "s"}`,
+    );
+  }
+  if (remainingSuggestions > 0) {
+    overflowParts.push(
+      `+${remainingSuggestions} email suggestion${remainingSuggestions === 1 ? "" : "s"}`,
+    );
+  }
+  const overflowLabel = overflowParts.length > 0 ? overflowParts.join(" · ") : null;
 
   const accept = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/accept`),
@@ -576,7 +583,7 @@ function AcceptancePanel({
     <div className="panel" data-testid="panel-acceptance">
       <div className="border-b border-border px-4 py-3">
         <h3 className="display-font text-sm font-bold">Waiting on you</h3>
-        <p className="ui-label mt-1">Accept, deny, or add</p>
+        <p className="ui-label mt-1">Acceptances above · email queue below</p>
       </div>
       <div className="space-y-3 px-4 py-3">
         {waiting.length === 0 && pendingSuggestions.length === 0 && (
@@ -713,7 +720,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     return {
       open: tasks.filter((t) => !["completed", "denied"].includes(t.status)).length,
       dueToday: tasks.filter((t) => t.dueDate === today && t.status !== "completed").length,
-      queue: waitingTasks + pendingSuggestions,
+      needsAcceptance: waitingTasks,
+      emailQueue: pendingSuggestions,
       completed: tasks.filter((t) => t.status === "completed").length,
     };
   }, [data?.tasks, data?.suggestions]);
@@ -840,11 +848,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <section className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
           <FunctionBar actions={actions} />
-          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="ui-label">Today · {todayLabel}</span>
             <Stat label="Open" value={metrics.open} />
             <Stat label="Due today" value={metrics.dueToday} />
-            <Stat label="Queue" value={metrics.queue} />
+            <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+            <Stat label="Email queue" value={metrics.emailQueue} />
             <Stat label="Completed" value={metrics.completed} />
           </div>
         </div>
