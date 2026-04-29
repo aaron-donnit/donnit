@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { DONNIT_SCHEMA } from "./supabase";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,6 +13,7 @@ export function getIntegrationStatus() {
       provider: "supabase",
       status: process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY ? "configured" : "scaffolded",
       projectId: process.env.SUPABASE_PROJECT_ID ?? "bchwrbqaacdijavtugdt",
+      schema: DONNIT_SCHEMA,
     },
     email: {
       provider: "gmail",
