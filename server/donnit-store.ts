@@ -6,6 +6,25 @@ import { DONNIT_TABLES } from "./supabase";
 // production tables — every query goes through the per-request client built
 // in server/auth-supabase.ts so that RLS policies see the caller's uid.
 
+// Supabase-js / PostgREST returns errors as plain objects shaped like
+// `{ message, code, details, hint }`, not Error instances. Throwing them
+// directly produces "[object Object]" when callers do `String(error)` or
+// `error.message`. This helper wraps the raw payload in a real Error whose
+// `.message` is the PostgREST message, with `code`/`details`/`hint` preserved
+// as own properties so upstream serializers can surface them.
+function wrapSupabaseError(prefix: string, raw: unknown): Error {
+  if (raw instanceof Error) return raw;
+  const r = (raw ?? {}) as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+  const message = typeof r.message === "string" && r.message.length > 0
+    ? r.message
+    : (typeof r.code === "string" ? `Supabase error ${r.code}` : "Unknown Supabase error");
+  const err = new Error(`${prefix}: ${message}`) as Error & { code?: string; details?: string; hint?: string };
+  if (typeof r.code === "string") err.code = r.code;
+  if (typeof r.details === "string") err.details = r.details;
+  if (typeof r.hint === "string") err.hint = r.hint;
+  return err;
+}
+
 export type DonnitProfile = {
   id: string;
   full_name: string;
@@ -88,7 +107,7 @@ export class DonnitStore {
       p_email: input.email ?? "",
       p_org_name: input.orgName ?? "",
     });
-    if (error) throw error;
+    if (error) throw wrapSupabaseError("bootstrap_workspace RPC failed", error);
     const row = Array.isArray(data) ? data[0] : data;
     return row as { user_id: string; org_id: string; is_new: boolean };
   }

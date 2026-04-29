@@ -14,6 +14,40 @@ import { isSupabaseConfigured } from "./supabase";
 
 const DEMO_USER_ID = 1;
 
+// Supabase RPC errors (and most PostgREST errors) come back as plain objects
+// with `{ message, code, details, hint }` rather than Error instances. Passing
+// such an object through `String(error)` yields the literal string
+// "[object Object]", which is what surfaced in production for the
+// bootstrap_workspace 42702 ambiguous-column failure. This helper extracts a
+// human-readable message and a structured payload that is safe to log/return:
+// it intentionally only surfaces fields PostgREST already exposes
+// (message/code/details/hint) and never includes secrets or full stack traces.
+function serializeSupabaseError(error: unknown): { message: string; code?: string; details?: string; hint?: string } {
+  if (error instanceof Error) {
+    const anyErr = error as Error & { code?: unknown; details?: unknown; hint?: unknown };
+    return {
+      message: error.message || error.name || "Unknown error",
+      code: typeof anyErr.code === "string" ? anyErr.code : undefined,
+      details: typeof anyErr.details === "string" ? anyErr.details : undefined,
+      hint: typeof anyErr.hint === "string" ? anyErr.hint : undefined,
+    };
+  }
+  if (error && typeof error === "object") {
+    const anyErr = error as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+    const message = typeof anyErr.message === "string" && anyErr.message.length > 0
+      ? anyErr.message
+      : (typeof anyErr.code === "string" ? `Supabase error ${anyErr.code}` : "Unknown Supabase error");
+    return {
+      message,
+      code: typeof anyErr.code === "string" ? anyErr.code : undefined,
+      details: typeof anyErr.details === "string" ? anyErr.details : undefined,
+      hint: typeof anyErr.hint === "string" ? anyErr.hint : undefined,
+    };
+  }
+  if (typeof error === "string" && error.length > 0) return { message: error };
+  return { message: "Unknown error" };
+}
+
 const urgencyRank: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -393,7 +427,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true, ...result });
     } catch (error) {
-      res.status(500).json({ ok: false, message: error instanceof Error ? error.message : String(error) });
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] bootstrap_workspace failed", {
+        userId: auth.userId,
+        ...payload,
+      });
+      res.status(500).json({ ok: false, ...payload });
     }
   });
 

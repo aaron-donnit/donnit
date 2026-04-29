@@ -37,15 +37,15 @@ existing `public.*` table.
    INSERT/UPDATE policies that allow a user to do this directly via REST in
    case the RPC is unavailable. Idempotent — `CREATE OR REPLACE FUNCTION`
    and `DROP POLICY IF EXISTS`.
-4. `0004_fix_rls_membership_recursion.sql` — **the migration to apply next.**
-   Fixes a `42P17 infinite recursion detected in policy for relation
-   "organization_members"` error that surfaces once the `donnit` schema is
-   exposed via PostgREST. The original policies in `0002`/`0003` checked
-   membership with `exists (select 1 from donnit.organization_members ...)`
-   inside the policies *on* `organization_members` and on every other
-   org-scoped table. Each of those subqueries re-entered the same SELECT
-   policy on `organization_members`, producing infinite recursion. This
-   migration introduces SECURITY DEFINER helpers in schema `donnit`
+4. `0004_fix_rls_membership_recursion.sql` — Fixes a `42P17 infinite
+   recursion detected in policy for relation "organization_members"` error
+   that surfaces once the `donnit` schema is exposed via PostgREST. The
+   original policies in `0002`/`0003` checked membership with
+   `exists (select 1 from donnit.organization_members ...)` inside the
+   policies *on* `organization_members` and on every other org-scoped table.
+   Each of those subqueries re-entered the same SELECT policy on
+   `organization_members`, producing infinite recursion. This migration
+   introduces SECURITY DEFINER helpers in schema `donnit`
    (`is_org_member`, `can_assign_in_org`, `is_org_manager`,
    `org_has_members`) with `search_path` pinned to `donnit, pg_temp`, and
    replaces the recursive policies on `organizations`,
@@ -55,12 +55,32 @@ existing `public.*` table.
    self-referential subquery. Idempotent — `CREATE OR REPLACE FUNCTION` /
    `DROP POLICY IF EXISTS`. Non-destructive: no table or column is altered,
    and the `public` schema is untouched.
+5. `0005_fix_bootstrap_workspace_conflict.sql` — **the migration to apply
+   next.** Fixes a `42702 column reference "org_id" is ambiguous` error
+   raised inside `donnit.bootstrap_workspace(...)` when it runs the
+   `insert into donnit.organization_members ... on conflict (org_id, user_id)`
+   step. Because the function's `RETURNS TABLE (user_id uuid, org_id uuid,
+   is_new boolean)` clause exposes `org_id` and `user_id` as PL/pgSQL OUT
+   variables inside the body, the bare names in the ON CONFLICT target list
+   match both the table columns and the OUT variables, and PL/pgSQL refuses
+   the call. Production symptom: `POST /api/auth/bootstrap` → 500 and
+   `POST /rest/v1/rpc/bootstrap_workspace` → 400, leaving newly signed-up
+   users unable to create their workspace (profiles / organizations /
+   organization_members all stayed empty). The fix recreates the function
+   with `#variable_conflict use_column` at the top of the body so PL/pgSQL
+   resolves ambiguous identifiers to the table column. The external
+   contract — `(text, text, text)` argument signature, returned column
+   names/types, `SECURITY DEFINER`, `search_path = donnit, public` — is
+   preserved, so application code does not need to change. Idempotent —
+   `CREATE OR REPLACE FUNCTION`. Non-destructive: no table, column, or
+   policy is altered.
 
 > **Action required:** apply `0002_donnit_namespace.sql`,
-> `0003_donnit_bootstrap_policies.sql`, and
-> `0004_fix_rls_membership_recursion.sql` from the Supabase SQL editor (or
-> `supabase db push`) before authenticated production code can run. The repo
-> does not run DDL automatically.
+> `0003_donnit_bootstrap_policies.sql`,
+> `0004_fix_rls_membership_recursion.sql`, and
+> `0005_fix_bootstrap_workspace_conflict.sql` from the Supabase SQL editor
+> (or `supabase db push`) before authenticated production code can run. The
+> repo does not run DDL automatically.
 >
 > **Manual dashboard step:** in Supabase → Project settings → API, add
 > `donnit` to the list of "Exposed schemas" (the field is named
