@@ -81,11 +81,23 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+        brand: {
+          green: "hsl(var(--brand-green) / <alpha-value>)",
+          "green-pale": "hsl(var(--brand-green-pale) / <alpha-value>)",
+          charcoal: "hsl(var(--brand-charcoal) / <alpha-value>)",
+          "warm-white": "hsl(var(--brand-warm-white) / <alpha-value>)",
+          alert: "hsl(var(--brand-alert) / <alpha-value>)",
+          amber: "hsl(var(--brand-amber) / <alpha-value>)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
+        display: ["var(--font-display)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
+      },
+      boxShadow: {
+        modal: "0 8px 24px -8px rgba(28, 31, 36, 0.18)",
       },
       keyframes: {
         "accordion-down": {

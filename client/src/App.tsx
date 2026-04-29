@@ -1,25 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { Switch, Route, Router, Link, useLocation } from "wouter";
+import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Archive,
-  Bell,
   CalendarClock,
+  CalendarPlus,
   Check,
   CheckCircle2,
   Clock3,
+  History,
   Inbox,
   ListChecks,
+  ListPlus,
   Loader2,
   MailPlus,
-  MessageSquareText,
   Moon,
   Send,
-  ShieldCheck,
   Sparkles,
   Sun,
+  UserPlus,
   UserRoundCheck,
+  Workflow,
   X,
 } from "lucide-react";
 import { queryClient, apiRequest } from "./lib/queryClient";
@@ -28,26 +30,8 @@ import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 
 type Id = string | number;
@@ -134,71 +118,49 @@ type Bootstrap = {
   suggestions: EmailSuggestion[];
   agenda: AgendaItem[];
   integrations: {
-    auth: {
-      provider: string;
-      status: string;
-      projectId: string;
-      schema?: string;
-    };
-    email: {
-      provider: string;
-      sourceId: string;
-      status: string;
-      mode: string;
-    };
-    reminders: {
-      channelOrder: string[];
-      reminderOrder: string[];
-    };
-    app: {
-      delivery: string;
-      native: string;
-    };
+    auth: { provider: string; status: string; projectId: string; schema?: string };
+    email: { provider: string; sourceId: string; status: string; mode: string };
+    reminders: { channelOrder: string[]; reminderOrder: string[] };
+    app: { delivery: string; native: string };
   };
 };
 
-const urgencyTone: Record<string, string> = {
-  low: "border-transparent bg-muted text-muted-foreground",
-  normal: "border-transparent bg-secondary text-secondary-foreground",
-  high: "border-transparent bg-amber-100 text-amber-950 dark:bg-amber-950/40 dark:text-amber-200",
-  critical: "border-transparent bg-destructive text-destructive-foreground",
-};
+type UrgencyClass = "urgency-high" | "urgency-medium" | "urgency-low";
+
+function urgencyClass(urgency: string): UrgencyClass {
+  if (urgency === "critical" || urgency === "high") return "urgency-high";
+  if (urgency === "normal" || urgency === "medium") return "urgency-medium";
+  return "urgency-low";
+}
+
+function urgencyLabel(urgency: string) {
+  if (urgency === "critical") return "Overdue";
+  if (urgency === "high") return "High";
+  if (urgency === "normal" || urgency === "medium") return "Medium";
+  return "Low";
+}
 
 const statusLabels: Record<string, string> = {
   open: "Open",
   pending_acceptance: "Needs acceptance",
   accepted: "Accepted",
   denied: "Denied",
-  completed: "Completed",
+  completed: "Done",
 };
 
 function useBootstrap() {
-  return useQuery<Bootstrap>({
-    queryKey: ["/api/bootstrap"],
-  });
+  return useQuery<Bootstrap>({ queryKey: ["/api/bootstrap"] });
 }
 
 function invalidateWorkspace() {
   return queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
 }
 
-function LogoMark() {
+function Wordmark() {
   return (
-    <svg aria-label="Donnit logo" viewBox="0 0 36 36" className="size-9 text-primary" fill="none">
-      <path
-        d="M8 18c0-6.1 4.4-10 10-10h3.5C26 8 29 11 29 15.5S26 23 21.5 23H17"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <path
-        d="M7 18c0 6.1 4.4 10 10 10h10"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <path d="M14 17.5 18 21l8-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <span className="wordmark text-2xl">
+      Donn<span className="accent">it</span>
+    </span>
   );
 }
 
@@ -231,176 +193,44 @@ function ThemeToggle() {
   );
 }
 
-function AppSidebar() {
-  const [location] = useLocation();
-  const items = [
-    { title: "Command", url: "/", icon: MessageSquareText },
-    { title: "Task log", url: "/log", icon: Archive },
-  ];
+type FunctionAction = {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  onClick?: () => void;
+  loading?: boolean;
+  primary?: boolean;
+  disabled?: boolean;
+  hint?: string;
+};
 
+function FunctionBar({ actions }: { actions: FunctionAction[] }) {
   return (
-    <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center gap-3 px-2 py-2">
-          <LogoMark />
-          <div>
-            <p className="text-sm font-semibold leading-none" data-testid="text-product-name">
-              Donnit
-            </p>
-            <p className="text-xs text-muted-foreground">AI task command</p>
-          </div>
-        </div>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <div className="px-2 py-3 text-xs text-muted-foreground">
-          Founder preview. Email scanning, reminders, and org permissions are simulated until production services are connected.
-        </div>
-      </SidebarFooter>
-    </Sidebar>
-  );
-}
-
-function Stat({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof ListChecks }) {
-  return (
-    <Card>
-      <CardContent className="flex items-center justify-between gap-3 p-4">
-        <div>
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="text-lg font-semibold tabular-nums" data-testid={`text-stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
-            {value}
-          </p>
-        </div>
-        <Icon className="size-5 text-muted-foreground" />
-      </CardContent>
-    </Card>
-  );
-}
-
-function TaskCard({ task, users }: { task: Task; users: User[] }) {
-  const [note, setNote] = useState("");
-  const assignee = users.find((user) => user.id === task.assignedToId);
-  const creator = users.find((user) => user.id === task.assignedById);
-
-  const complete = useMutation({
-    mutationFn: async () => apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: note || "Completed." }),
-    onSuccess: invalidateWorkspace,
-  });
-
-  const accept = useMutation({
-    mutationFn: async () => apiRequest("POST", `/api/tasks/${task.id}/accept`),
-    onSuccess: invalidateWorkspace,
-  });
-
-  const deny = useMutation({
-    mutationFn: async () => apiRequest("POST", `/api/tasks/${task.id}/deny`, { note: note || "Not the right owner." }),
-    onSuccess: invalidateWorkspace,
-  });
-
-  const isDone = task.status === "completed";
-
-  return (
-    <Card className={isDone ? "opacity-70" : ""} data-testid={`card-task-${task.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold leading-snug" data-testid={`text-task-title-${task.id}`}>
-              {task.title}
-            </h3>
-            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.description}</p>
-          </div>
-          <Badge variant="outline" className={urgencyTone[task.urgency] ?? urgencyTone.normal}>
-            {task.urgency}
-          </Badge>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1" data-testid={`text-task-due-${task.id}`}>
-            <CalendarClock className="size-3.5" />
-            {task.dueDate ?? "No due date"}
-          </span>
-          <span className="flex items-center gap-1">
-            <Clock3 className="size-3.5" />
-            {task.estimatedMinutes} min
-          </span>
-          <span className="flex items-center gap-1">
-            <UserRoundCheck className="size-3.5" />
-            {assignee?.name ?? "Unassigned"}
-          </span>
-          <span className="flex items-center gap-1">
-            <ShieldCheck className="size-3.5" />
-            {statusLabels[task.status] ?? task.status}
-          </span>
-        </div>
-
-        {task.recurrence === "annual" && (
-          <p className="mt-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground" data-testid={`text-task-recurring-${task.id}`}>
-            Annual reminder, {task.reminderDaysBefore} days before the date.
-          </p>
-        )}
-
-        {task.status === "completed" && task.completionNotes && (
-          <p className="mt-3 rounded-md bg-muted px-3 py-2 text-xs" data-testid={`text-task-note-${task.id}`}>
-            Completion note: {task.completionNotes}
-          </p>
-        )}
-
-        {!isDone && (
-          <div className="mt-4 space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor={`note-${task.id}`}>Completion or denial note</Label>
-              <Input
-                id={`note-${task.id}`}
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Add context before closing"
-                data-testid={`input-task-note-${task.id}`}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {task.status === "pending_acceptance" && (
-                <>
-                  <Button size="sm" variant="secondary" onClick={() => accept.mutate()} data-testid={`button-accept-${task.id}`}>
-                    <Check className="size-4" />
-                    Accept
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => deny.mutate()} data-testid={`button-deny-${task.id}`}>
-                    <X className="size-4" />
-                    Deny
-                  </Button>
-                </>
-              )}
-              <Button size="sm" onClick={() => complete.mutate()} disabled={complete.isPending} data-testid={`button-complete-${task.id}`}>
-                {complete.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                Complete
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <p className="mt-3 text-xs text-muted-foreground">
-          Assigned by {creator?.name ?? "Unknown"} from {task.source}
-        </p>
-      </CardContent>
-    </Card>
+    <div
+      className="flex flex-wrap items-center gap-2"
+      data-testid="bar-functions"
+      role="toolbar"
+      aria-label="Workspace functions"
+    >
+      {actions.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          onClick={action.onClick}
+          disabled={action.disabled || action.loading}
+          title={action.hint ?? action.label}
+          className={`fn-chip ${action.primary ? "fn-primary" : ""}`}
+          data-testid={`button-fn-${action.id}`}
+        >
+          {action.loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <action.icon className="size-4" />
+          )}
+          <span>{action.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -414,258 +244,479 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
     },
   });
 
+  const recent = messages.slice(-12);
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle>Talk to Donnit</CardTitle>
-            <CardDescription>
-              Type naturally. Donnit extracts the task, due date, urgency, assignee, estimate, and annual reminder rules.
-            </CardDescription>
-          </div>
-          <Badge variant="outline" className="gap-1">
-            <Sparkles className="size-3.5" />
-            Parser v0
-          </Badge>
+    <div className="panel flex h-full min-h-[520px] flex-col" data-testid="panel-chat">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-4 text-brand-green" />
+          <h2 className="display-font text-base font-bold leading-none">Chat it in</h2>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="min-h-56 space-y-3 rounded-md bg-muted/60 p-3" data-testid="panel-chat-history">
-          {messages.length === 0 ? (
-            <div className="flex min-h-48 flex-col items-center justify-center text-center text-muted-foreground">
-              <MessageSquareText className="mb-3 size-8" />
-              <p className="max-w-sm text-sm">Start by dictating one task, due date, assignee, and urgency in a single sentence.</p>
-              <p className="mt-2 max-w-sm text-xs">Example: “Add urgent payroll reset ticket for Jordan tomorrow 45 minutes.”</p>
+        <span className="ui-label">Donnit parser</span>
+      </div>
+
+      <div
+        className="flex-1 space-y-2 overflow-y-auto px-4 py-4"
+        data-testid="panel-chat-history"
+      >
+        {recent.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
+            <p className="display-font text-lg font-bold text-foreground">
+              Tell Donnit what's on your plate.
+            </p>
+            <p className="mt-2 max-w-xs text-sm">
+              One sentence with the task, due date, and who owns it. Donnit handles the rest.
+            </p>
+            <p className="mt-4 max-w-xs rounded-md bg-muted px-3 py-2 text-xs">
+              "Add urgent payroll reset for Jordan tomorrow, 45 min."
+            </p>
+          </div>
+        ) : (
+          recent.map((item) => (
+            <div
+              key={item.id}
+              className={`max-w-[88%] rounded-md px-3 py-2 text-sm leading-relaxed ${
+                item.role === "assistant"
+                  ? "bg-muted text-foreground"
+                  : "ml-auto bg-brand-green text-white"
+              }`}
+              data-testid={`text-chat-message-${item.id}`}
+            >
+              {item.content}
             </div>
-          ) : (
-            messages.slice(-8).map((item) => (
-              <div
-                key={item.id}
-                className={`max-w-[86%] rounded-md px-3 py-2 text-sm ${
-                  item.role === "assistant" ? "bg-card text-card-foreground" : "ml-auto bg-primary text-primary-foreground"
-                }`}
-                data-testid={`text-chat-message-${item.id}`}
-              >
-                {item.content}
-              </div>
-            ))
-          )}
+          ))
+        )}
+      </div>
+
+      <div className="border-t border-border px-4 py-3">
+        <Label htmlFor="chat-message" className="ui-label mb-1.5 block">
+          New entry
+        </Label>
+        <Textarea
+          id="chat-message"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          placeholder="Add spouse birthday for 2026-05-30, remind me 15 days before."
+          className="min-h-[72px] resize-none"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              if (message.trim().length >= 2) chat.mutate();
+            }
+          }}
+          data-testid="input-chat-message"
+        />
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">⌘/Ctrl + Enter to send</span>
+          <Button
+            onClick={() => chat.mutate()}
+            disabled={message.trim().length < 2 || chat.isPending}
+            data-testid="button-send-chat"
+          >
+            {chat.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Send className="size-4" />
+            )}
+            Send
+          </Button>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="chat-message">New task command</Label>
-          <Textarea
-            id="chat-message"
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Add spouse birthday reminder for 2026-05-30, remind me 15 days before"
-            data-testid="input-chat-message"
-          />
-          <div className="flex justify-end">
-            <Button onClick={() => chat.mutate()} disabled={message.trim().length < 2 || chat.isPending} data-testid="button-send-chat">
-              {chat.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-              Add task
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
-function EmailSuggestions({ suggestions }: { suggestions: EmailSuggestion[] }) {
-  const scan = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/integrations/gmail/scan"),
+function TaskRow({
+  task,
+  users,
+  onComplete,
+  isCompleting,
+}: {
+  task: Task;
+  users: User[];
+  onComplete: () => void;
+  isCompleting: boolean;
+}) {
+  const assignee = users.find((user) => user.id === task.assignedToId);
+  const isDone = task.status === "completed";
+
+  return (
+    <div
+      className={`task-row ${urgencyClass(task.urgency)} ${isDone ? "is-done" : ""}`}
+      data-testid={`row-task-${task.id}`}
+    >
+      <button
+        type="button"
+        onClick={onComplete}
+        disabled={isCompleting || isDone}
+        aria-label={isDone ? "Completed" : "Mark complete"}
+        className={`check-circle ${isDone ? "is-checked" : ""}`}
+        data-testid={`button-complete-${task.id}`}
+      >
+        {isCompleting ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Check className="size-3.5" strokeWidth={3} />
+        )}
+      </button>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <p
+            className="task-title text-sm font-medium leading-snug text-foreground"
+            data-testid={`text-task-title-${task.id}`}
+          >
+            {task.title}
+          </p>
+          <span className="ui-label whitespace-nowrap" data-testid={`text-task-urgency-${task.id}`}>
+            {urgencyLabel(task.urgency)}
+          </span>
+        </div>
+        {task.description && !isDone && (
+          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{task.description}</p>
+        )}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span
+            className="inline-flex items-center gap-1"
+            data-testid={`text-task-due-${task.id}`}
+          >
+            <CalendarClock className="size-3.5" />
+            {task.dueDate ?? "No due date"}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Clock3 className="size-3.5" />
+            {task.estimatedMinutes} min
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <UserRoundCheck className="size-3.5" />
+            {assignee?.name ?? "Unassigned"}
+          </span>
+          {task.status !== "open" && task.status !== "completed" && (
+            <span className="ui-label">{statusLabels[task.status] ?? task.status}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
+  const [completingId, setCompletingId] = useState<Id | null>(null);
+
+  const complete = useMutation({
+    mutationFn: async (id: Id) =>
+      apiRequest("POST", `/api/tasks/${id}/complete`, { note: "Done. That's one less thing." }),
+    onMutate: (id: Id) => setCompletingId(id),
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      setCompletingId(null);
+    },
+    onError: () => setCompletingId(null),
+  });
+
+  // Sort: due date asc (nulls last), then urgency, then completion last.
+  const urgencyRank: Record<string, number> = {
+    critical: 0,
+    high: 1,
+    normal: 2,
+    medium: 2,
+    low: 3,
+  };
+
+  const sorted = [...tasks].sort((a, b) => {
+    const aDone = a.status === "completed" ? 1 : 0;
+    const bDone = b.status === "completed" ? 1 : 0;
+    if (aDone !== bDone) return aDone - bDone;
+    const aTime = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
+    if (aTime !== bTime) return aTime - bTime;
+    return (urgencyRank[a.urgency] ?? 4) - (urgencyRank[b.urgency] ?? 4);
+  });
+
+  const open = sorted.filter((t) => t.status !== "completed");
+  const done = sorted.filter((t) => t.status === "completed");
+
+  return (
+    <div className="panel flex flex-col" data-testid="panel-tasks">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h2 className="work-heading">To do</h2>
+          <p className="ui-label mt-1">Sorted by due date, then urgency</p>
+        </div>
+        <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium tabular-nums">
+          {open.length} open
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-2 px-4 py-4">
+        {open.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">
+            <CheckCircle2 className="mx-auto size-8 text-brand-green" />
+            <p className="display-font mt-3 text-base font-bold">Plate's clear.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Done. That's one less thing.
+            </p>
+          </div>
+        ) : (
+          open.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              users={users}
+              isCompleting={completingId === task.id && complete.isPending}
+              onComplete={() => complete.mutate(task.id)}
+            />
+          ))
+        )}
+
+        {done.length > 0 && (
+          <>
+            <div className="mt-4 flex items-center gap-2 px-1">
+              <span className="ui-label">Just done</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            {done.slice(0, 3).map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                users={users}
+                isCompleting={false}
+                onComplete={() => undefined}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DueTodayPanel({ tasks }: { tasks: Task[] }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const dueToday = tasks.filter(
+    (task) => task.dueDate === today && task.status !== "completed",
+  );
+  return (
+    <div className="panel" data-testid="panel-due-today">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="display-font text-sm font-bold">Due today</h3>
+        <p className="ui-label mt-1">Cross these off first</p>
+      </div>
+      <div className="px-4 py-3">
+        {dueToday.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing due today.</p>
+        ) : (
+          <ul className="space-y-2">
+            {dueToday.map((task) => (
+              <li
+                key={task.id}
+                className={`task-row ${urgencyClass(task.urgency)}`}
+                data-testid={`row-due-today-${task.id}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium leading-snug text-foreground">{task.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {task.estimatedMinutes} min · {urgencyLabel(task.urgency)}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AcceptancePanel({
+  tasks,
+  suggestions,
+}: {
+  tasks: Task[];
+  suggestions: EmailSuggestion[];
+}) {
+  const waiting = tasks.filter((task) => task.status === "pending_acceptance");
+  const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
+
+  const accept = useMutation({
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/accept`),
     onSuccess: invalidateWorkspace,
   });
-  const approve = useMutation({
+  const deny = useMutation({
+    mutationFn: async (id: Id) =>
+      apiRequest("POST", `/api/tasks/${id}/deny`, { note: "Not the right owner." }),
+    onSuccess: invalidateWorkspace,
+  });
+  const approveSuggestion = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/approve`),
     onSuccess: invalidateWorkspace,
   });
-  const dismiss = useMutation({
+  const dismissSuggestion = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
     onSuccess: invalidateWorkspace,
   });
 
-  const pending = suggestions.filter((suggestion) => suggestion.status === "pending");
-
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <MailPlus className="size-5" />
-              Email scan queue
-            </CardTitle>
-            <CardDescription>Donnit asks before creating tasks from scanned emails.</CardDescription>
+    <div className="panel" data-testid="panel-acceptance">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="display-font text-sm font-bold">Waiting on you</h3>
+        <p className="ui-label mt-1">Accept, deny, or add</p>
+      </div>
+      <div className="space-y-3 px-4 py-3">
+        {waiting.length === 0 && pendingSuggestions.length === 0 && (
+          <p className="text-sm text-muted-foreground">Nothing waiting. Nice.</p>
+        )}
+
+        {waiting.map((task) => (
+          <div
+            key={task.id}
+            className={`task-row ${urgencyClass(task.urgency)} flex-col items-stretch`}
+            data-testid={`row-waiting-${task.id}`}
+          >
+            <p className="text-sm font-medium text-foreground">{task.title}</p>
+            <p className="text-xs text-muted-foreground">{task.dueDate ?? "No due date"}</p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => accept.mutate(task.id)}
+                data-testid={`button-accept-${task.id}`}
+              >
+                <Check className="size-4" /> Accept
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => deny.mutate(task.id)}
+                data-testid={`button-deny-${task.id}`}
+              >
+                <X className="size-4" /> Deny
+              </Button>
+            </div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => scan.mutate()} disabled={scan.isPending} data-testid="button-scan-gmail">
-            {scan.isPending ? <Loader2 className="size-4 animate-spin" /> : <Inbox className="size-4" />}
-            Scan
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {pending.length === 0 ? (
-          <p className="rounded-md bg-muted px-3 py-4 text-sm text-muted-foreground">No pending email suggestions.</p>
+        ))}
+
+        {pendingSuggestions.map((suggestion) => (
+          <div
+            key={suggestion.id}
+            className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
+            data-testid={`row-suggestion-${suggestion.id}`}
+          >
+            <div className="flex items-center gap-2">
+              <MailPlus className="size-3.5 text-muted-foreground" />
+              <span className="ui-label">From email</span>
+            </div>
+            <p className="mt-1 text-sm font-medium text-foreground">{suggestion.suggestedTitle}</p>
+            <p className="text-xs text-muted-foreground">{suggestion.subject}</p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => approveSuggestion.mutate(suggestion.id)}
+                data-testid={`button-approve-suggestion-${suggestion.id}`}
+              >
+                <Check className="size-4" /> Add
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => dismissSuggestion.mutate(suggestion.id)}
+                data-testid={`button-dismiss-suggestion-${suggestion.id}`}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DoneLogPanel({
+  events,
+  tasks,
+  users,
+}: {
+  events: TaskEvent[];
+  tasks: Task[];
+  users: User[];
+}) {
+  const recent = events.slice(0, 6);
+  return (
+    <div className="panel" data-testid="panel-log">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="display-font text-sm font-bold">Done · log</h3>
+        <p className="ui-label mt-1">Every action, who, when</p>
+      </div>
+      <div className="px-4 py-3">
+        {recent.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No activity yet.</p>
         ) : (
-          pending.map((suggestion) => (
-            <div key={suggestion.id} className="rounded-md border border-card-border bg-card p-3" data-testid={`card-suggestion-${suggestion.id}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">{suggestion.suggestedTitle}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{suggestion.subject}</p>
-                </div>
-                <Badge variant="outline" className={urgencyTone[suggestion.urgency] ?? urgencyTone.normal}>
-                  {suggestion.urgency}
-                </Badge>
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">{suggestion.preview}</p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => approve.mutate(suggestion.id)} data-testid={`button-approve-suggestion-${suggestion.id}`}>
-                  <Check className="size-4" />
-                  Add
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => dismiss.mutate(suggestion.id)} data-testid={`button-dismiss-suggestion-${suggestion.id}`}>
-                  Dismiss
-                </Button>
-              </div>
-            </div>
-          ))
+          <ul className="space-y-2.5">
+            {recent.map((event) => {
+              const task = tasks.find((t) => t.id === event.taskId);
+              const user = users.find((u) => u.id === event.actorId);
+              const isComplete = event.type === "completed";
+              return (
+                <li
+                  key={event.id}
+                  className="flex gap-2.5"
+                  data-testid={`row-event-${event.id}`}
+                >
+                  <span
+                    className={`mt-1 size-2 shrink-0 rounded-full ${
+                      isComplete ? "bg-brand-green" : "bg-muted-foreground/40"
+                    }`}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium leading-snug text-foreground">
+                      {event.type.replace(/_/g, " ")} ·{" "}
+                      {task?.title ?? `Task ${event.taskId}`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {user?.name ?? "Unknown"} ·{" "}
+                      {new Date(event.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
-function AgendaPanel({ agenda }: { agenda: AgendaItem[] }) {
-  const total = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CalendarClock className="size-5" />
-          Daily agenda
-        </CardTitle>
-        <CardDescription>Built from sorted tasks and estimated completion time.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="mb-4 rounded-md bg-muted px-3 py-2 text-sm" data-testid="text-agenda-total">
-          Planned workload: <span className="font-semibold tabular-nums">{total}</span> minutes
-        </div>
-        <div className="space-y-3">
-          {agenda.map((item) => (
-            <div key={item.taskId} className="flex gap-3" data-testid={`row-agenda-${item.taskId}`}>
-              <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-secondary text-xs font-semibold">
-                {item.order}
-              </div>
-              <div>
-                <p className="text-sm font-medium">{item.title}</p>
-                <p className="text-xs text-muted-foreground">
-                  {item.estimatedMinutes} min · {item.dueDate ?? "no due date"} · {item.urgency}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function IntegrationStatus({ integrations }: { integrations: Bootstrap["integrations"] }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-5" />
-          v0.2 foundation
-        </CardTitle>
-        <CardDescription>Approved production direction captured in the codebase.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
-          <span>Auth</span>
-          <Badge variant="outline" data-testid="badge-auth-status">
-            {integrations.auth.provider}: {integrations.auth.status}
-          </Badge>
-        </div>
-        {integrations.auth.schema && (
-          <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
-            <span>Schema</span>
-            <Badge variant="outline" data-testid="badge-auth-schema">
-              {integrations.auth.schema}
-            </Badge>
-          </div>
-        )}
-        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
-          <span>Email</span>
-          <Badge variant="outline">{integrations.email.provider}: approval loop</Badge>
-        </div>
-        <div className="rounded-md bg-muted px-3 py-2">
-          <p className="font-medium">Reminder order</p>
-          <p className="mt-1 text-xs text-muted-foreground" data-testid="text-reminder-order">
-            {integrations.reminders.channelOrder.join(" → ")}
-          </p>
-        </div>
-        <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
-          <span>App strategy</span>
-          <Badge variant="outline">{integrations.app.delivery.replace(/_/g, " ")}</Badge>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActivityLog({ events, tasks, users, compact = false }: { events: TaskEvent[]; tasks: Task[]; users: User[]; compact?: boolean }) {
-  const visibleEvents = compact ? events.slice(0, 5) : events;
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Archive className="size-5" />
-          Completion and audit log
-        </CardTitle>
-        <CardDescription>Every task action is recorded with actor and timestamp.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {visibleEvents.map((event) => {
-          const task = tasks.find((item) => item.id === event.taskId);
-          const user = users.find((item) => item.id === event.actorId);
-          return (
-            <div key={event.id} className="rounded-md bg-muted/70 px-3 py-2" data-testid={`row-event-${event.id}`}>
-              <p className="text-sm font-medium">
-                {event.type.replace(/_/g, " ")} · {task?.title ?? `Task ${event.taskId}`}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {user?.name ?? "Unknown"} · {new Date(event.createdAt).toLocaleString()}
-              </p>
-              {event.note && <p className="mt-1 text-xs">{event.note}</p>}
-            </div>
-          );
-        })}
-      </CardContent>
-    </Card>
-  );
-}
-
-function CommandCenter() {
+function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
+
+  const scan = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/integrations/gmail/scan"),
+    onSuccess: invalidateWorkspace,
+  });
+
+  const buildAgenda = useMutation({
+    mutationFn: async () => {
+      // Agenda is computed server-side on each bootstrap; refreshing pulls a fresh sort.
+      await invalidateWorkspace();
+      return null;
+    },
+  });
 
   const metrics = useMemo(() => {
     const tasks = data?.tasks ?? [];
+    const today = new Date().toISOString().slice(0, 10);
     return {
-      open: tasks.filter((task) => !["completed", "denied"].includes(task.status)).length,
-      dueToday: tasks.filter((task) => task.dueDate === new Date().toISOString().slice(0, 10) && task.status !== "completed").length,
-      waiting: tasks.filter((task) => task.status === "pending_acceptance").length,
-      completed: tasks.filter((task) => task.status === "completed").length,
+      open: tasks.filter((t) => !["completed", "denied"].includes(t.status)).length,
+      dueToday: tasks.filter((t) => t.dueDate === today && t.status !== "completed").length,
+      waiting: tasks.filter((t) => t.status === "pending_acceptance").length,
+      completed: tasks.filter((t) => t.status === "completed").length,
     };
   }, [data?.tasks]);
 
   if (isLoading) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
+      <main className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-7 animate-spin text-muted-foreground" />
       </main>
     );
@@ -673,68 +724,173 @@ function CommandCenter() {
 
   if (isError || !data) {
     return (
-      <main className="flex min-h-screen items-center justify-center p-6">
-        <Card className="max-w-md">
-          <CardHeader>
-            <CardTitle>Could not load Donnit</CardTitle>
-            <CardDescription>Restart the development server and try again.</CardDescription>
-          </CardHeader>
-        </Card>
+      <main className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="panel max-w-md p-6 text-center">
+          <p className="display-font text-lg font-bold">Could not load Donnit</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Restart the development server and try again.
+          </p>
+        </div>
       </main>
     );
   }
 
+  const actions: FunctionAction[] = [
+    {
+      id: "create-todo",
+      label: "Create to-do list",
+      icon: ListPlus,
+      primary: true,
+      onClick: () => {
+        const el = document.getElementById("chat-message") as HTMLTextAreaElement | null;
+        el?.focus();
+      },
+      hint: "Focus chat to dictate a new list",
+    },
+    {
+      id: "scan-email",
+      label: "Scan email",
+      icon: Inbox,
+      onClick: () => scan.mutate(),
+      loading: scan.isPending,
+    },
+    {
+      id: "build-agenda",
+      label: "Build agenda",
+      icon: Workflow,
+      onClick: () => buildAgenda.mutate(),
+      loading: buildAgenda.isPending,
+      hint: "Sort by due date and urgency",
+    },
+    {
+      id: "export-calendar",
+      label: "Export to calendar",
+      icon: CalendarPlus,
+      disabled: true,
+      hint: "Calendar export — coming soon",
+    },
+    {
+      id: "assign-task",
+      label: "Assign task",
+      icon: UserPlus,
+      disabled: true,
+      hint: "Assign through chat for now",
+    },
+    {
+      id: "view-log",
+      label: "View log",
+      icon: History,
+      onClick: () => {
+        window.location.hash = "/log";
+      },
+    },
+  ];
+
   return (
-    <main className="min-h-screen bg-background p-4 lg:p-6" data-testid="page-command-center">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-5">
-        <section className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">Founder workspace</p>
-            <h1 className="text-xl font-semibold tracking-tight">Command tasks by conversation, then let Donnit keep the trail.</h1>
+    <main
+      className="min-h-screen bg-background"
+      data-testid="page-command-center"
+    >
+      {/* Top bar with brand + status + theme + sign out */}
+      <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:px-6">
+          <div className="flex items-center gap-3">
+            <Wordmark />
+            <span className="hidden text-xs text-muted-foreground sm:inline">
+              Chat it in. Cross it off. Done.
+            </span>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="outline" className="gap-1">
-              <Bell className="size-3.5" />
-              Reminder engine planned
-            </Badge>
-            <Badge variant="outline" className="gap-1">
-              <Inbox className="size-3.5" />
-              Email approval loop
-            </Badge>
+          <div className="flex items-center gap-3">
+            <span
+              className="hidden text-xs text-muted-foreground md:inline"
+              data-testid="text-app-mode"
+            >
+              {auth.authenticated
+                ? `signed in as ${auth.email ?? "you"}`
+                : supabaseConfig.configured
+                ? "build preview"
+                : "demo (Supabase not configured)"}
+            </span>
+            <ThemeToggle />
+            {auth.authenticated && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => auth.signOut()}
+                data-testid="button-signout"
+              >
+                Sign out
+              </Button>
+            )}
           </div>
-        </section>
+        </div>
+      </header>
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Open tasks" value={metrics.open} icon={ListChecks} />
-          <Stat label="Due today" value={metrics.dueToday} icon={CalendarClock} />
-          <Stat label="Need acceptance" value={metrics.waiting} icon={UserRoundCheck} />
-          <Stat label="Completed" value={metrics.completed} icon={CheckCircle2} />
-        </section>
+      {/* Function bar */}
+      <section className="border-b border-border bg-background">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
+          <FunctionBar actions={actions} />
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+            <span className="ui-label">Today</span>
+            <Stat label="Open" value={metrics.open} />
+            <Stat label="Due today" value={metrics.dueToday} />
+            <Stat label="Waiting" value={metrics.waiting} />
+            <Stat label="Done" value={metrics.completed} />
+          </div>
+        </div>
+      </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(320px,0.9fr)_minmax(420px,1.25fr)_minmax(320px,0.9fr)]">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">Sorted task list</h2>
-              <Badge variant="secondary">Due date, then urgency</Badge>
+      {/* Workspace: chat left, work area right (To-do dominant) */}
+      <section className="mx-auto max-w-[1600px] px-4 py-5 lg:px-6">
+        <div className="grid gap-4 lg:grid-cols-12">
+          {/* Chat — left */}
+          <div className="lg:col-span-4 xl:col-span-3">
+            <ChatPanel messages={data.messages} />
+          </div>
+
+          {/* Work area — right */}
+          <div className="lg:col-span-8 xl:col-span-9">
+            <div className="grid gap-4 xl:grid-cols-12">
+              {/* Wide To-do column */}
+              <div className="xl:col-span-8">
+                <TaskList tasks={data.tasks} users={data.users} />
+              </div>
+              {/* Narrower supporting column stack */}
+              <div className="flex flex-col gap-4 xl:col-span-4">
+                <DueTodayPanel tasks={data.tasks} />
+                <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} />
+                <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
+              </div>
             </div>
-            <div className="space-y-3">
-              {data.tasks.map((task) => (
-                <TaskCard key={task.id} task={task} users={data.users} />
-              ))}
-            </div>
           </div>
+        </div>
+      </section>
 
-          <ChatPanel messages={data.messages} />
-
-          <div className="space-y-5">
-            <IntegrationStatus integrations={data.integrations} />
-            <AgendaPanel agenda={data.agenda} />
-            <EmailSuggestions suggestions={data.suggestions} />
-            <ActivityLog events={data.events} tasks={data.tasks} users={data.users} compact />
-          </div>
-        </section>
-      </div>
+      <footer className="border-t border-border bg-background/80">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
+          <span>
+            Auth: {data.integrations.auth.provider} · Email loop:{" "}
+            {data.integrations.email.provider}
+          </span>
+          <span>
+            Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
+          </span>
+        </div>
+      </footer>
     </main>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="ui-label" style={{ color: "hsl(var(--muted-foreground))" }}>
+        {label}
+      </span>
+      <span className="font-display text-base font-bold tabular-nums text-foreground">
+        {value}
+      </span>
+    </span>
   );
 }
 
@@ -749,17 +905,73 @@ function LogPage() {
   }
   return (
     <main className="min-h-screen bg-background p-4 lg:p-6" data-testid="page-log">
-      <div className="mx-auto max-w-4xl">
-        <ActivityLog events={data.events} tasks={data.tasks} users={data.users} />
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <Wordmark />
+            <h1 className="work-heading mt-2">Audit log</h1>
+            <p className="text-sm text-muted-foreground">
+              Every task action with actor and timestamp.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              window.location.hash = "/";
+            }}
+          >
+            Back to workspace
+          </Button>
+        </div>
+        <div className="panel">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="display-font text-sm font-bold">
+              <Archive className="mr-2 inline size-4" />
+              Activity
+            </h2>
+          </div>
+          <ul className="divide-y divide-border">
+            {data.events.map((event) => {
+              const task = data.tasks.find((t) => t.id === event.taskId);
+              const user = data.users.find((u) => u.id === event.actorId);
+              const isComplete = event.type === "completed";
+              return (
+                <li key={event.id} className="px-4 py-3" data-testid={`row-event-${event.id}`}>
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={`mt-2 size-2 shrink-0 rounded-full ${
+                        isComplete ? "bg-brand-green" : "bg-muted-foreground/40"
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        {event.type.replace(/_/g, " ")} ·{" "}
+                        {task?.title ?? `Task ${event.taskId}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {user?.name ?? "Unknown"} ·{" "}
+                        {new Date(event.createdAt).toLocaleString()}
+                      </p>
+                      {event.note && (
+                        <p className="mt-1 text-xs text-foreground">{event.note}</p>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </div>
     </main>
   );
 }
 
-function AppRouter() {
+function AppRouter({ auth }: { auth: AuthedContext }) {
   return (
     <Switch>
-      <Route path="/" component={CommandCenter} />
+      <Route path="/" component={() => <CommandCenter auth={auth} />} />
       <Route path="/log" component={LogPage} />
       <Route component={NotFound} />
     </Switch>
@@ -767,43 +979,10 @@ function AppRouter() {
 }
 
 function AppShell({ auth }: { auth: AuthedContext }) {
-  const style = {
-    "--sidebar-width": "17rem",
-    "--sidebar-width-icon": "4rem",
-  };
-
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex min-h-screen w-full">
-        <AppSidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-50 flex h-14 items-center justify-between gap-3 border-b bg-background/95 px-4 backdrop-blur">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger data-testid="button-sidebar-toggle" />
-              <Separator orientation="vertical" className="h-5" />
-              <span className="text-sm text-muted-foreground" data-testid="text-app-mode">
-                {auth.authenticated
-                  ? `signed in as ${auth.email ?? "you"}`
-                  : supabaseConfig.configured
-                  ? "donnit.ai build preview"
-                  : "donnit.ai demo (Supabase not configured)"}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {auth.authenticated && (
-                <Button variant="outline" size="sm" onClick={() => auth.signOut()} data-testid="button-signout">
-                  Sign out
-                </Button>
-              )}
-              <ThemeToggle />
-            </div>
-          </header>
-          <Router hook={useHashLocation}>
-            <AppRouter />
-          </Router>
-        </div>
-      </div>
-    </SidebarProvider>
+    <Router hook={useHashLocation}>
+      <AppRouter auth={auth} />
+    </Router>
   );
 }
 
@@ -819,3 +998,15 @@ function App() {
 }
 
 export default App;
+
+// Type-only re-exports kept for compatibility with any other modules that
+// imported these from App.tsx historically.
+export type {
+  Task,
+  TaskEvent,
+  ChatMessage,
+  EmailSuggestion,
+  AgendaItem,
+  Bootstrap,
+  User,
+};
