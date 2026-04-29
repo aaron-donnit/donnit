@@ -802,10 +802,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/integrations/gmail/scan", async (req: Request, res: Response) => {
     const result = await scanGmailForTaskCandidates();
     if (!result.ok) {
-      res.status(424).json(result);
+      const status = result.reason === "gmail_auth_required" ? 401 : 424;
+      res.status(status).json({
+        ok: false,
+        reason: result.reason,
+        message: result.message,
+      });
       return;
     }
-    const candidates = "candidates" in result && Array.isArray(result.candidates) ? result.candidates : [];
+    const candidates = result.candidates;
 
     if (req.donnitAuth) {
       try {

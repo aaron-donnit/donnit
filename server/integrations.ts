@@ -76,7 +76,91 @@ function extractEmails(raw: unknown): GmailEmail[] {
   return container.email_results?.emails ?? container.emails ?? [];
 }
 
-export async function scanGmailForTaskCandidates() {
+type ToolFailure = {
+  status?: number;
+  errorCode?: string;
+  message?: string;
+  authUrl?: string;
+};
+
+// Parse the JSON envelope that the external-tool CLI prints to stderr on
+// failure. The CLI emits e.g. {"error": "...", "status": 401} or, for
+// connector auth issues, {"error": "auth_required", "auth_url": "..."}.
+// Inner `error` strings are sometimes themselves JSON like
+// {"detail":{"error_code":"UNAUTHORIZED"}}, so we try to peel one layer.
+function parseToolFailure(error: unknown): ToolFailure {
+  const out: ToolFailure = {};
+  if (!error || typeof error !== "object") return out;
+  const err = error as { stderr?: unknown; message?: unknown };
+  const text = typeof err.stderr === "string" && err.stderr.trim().length > 0
+    ? err.stderr
+    : typeof err.message === "string"
+      ? err.message
+      : "";
+  if (!text) return out;
+  // Find the first JSON object in the text
+  const start = text.indexOf("{");
+  if (start === -1) return out;
+  const slice = text.slice(start).trim();
+  let outer: unknown;
+  try {
+    outer = JSON.parse(slice);
+  } catch {
+    return out;
+  }
+  if (!outer || typeof outer !== "object") return out;
+  const o = outer as { error?: unknown; status?: unknown; auth_url?: unknown };
+  if (typeof o.status === "number") out.status = o.status;
+  if (typeof o.auth_url === "string") out.authUrl = o.auth_url;
+  if (typeof o.error === "string") {
+    if (o.error === "auth_required") {
+      out.errorCode = "auth_required";
+    } else {
+      try {
+        const inner = JSON.parse(o.error);
+        if (inner && typeof inner === "object") {
+          const detail = (inner as { detail?: unknown }).detail;
+          if (detail && typeof detail === "object") {
+            const code = (detail as { error_code?: unknown }).error_code;
+            const msg = (detail as { message?: unknown }).message;
+            if (typeof code === "string") out.errorCode = code;
+            if (typeof msg === "string") out.message = msg;
+          }
+        }
+      } catch {
+        // inner wasn't JSON; treat error string as a plain message
+        if (!out.message) out.message = o.error;
+      }
+    }
+  }
+  return out;
+}
+
+export type GmailScanResult =
+  | { ok: true; candidates: ReturnType<typeof toCandidate>[] }
+  | {
+      ok: false;
+      reason:
+        | "gmail_auth_required"
+        | "gmail_not_connected_or_tool_unavailable";
+      message: string;
+    };
+
+function toCandidate(email: GmailEmail) {
+  return {
+    gmailMessageId: email.email_id ?? null,
+    fromEmail: email.from_ ?? "Unknown sender",
+    subject: email.subject ?? "No subject",
+    preview: email.snippet ?? "",
+    suggestedTitle: inferTitle(email),
+    suggestedDueDate: inferDueDate(email),
+    urgency: inferUrgency(email),
+    assignedToId: 1,
+    receivedAt: email.date ?? null,
+  };
+}
+
+export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
   const sourceId = process.env.GMAIL_CONNECTOR_SOURCE_ID ?? "gcal";
   const payload = JSON.stringify({
     source_id: sourceId,
@@ -91,39 +175,67 @@ export async function scanGmailForTaskCandidates() {
     },
   });
 
+  let stdout: string;
   try {
-    const { stdout } = await execFileAsync("external-tool", ["call", payload], {
+    const result = await execFileAsync("external-tool", ["call", payload], {
       timeout: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    const raw = JSON.parse(stdout);
-    const seen = new Set<string>();
-    const candidates = extractEmails(raw)
-      .filter((email) => {
-        const key = email.email_id ?? `${email.from_}-${email.subject}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        const text = `${email.subject ?? ""} ${email.snippet ?? ""} ${email.body ?? ""}`.toLowerCase();
-        return /(ticket|urgent|asap|please review|action required|deadline|reset|login|contract|renewal)/.test(text);
-      })
-      .slice(0, 5)
-      .map((email) => ({
-        gmailMessageId: email.email_id ?? null,
-        fromEmail: email.from_ ?? "Unknown sender",
-        subject: email.subject ?? "No subject",
-        preview: email.snippet ?? "",
-        suggestedTitle: inferTitle(email),
-        suggestedDueDate: inferDueDate(email),
-        urgency: inferUrgency(email),
-        assignedToId: 1,
-        receivedAt: email.date ?? null,
-      }));
-    return { ok: true, candidates };
+    stdout = result.stdout;
   } catch (error) {
+    const failure = parseToolFailure(error);
+    if (
+      failure.status === 401 ||
+      failure.errorCode === "UNAUTHORIZED" ||
+      failure.errorCode === "auth_required"
+    ) {
+      return {
+        ok: false,
+        reason: "gmail_auth_required",
+        message:
+          "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again.",
+      };
+    }
     return {
       ok: false,
       reason: "gmail_not_connected_or_tool_unavailable",
-      detail: error instanceof Error ? error.message : String(error),
+      message:
+        "Gmail scan is unavailable right now. Confirm the Gmail connector is linked and retry shortly.",
     };
   }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return {
+      ok: false,
+      reason: "gmail_not_connected_or_tool_unavailable",
+      message:
+        "Gmail scan returned an unexpected response. Try again in a moment.",
+    };
+  }
+
+  // Some connectors return an authenticated:false envelope on success path
+  if (raw && typeof raw === "object" && (raw as { authenticated?: unknown }).authenticated === false) {
+    return {
+      ok: false,
+      reason: "gmail_auth_required",
+      message:
+        "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again.",
+    };
+  }
+
+  const seen = new Set<string>();
+  const candidates = extractEmails(raw)
+    .filter((email) => {
+      const key = email.email_id ?? `${email.from_}-${email.subject}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      const text = `${email.subject ?? ""} ${email.snippet ?? ""} ${email.body ?? ""}`.toLowerCase();
+      return /(ticket|urgent|asap|please review|action required|deadline|reset|login|contract|renewal)/.test(text);
+    })
+    .slice(0, 5)
+    .map(toCandidate);
+  return { ok: true, candidates };
 }

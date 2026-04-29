@@ -28,6 +28,7 @@ import { queryClient, apiRequest } from "./lib/queryClient";
 import { AuthGate, type AuthedContext } from "@/components/AuthGate";
 import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
+import { toast } from "@/hooks/use-toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -699,8 +700,53 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
 
   const scan = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/integrations/gmail/scan"),
-    onSuccess: invalidateWorkspace,
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/gmail/scan");
+      return (await res.json()) as {
+        ok: boolean;
+        scannedCandidates?: number;
+        createdSuggestions?: number;
+      };
+    },
+    onSuccess: async (result) => {
+      await invalidateWorkspace();
+      const created = result?.createdSuggestions ?? 0;
+      const scanned = result?.scannedCandidates ?? 0;
+      toast({
+        title: "Email scan complete",
+        description:
+          created > 0
+            ? `Added ${created} new email${created === 1 ? "" : "s"} to the acceptance queue.`
+            : scanned > 0
+              ? "No new emails to add. Existing suggestions are already queued."
+              : "No matching emails found in the current window.",
+      });
+    },
+    onError: (error: unknown) => {
+      // apiRequest throws Error("<status>: <body>") on non-2xx. Try to parse
+      // the body so we can surface the connector-friendly message rather
+      // than the raw status. We never display connector JSON to users.
+      const message = error instanceof Error ? error.message : String(error);
+      const sep = message.indexOf(": ");
+      let parsed: { reason?: string; message?: string } = {};
+      if (sep > -1) {
+        try {
+          parsed = JSON.parse(message.slice(sep + 2));
+        } catch {
+          // body wasn't JSON; fall through to generic copy
+        }
+      }
+      const isAuth = parsed.reason === "gmail_auth_required" || message.startsWith("401:");
+      toast({
+        title: isAuth ? "Reconnect Gmail" : "Email scan unavailable",
+        description:
+          parsed.message ??
+          (isAuth
+            ? "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again."
+            : "Gmail scan is unavailable right now. Try again shortly."),
+        variant: "destructive",
+      });
+    },
   });
 
   const buildAgenda = useMutation({
