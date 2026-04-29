@@ -310,7 +310,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(424).json(result);
       return;
     }
-    res.json(result);
+    const candidates = "candidates" in result && Array.isArray(result.candidates) ? result.candidates : [];
+    const created = [];
+    const existing = await storage.listEmailSuggestions();
+    const existingKeys = new Set(existing.map((item) => `${item.fromEmail}|${item.subject}`));
+    for (const candidate of candidates) {
+      const key = `${candidate.fromEmail}|${candidate.subject}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      const suggestion = await storage.createEmailSuggestion({
+        fromEmail: candidate.fromEmail,
+        subject: candidate.subject,
+        preview: candidate.preview,
+        suggestedTitle: candidate.suggestedTitle,
+        suggestedDueDate: candidate.suggestedDueDate,
+        urgency: candidate.urgency,
+        assignedToId: candidate.assignedToId,
+      });
+      created.push(suggestion);
+    }
+    res.json({ ok: true, scannedCandidates: candidates.length, createdSuggestions: created.length, suggestions: created });
   });
 
   return httpServer;

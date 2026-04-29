@@ -406,6 +406,10 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 }
 
 function EmailSuggestions({ suggestions }: { suggestions: EmailSuggestion[] }) {
+  const scan = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/integrations/gmail/scan"),
+    onSuccess: invalidateWorkspace,
+  });
   const approve = useMutation({
     mutationFn: async (id: number) => apiRequest("POST", `/api/suggestions/${id}/approve`),
     onSuccess: invalidateWorkspace,
@@ -420,11 +424,19 @@ function EmailSuggestions({ suggestions }: { suggestions: EmailSuggestion[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MailPlus className="size-5" />
-          Email scan queue
-        </CardTitle>
-        <CardDescription>Donnit asks before creating tasks from scanned emails.</CardDescription>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <MailPlus className="size-5" />
+              Email scan queue
+            </CardTitle>
+            <CardDescription>Donnit asks before creating tasks from scanned emails.</CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => scan.mutate()} disabled={scan.isPending} data-testid="button-scan-gmail">
+            {scan.isPending ? <Loader2 className="size-4 animate-spin" /> : <Inbox className="size-4" />}
+            Scan
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {pending.length === 0 ? (

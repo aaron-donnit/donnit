@@ -235,6 +235,7 @@ export interface IStorage {
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
   listChatMessages(): Promise<ChatMessage[]>;
   listEmailSuggestions(): Promise<EmailSuggestion[]>;
+  createEmailSuggestion(suggestion: InsertEmailSuggestion): Promise<EmailSuggestion>;
   approveEmailSuggestion(id: number, actorId: number): Promise<{ suggestion?: EmailSuggestion; task?: Task }>;
   dismissEmailSuggestion(id: number): Promise<EmailSuggestion | undefined>;
 }
@@ -285,6 +286,14 @@ export class DatabaseStorage implements IStorage {
 
   async listEmailSuggestions(): Promise<EmailSuggestion[]> {
     return db.select().from(emailSuggestions).orderBy(desc(emailSuggestions.createdAt)).all();
+  }
+
+  async createEmailSuggestion(suggestion: InsertEmailSuggestion): Promise<EmailSuggestion> {
+    return db
+      .insert(emailSuggestions)
+      .values({ ...suggestion, status: "pending", createdAt: nowIso() })
+      .returning()
+      .get();
   }
 
   async approveEmailSuggestion(id: number, actorId: number): Promise<{ suggestion?: EmailSuggestion; task?: Task }> {
