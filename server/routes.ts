@@ -71,7 +71,7 @@ function findAssignee(message: string, users: User[]) {
 }
 
 function titleFromMessage(message: string) {
-  return message
+  const cleaned = message
     .replace(/\b(today|tomorrow|next week|this week|urgent|asap|critical|high priority|low priority)\b/gi, "")
     .replace(/\bby\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
     .replace(/\b\d+\s*(?:min|mins|minutes|hr|hrs|hour|hours)\b/gi, "")
@@ -79,6 +79,7 @@ function titleFromMessage(message: string) {
     .trim()
     .replace(/^(add|create|remind me to|please|task to)\s+/i, "")
     .slice(0, 150);
+  return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : cleaned;
 }
 
 function parseAnnualReminderDays(message: string) {
