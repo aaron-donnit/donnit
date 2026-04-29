@@ -76,6 +76,11 @@ export function AuthGate({ children }: AuthShellProps) {
   }, [session?.accessToken]);
 
   async function handleBootstrap() {
+    if (!session?.accessToken) {
+      setError("Your session expired. Please sign in again.");
+      setBootstrapStatus("error");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {

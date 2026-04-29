@@ -1,22 +1,39 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getCurrentSession, onAuthChange } from "@/lib/supabase";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-// Module-level token so apiRequest and getQueryFn can attach Authorization
-// without threading it through every call site. The session hook updates it
-// whenever Supabase auth state changes.
-let authAccessToken: string | null = null;
+// Read the Supabase access token straight from the auth module. Going
+// through React state (a useEffect that mirrors the token into a local
+// variable) creates a window where the token has been emitted by GoTrue
+// but the effect has not yet run, so the next apiRequest fires without
+// an Authorization header and the server replies 401. Reading the
+// module's source of truth eliminates that race.
+function currentAccessToken(): string | null {
+  return getCurrentSession()?.accessToken ?? null;
+}
 
-export function setAuthAccessToken(token: string | null) {
-  authAccessToken = token;
+// Kept exported so call sites that previously pushed the token in (e.g.
+// AuthGate) keep compiling. The function is now a no-op for token
+// storage and only nudges react-query to refetch when auth changes.
+export function setAuthAccessToken(_token: string | null) {
   queueMicrotask(() => {
     queryClient.invalidateQueries();
   });
 }
 
+// Refetch on every auth-state transition so authenticated views pick up
+// data and signed-out views drop it.
+onAuthChange(() => {
+  queueMicrotask(() => {
+    queryClient.invalidateQueries();
+  });
+});
+
 function authHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
-  if (authAccessToken) headers.set("Authorization", `Bearer ${authAccessToken}`);
+  const token = currentAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   return headers;
 }
 
