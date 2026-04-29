@@ -30,16 +30,35 @@ existing `public.*` table.
    indexes, and Row Level Security as `0001`, plus a couple of extra policies
    (profile insert, email suggestion insert) that were missing. Non-destructive
    (re-runnable with `DROP POLICY IF EXISTS`/`CREATE POLICY`).
-3. `0003_donnit_bootstrap_policies.sql` — **the migration to apply next.**
-   Adds `donnit.bootstrap_workspace(...)` (a `SECURITY DEFINER` RPC that the
-   freshly signed-up user calls once to create their profile, default org,
-   owner-membership row, and reminder preferences in a single atomic step).
-   It also adds three narrow INSERT/UPDATE policies that allow a user to do
-   this directly via REST in case the RPC is unavailable. Idempotent —
-   `CREATE OR REPLACE FUNCTION` and `DROP POLICY IF EXISTS`.
+3. `0003_donnit_bootstrap_policies.sql` — Adds `donnit.bootstrap_workspace(...)`
+   (a `SECURITY DEFINER` RPC that the freshly signed-up user calls once to
+   create their profile, default org, owner-membership row, and reminder
+   preferences in a single atomic step). It also adds three narrow
+   INSERT/UPDATE policies that allow a user to do this directly via REST in
+   case the RPC is unavailable. Idempotent — `CREATE OR REPLACE FUNCTION`
+   and `DROP POLICY IF EXISTS`.
+4. `0004_fix_rls_membership_recursion.sql` — **the migration to apply next.**
+   Fixes a `42P17 infinite recursion detected in policy for relation
+   "organization_members"` error that surfaces once the `donnit` schema is
+   exposed via PostgREST. The original policies in `0002`/`0003` checked
+   membership with `exists (select 1 from donnit.organization_members ...)`
+   inside the policies *on* `organization_members` and on every other
+   org-scoped table. Each of those subqueries re-entered the same SELECT
+   policy on `organization_members`, producing infinite recursion. This
+   migration introduces SECURITY DEFINER helpers in schema `donnit`
+   (`is_org_member`, `can_assign_in_org`, `is_org_manager`,
+   `org_has_members`) with `search_path` pinned to `donnit, pg_temp`, and
+   replaces the recursive policies on `organizations`,
+   `organization_members`, `tasks`, `task_events`, and `email_suggestions`
+   with calls to those helpers. The owner-membership insert policy from
+   `0003` now uses `donnit.org_has_members(...)` instead of a
+   self-referential subquery. Idempotent — `CREATE OR REPLACE FUNCTION` /
+   `DROP POLICY IF EXISTS`. Non-destructive: no table or column is altered,
+   and the `public` schema is untouched.
 
-> **Action required:** apply `0002_donnit_namespace.sql` and
-> `0003_donnit_bootstrap_policies.sql` from the Supabase SQL editor (or
+> **Action required:** apply `0002_donnit_namespace.sql`,
+> `0003_donnit_bootstrap_policies.sql`, and
+> `0004_fix_rls_membership_recursion.sql` from the Supabase SQL editor (or
 > `supabase db push`) before authenticated production code can run. The repo
 > does not run DDL automatically.
 >
