@@ -645,7 +645,7 @@ function DoneLogPanel({
   return (
     <div className="panel" data-testid="panel-log">
       <div className="border-b border-border px-4 py-3">
-        <h3 className="display-font text-sm font-bold">Done · log</h3>
+        <h3 className="display-font text-sm font-bold">Activity log</h3>
         <p className="ui-label mt-1">Every action, who, when</p>
       </div>
       <div className="px-4 py-3">
@@ -706,14 +706,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const metrics = useMemo(() => {
     const tasks = data?.tasks ?? [];
+    const suggestions = data?.suggestions ?? [];
     const today = new Date().toISOString().slice(0, 10);
+    const waitingTasks = tasks.filter((t) => t.status === "pending_acceptance").length;
+    const pendingSuggestions = suggestions.filter((s) => s.status === "pending").length;
     return {
       open: tasks.filter((t) => !["completed", "denied"].includes(t.status)).length,
       dueToday: tasks.filter((t) => t.dueDate === today && t.status !== "completed").length,
-      waiting: tasks.filter((t) => t.status === "pending_acceptance").length,
+      queue: waitingTasks + pendingSuggestions,
       completed: tasks.filter((t) => t.status === "completed").length,
     };
-  }, [data?.tasks]);
+  }, [data?.tasks, data?.suggestions]);
 
   const todayLabel = useMemo(
     () =>
@@ -841,8 +844,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <span className="ui-label">Today · {todayLabel}</span>
             <Stat label="Open" value={metrics.open} />
             <Stat label="Due today" value={metrics.dueToday} />
-            <Stat label="Waiting" value={metrics.waiting} />
-            <Stat label="Done" value={metrics.completed} />
+            <Stat label="Queue" value={metrics.queue} />
+            <Stat label="Completed" value={metrics.completed} />
           </div>
         </div>
       </section>
