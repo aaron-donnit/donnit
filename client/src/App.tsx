@@ -158,8 +158,9 @@ function invalidateWorkspace() {
 
 function Wordmark() {
   return (
-    <span className="wordmark text-2xl">
-      Donn<span className="accent">it</span>
+    <span className="wordmark text-2xl" aria-label="Donnit">
+      <span aria-hidden="true">Donn</span>
+      <span className="accent" aria-hidden="true">it</span>
     </span>
   );
 }
@@ -573,9 +574,9 @@ function AcceptancePanel({
             className={`task-row ${urgencyClass(task.urgency)} flex-col items-stretch`}
             data-testid={`row-waiting-${task.id}`}
           >
-            <p className="text-sm font-medium text-foreground">{task.title}</p>
+            <p className="text-sm font-medium text-foreground break-words">{task.title}</p>
             <p className="text-xs text-muted-foreground">{task.dueDate ?? "No due date"}</p>
-            <div className="mt-2 flex gap-2">
+            <div className="mt-2 flex flex-wrap gap-2">
               <Button
                 size="sm"
                 onClick={() => accept.mutate(task.id)}
@@ -605,9 +606,9 @@ function AcceptancePanel({
               <MailPlus className="size-3.5 text-muted-foreground" />
               <span className="ui-label">From email</span>
             </div>
-            <p className="mt-1 text-sm font-medium text-foreground">{suggestion.suggestedTitle}</p>
-            <p className="text-xs text-muted-foreground">{suggestion.subject}</p>
-            <div className="mt-2 flex gap-2">
+            <p className="mt-1 text-sm font-medium text-foreground break-words">{suggestion.suggestedTitle}</p>
+            <p className="text-xs text-muted-foreground break-words">{suggestion.subject}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
               <Button
                 size="sm"
                 onClick={() => approveSuggestion.mutate(suggestion.id)}
@@ -841,7 +842,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
-      <section className="mx-auto max-w-[1600px] px-4 py-5 lg:px-6">
+      <section className="mx-auto max-w-[1600px] px-4 pt-5 pb-10 lg:px-6">
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
           <div className="lg:col-span-4 xl:col-span-3">

@@ -182,13 +182,20 @@
   .wordmark {
     font-family: var(--font-display);
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
     color: hsl(var(--foreground));
     line-height: 1;
+    display: inline-flex;
+    align-items: baseline;
+    white-space: nowrap;
+    font-feature-settings: normal;
+    font-variant-ligatures: none;
   }
 
   .wordmark .accent {
     color: hsl(var(--brand-green));
+    letter-spacing: 0;
+    margin-left: 0.02em;
   }
 
   /* Function bar chip */
@@ -241,6 +248,7 @@
     border-left-color: hsl(var(--card-border));
     border-radius: 0.5rem;
     padding: 14px;
+    min-width: 0;
     transition: opacity 200ms ease, background 160ms ease;
   }
 
