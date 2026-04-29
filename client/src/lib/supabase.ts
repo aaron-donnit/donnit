@@ -201,15 +201,22 @@ function normalizeRedirect(value: string): string {
   return noQuery;
 }
 
+// IMPORTANT: GoTrue's `/auth/v1/recover` endpoint reads `redirect_to` from
+// the URL query string, NOT from the JSON body. If you put redirect_to in
+// the body it is silently ignored and the email link falls back to the
+// project's "Site URL" in the Supabase dashboard — which in our case was
+// still set to localhost, producing reset emails that 404 in production.
+// Do not change this without verifying the link in the actual email.
 export async function requestPasswordRecovery(email: string): Promise<void> {
   if (!supabaseConfig.configured) throw new Error("Supabase is not configured");
-  const res = await fetch(`${url}/auth/v1/recover`, {
+  const redirectTo = recoveryRedirectUrl();
+  const endpoint = redirectTo
+    ? `${url}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`
+    : `${url}/auth/v1/recover`;
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({
-      email,
-      redirect_to: recoveryRedirectUrl(),
-    }),
+    body: JSON.stringify({ email }),
   });
   if (!res.ok) throw new Error(await readError(res));
 }

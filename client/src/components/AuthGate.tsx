@@ -142,7 +142,9 @@ export function AuthGate({ children }: AuthShellProps) {
       // already exists or the sign-in failed for a reason that "forgot
       // password" usually solves.
       const lower = message.toLowerCase();
-      if (mode === "signup" && (lower.includes("already") || lower.includes("registered"))) {
+      if (lower.includes("rate limit") || lower.includes("too many") || lower.includes("over_email_send_rate_limit")) {
+        setError("Supabase rate limit reached. Wait a few minutes before requesting another reset email.");
+      } else if (mode === "signup" && (lower.includes("already") || lower.includes("registered"))) {
         setError(`${message} Try signing in or use "Forgot password?" to recover access.`);
       } else if (mode === "signin" && lower.includes("invalid")) {
         setError(`${message} If you have forgotten your password, use the link below to reset it.`);
