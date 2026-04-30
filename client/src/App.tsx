@@ -981,6 +981,72 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
 
+  // The Gmail OAuth callback redirects to "/?gmail=<reason>" after Google
+  // sends the user back. Detect that on mount, surface a typed toast, and
+  // strip the param from the URL so a refresh doesn't re-trigger the toast.
+  // We also invalidate the OAuth status query so the dashboard reflects the
+  // new connection without requiring a manual refresh.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const gmailParam = url.searchParams.get("gmail");
+    if (!gmailParam) return;
+    url.searchParams.delete("gmail");
+    const cleaned = url.pathname + (url.search ? url.search : "") + url.hash;
+    window.history.replaceState({}, "", cleaned);
+    queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
+    if (gmailParam === "connected") {
+      toast({
+        title: "Gmail connected",
+        description: "Click Scan email to pull unread Gmail and queue suggested tasks.",
+      });
+      return;
+    }
+    const map: Record<string, { title: string; description: string }> = {
+      denied: {
+        title: "Gmail connect cancelled",
+        description: "Permission was not granted. Click Connect Gmail to try again.",
+      },
+      missing_params: {
+        title: "Gmail connect link incomplete",
+        description: "Click Connect Gmail to start a fresh authorization.",
+      },
+      bad_state: {
+        title: "Gmail connect link invalid",
+        description: "The connect link couldn't be verified. Click Connect Gmail to start again.",
+      },
+      expired: {
+        title: "Gmail connect link expired",
+        description: "Click Connect Gmail to start a fresh authorization (links last 10 minutes).",
+      },
+      not_configured: {
+        title: "Gmail OAuth not configured",
+        description: "Server admin must set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.",
+      },
+      server_misconfigured: {
+        title: "Server admin: SUPABASE_SERVICE_ROLE_KEY not configured",
+        description: "Donnit cannot persist Gmail tokens without the service-role key. Add it on Vercel and redeploy.",
+      },
+      token_exchange_failed: {
+        title: "Gmail token exchange failed",
+        description: "Google rejected the auth code. Click Connect Gmail to try again.",
+      },
+      persist_failed: {
+        title: "Could not save Gmail connection",
+        description: "Database write failed. Click Connect Gmail to try again, or contact support if it persists.",
+      },
+      unexpected: {
+        title: "Gmail connect failed",
+        description: "An unexpected error occurred. Click Connect Gmail to try again.",
+      },
+    };
+    const entry = map[gmailParam] ?? {
+      title: "Gmail connect failed",
+      description: "Click Connect Gmail to try again.",
+    };
+    toast({ ...entry, variant: "destructive" });
+  }, []);
+
   const connectGmail = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/integrations/gmail/oauth/connect");

@@ -86,6 +86,25 @@ export async function attachSupabaseAuth(req: Request, _res: Response, next: Nex
   next();
 }
 
+// Admin (service-role) client used ONLY by paths that cannot carry a user
+// JWT. The Gmail OAuth callback is the canonical example: Google redirects
+// the browser to /api/integrations/gmail/oauth/callback as a top-level
+// navigation, so no Authorization header is sent. The callback identifies
+// the donnit user via a signed state token (HMAC) and writes the token row
+// using this admin client. Returns null if SUPABASE_SERVICE_ROLE_KEY is not
+// configured — callers MUST handle that case and surface a friendly error.
+//
+// Never expose this client outside the server. It bypasses RLS.
+export function createSupabaseAdminClient(): SupabaseClient | null {
+  const url = process.env.SUPABASE_URL;
+  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRole) return null;
+  return createClient(url, serviceRole, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: DONNIT_SCHEMA as unknown as "public" },
+  }) as unknown as SupabaseClient;
+}
+
 export function requireDonnitAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.donnitAuth) {
     res.status(401).json({ message: "Authentication required." });

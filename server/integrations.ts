@@ -71,6 +71,119 @@ export function getGmailOAuthConfig(): GmailOAuthConfig {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Signed OAuth state tokens.
+//
+// Vercel runs each /api invocation in a separate (potentially cold) Lambda,
+// so an in-process Map of state -> { userId, orgId } cannot survive the
+// browser round-trip through accounts.google.com. We instead encode the
+// userId/orgId/issuedAt into the `state` query param itself and HMAC-sign
+// it with a server-only secret. The callback verifies the signature and
+// extracts the same userId/orgId without any shared store.
+//
+// Format: base64url(JSON({u,o,iat,n})) "." base64url(HMAC-SHA256(payload))
+//   - u: donnit user id (uuid)
+//   - o: donnit org id (uuid)
+//   - iat: issued-at (epoch ms)
+//   - n: random nonce (replay protection per session; we still also enforce
+//        a 10-minute TTL via iat)
+//
+// The secret is GMAIL_OAUTH_STATE_SECRET when set, else SUPABASE_SERVICE_ROLE_KEY,
+// else SUPABASE_ANON_KEY, else a random per-process key (which won't survive
+// cold starts — the operator is expected to set GMAIL_OAUTH_STATE_SECRET in
+// production).
+// ---------------------------------------------------------------------------
+
+import crypto from "node:crypto";
+
+const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let processFallbackSecret: string | null = null;
+
+function getStateSecret(): string {
+  const explicit = process.env.GMAIL_OAUTH_STATE_SECRET;
+  if (explicit && explicit.length >= 16) return explicit;
+  const sr = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (sr && sr.length >= 16) return sr;
+  const anon = process.env.SUPABASE_ANON_KEY;
+  if (anon && anon.length >= 16) return anon;
+  if (!processFallbackSecret) {
+    processFallbackSecret = crypto.randomBytes(32).toString("hex");
+  }
+  return processFallbackSecret;
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(input: string): Buffer {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+}
+
+export type GmailOAuthState = {
+  userId: string;
+  orgId: string;
+  issuedAt: number;
+};
+
+export function signGmailOAuthState(input: GmailOAuthState): string {
+  const payload = {
+    u: input.userId,
+    o: input.orgId,
+    iat: input.issuedAt,
+    n: crypto.randomBytes(8).toString("hex"),
+  };
+  const payloadB64 = base64UrlEncode(Buffer.from(JSON.stringify(payload), "utf-8"));
+  const sig = crypto
+    .createHmac("sha256", getStateSecret())
+    .update(payloadB64)
+    .digest();
+  return `${payloadB64}.${base64UrlEncode(sig)}`;
+}
+
+export type StateVerifyResult =
+  | { ok: true; state: GmailOAuthState }
+  | { ok: false; reason: "malformed" | "bad_signature" | "expired" };
+
+export function verifyGmailOAuthState(token: string): StateVerifyResult {
+  if (!token || typeof token !== "string") return { ok: false, reason: "malformed" };
+  const dot = token.indexOf(".");
+  if (dot <= 0 || dot === token.length - 1) return { ok: false, reason: "malformed" };
+  const payloadB64 = token.slice(0, dot);
+  const sigB64 = token.slice(dot + 1);
+  let providedSig: Buffer;
+  try {
+    providedSig = base64UrlDecode(sigB64);
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+  const expectedSig = crypto.createHmac("sha256", getStateSecret()).update(payloadB64).digest();
+  if (
+    providedSig.length !== expectedSig.length ||
+    !crypto.timingSafeEqual(providedSig, expectedSig)
+  ) {
+    return { ok: false, reason: "bad_signature" };
+  }
+  let payload: { u?: unknown; o?: unknown; iat?: unknown };
+  try {
+    payload = JSON.parse(base64UrlDecode(payloadB64).toString("utf-8"));
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+  if (
+    typeof payload.u !== "string" ||
+    typeof payload.o !== "string" ||
+    typeof payload.iat !== "number"
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (Date.now() - payload.iat > STATE_TTL_MS) {
+    return { ok: false, reason: "expired" };
+  }
+  return { ok: true, state: { userId: payload.u, orgId: payload.o, issuedAt: payload.iat } };
+}
+
 export function buildGmailAuthUrl(state: string): string {
   const cfg = getGmailOAuthConfig();
   const params = new URLSearchParams({

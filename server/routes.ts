@@ -14,11 +14,16 @@ import {
   getIntegrationStatus,
   refreshGmailAccessToken,
   scanGmailForTaskCandidates,
+  signGmailOAuthState,
+  verifyGmailOAuthState,
 } from "./integrations";
-import crypto from "node:crypto";
 import { z } from "zod";
 import { storage } from "./storage";
-import { attachSupabaseAuth, requireDonnitAuth } from "./auth-supabase";
+import {
+  attachSupabaseAuth,
+  createSupabaseAdminClient,
+  requireDonnitAuth,
+} from "./auth-supabase";
 import { DonnitStore, type DonnitTask } from "./donnit-store";
 import { isSupabaseConfigured } from "./supabase";
 
@@ -32,15 +37,6 @@ const DEMO_USER_ID = 1;
 // human-readable message and a structured payload that is safe to log/return:
 // it intentionally only surfaces fields PostgREST already exposes
 // (message/code/details/hint) and never includes secrets or full stack traces.
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function serializeSupabaseError(error: unknown): { message: string; code?: string; details?: string; hint?: string } {
   if (error instanceof Error) {
     const anyErr = error as Error & { code?: unknown; details?: unknown; hint?: unknown };
@@ -1049,26 +1045,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   //
   // Endpoints:
   //   GET  /api/integrations/gmail/oauth/status     — is OAuth configured? is the user connected?
-  //   POST /api/integrations/gmail/oauth/connect    — returns Google consent URL (state in body)
+  //   POST /api/integrations/gmail/oauth/connect    — returns Google consent URL (signed state)
   //   GET  /api/integrations/gmail/oauth/callback   — Google redirects here with ?code&state
   //   POST /api/integrations/gmail/oauth/disconnect — revoke locally (clears token row)
   //
-  // The callback is GET-only because Google redirects the browser to it; it
-  // requires the user be signed in via Supabase. State is verified to be a
-  // pending challenge that the user just generated. We keep the in-flight
-  // state map process-local because it is short-lived (5 min) and only
-  // matters for the duration of the consent round-trip.
-
-  type OAuthStateEntry = { userId: string; orgId: string; createdAt: number };
-  const oauthStates = new Map<string, OAuthStateEntry>();
-  const OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
-
-  function gcOAuthStates() {
-    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
-    oauthStates.forEach((v, k) => {
-      if (v.createdAt < cutoff) oauthStates.delete(k);
-    });
-  }
+  // Vercel runs each function invocation in a separate (cold-startable)
+  // Lambda, so an in-memory state map cannot survive the round-trip through
+  // accounts.google.com. We instead encode {userId, orgId, iat} into the
+  // OAuth `state` parameter itself and HMAC-sign it (see
+  // signGmailOAuthState/verifyGmailOAuthState). The callback verifies the
+  // signature, extracts the donnit userId, and writes the token row using a
+  // service-role Supabase client (Google's redirect carries no user JWT).
 
   app.get("/api/integrations/gmail/oauth/status", async (req: Request, res: Response) => {
     const cfg = getGmailOAuthConfig();
@@ -1119,9 +1106,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(409).json({ message: "Workspace not bootstrapped." });
         return;
       }
-      gcOAuthStates();
-      const state = crypto.randomBytes(24).toString("base64url");
-      oauthStates.set(state, { userId: auth.userId, orgId, createdAt: Date.now() });
+      const state = signGmailOAuthState({
+        userId: auth.userId,
+        orgId,
+        issuedAt: Date.now(),
+      });
       const url = buildGmailAuthUrl(state);
       res.json({ ok: true, url });
     } catch (error) {
@@ -1129,51 +1118,83 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // GET callback. Two important constraints:
+  //   1. Google redirects the BROWSER here as a top-level navigation, so no
+  //      Authorization header is sent. We cannot rely on req.donnitAuth.
+  //   2. The donnit user must be inferred entirely from the signed state.
+  //   3. We must NEVER let an exception escape — Vercel surfaces those as
+  //      FUNCTION_INVOCATION_FAILED 500 to the user. Every error path
+  //      redirects to "/?gmail=<reason>" so the SPA can show a real toast.
   app.get("/api/integrations/gmail/oauth/callback", async (req: Request, res: Response) => {
-    const code = typeof req.query.code === "string" ? req.query.code : null;
-    const state = typeof req.query.state === "string" ? req.query.state : null;
-    const errorParam = typeof req.query.error === "string" ? req.query.error : null;
-    if (errorParam) {
-      res
-        .status(400)
-        .type("html")
-        .send(
-          `<!doctype html><meta charset="utf-8"><title>Gmail connect</title>` +
-            `<p>Gmail did not authorize the connection: ${escapeHtml(errorParam)}.</p>` +
-            `<p><a href="/">Return to Donnit</a></p>`,
-        );
-      return;
-    }
-    if (!code || !state) {
-      res.status(400).type("html").send(`<p>Missing code or state.</p>`);
-      return;
-    }
-    gcOAuthStates();
-    const entry = oauthStates.get(state);
-    if (!entry) {
-      res
-        .status(400)
-        .type("html")
-        .send(
-          `<p>This Gmail connect link has expired. <a href="/">Return to Donnit</a> and try again.</p>`,
-        );
-      return;
-    }
-    oauthStates.delete(state);
-    if (!req.donnitAuth || req.donnitAuth.userId !== entry.userId) {
-      res
-        .status(401)
-        .type("html")
-        .send(
-          `<p>You must be signed in to the same Donnit account that started the Gmail connection. <a href="/">Sign in and try again</a>.</p>`,
-        );
-      return;
-    }
+    const safeRedirect = (reason: string) => {
+      // Always redirect to "/" with a typed gmail param so the SPA can show
+      // a toast and refresh oauth status without further server hops.
+      const redirectUrl = `/?gmail=${encodeURIComponent(reason)}`;
+      try {
+        res.status(302).setHeader("Location", redirectUrl).end();
+      } catch {
+        // If even setHeader throws (response already started), fall back to
+        // a plain HTML body so Vercel still gets a 200 instead of a crash.
+        try {
+          res.type("html").send(`<p><a href="${redirectUrl}">Return to Donnit</a></p>`);
+        } catch {
+          // last-resort: no-op
+        }
+      }
+    };
+
     try {
-      const tokens = await exchangeGmailAuthCode(code);
-      const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
-      // Best-effort fetch of the connected Gmail address (no PII written if it fails).
-      let email = req.donnitAuth.email ?? "";
+      const code = typeof req.query.code === "string" ? req.query.code : null;
+      const stateParam = typeof req.query.state === "string" ? req.query.state : null;
+      const errorParam = typeof req.query.error === "string" ? req.query.error : null;
+
+      if (errorParam) {
+        // User denied or Google rejected. Don't log the raw param body.
+        return safeRedirect("denied");
+      }
+      if (!code || !stateParam) {
+        return safeRedirect("missing_params");
+      }
+
+      const verified = verifyGmailOAuthState(stateParam);
+      if (!verified.ok) {
+        return safeRedirect(
+          verified.reason === "expired"
+            ? "expired"
+            : verified.reason === "bad_signature"
+              ? "bad_state"
+              : "bad_state",
+        );
+      }
+
+      const cfg = getGmailOAuthConfig();
+      if (!cfg.configured) {
+        return safeRedirect("not_configured");
+      }
+
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        // SUPABASE_SERVICE_ROLE_KEY missing. Operator-fixable; tell the user
+        // to contact admin via the SPA toast.
+        return safeRedirect("server_misconfigured");
+      }
+
+      let tokens;
+      try {
+        tokens = await exchangeGmailAuthCode(code);
+      } catch (err) {
+        // Token-exchange errors never include the auth code or tokens (Google
+        // returns short error_description strings). Log only the error code.
+        console.error(
+          "[donnit] gmail token exchange failed:",
+          err instanceof Error ? err.message.slice(0, 200) : "unknown",
+        );
+        return safeRedirect("token_exchange_failed");
+      }
+
+      // Best-effort: resolve the connected Gmail address. If Gmail's profile
+      // call fails, fall back to a generic placeholder; we never log the token.
+      let email = "";
       try {
         const profileRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
           headers: { authorization: `Bearer ${tokens.accessToken}` },
@@ -1183,32 +1204,63 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (profile.emailAddress) email = profile.emailAddress;
         }
       } catch {
-        // ignore — keep auth email
+        // ignore
       }
-      await store.upsertGmailAccount({
-        org_id: entry.orgId,
-        email,
-        access_token: tokens.accessToken,
-        refresh_token: tokens.refreshToken,
-        scope: tokens.scope,
-        token_type: tokens.tokenType,
-        expires_at: new Date(tokens.expiresAt).toISOString(),
-      });
-      res
-        .type("html")
-        .send(
-          `<!doctype html><meta charset="utf-8"><title>Gmail connected</title>` +
-            `<p>Gmail connected for ${escapeHtml(email)}. You can close this window and return to Donnit.</p>` +
-            `<script>window.close && window.close();</script>` +
-            `<p><a href="/">Return to Donnit</a></p>`,
+      if (!email) email = "your gmail";
+
+      // Upsert via service role. RLS policy requires user_id = auth.uid(),
+      // which the service-role key bypasses. We still scope writes to the
+      // userId/orgId from the verified state — never to data sourced from
+      // the request.
+      try {
+        const { error: upsertError } = await admin
+          .from("gmail_accounts")
+          .upsert(
+            {
+              user_id: verified.state.userId,
+              org_id: verified.state.orgId,
+              email,
+              access_token: tokens.accessToken,
+              refresh_token: tokens.refreshToken,
+              scope: tokens.scope,
+              token_type: tokens.tokenType,
+              expires_at: new Date(tokens.expiresAt).toISOString(),
+              status: "connected",
+            },
+            { onConflict: "user_id" },
+          );
+        if (upsertError) {
+          console.error(
+            "[donnit] gmail upsert failed:",
+            // PostgREST errors carry safe fields; never includes tokens.
+            JSON.stringify({
+              code: upsertError.code,
+              message: upsertError.message,
+              details: upsertError.details,
+              hint: upsertError.hint,
+            }).slice(0, 500),
+          );
+          return safeRedirect("persist_failed");
+        }
+      } catch (err) {
+        console.error(
+          "[donnit] gmail upsert threw:",
+          err instanceof Error ? err.message.slice(0, 200) : "unknown",
         );
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("[donnit] gmail oauth callback failed", msg);
-      res
-        .status(500)
-        .type("html")
-        .send(`<p>Could not finish Gmail connect. <a href="/">Return to Donnit</a> and try again.</p>`);
+        return safeRedirect("persist_failed");
+      }
+
+      return safeRedirect("connected");
+    } catch (err) {
+      // Defensive top-level catch so Vercel never sees an unhandled rejection.
+      // A FUNCTION_INVOCATION_FAILED 500 from this route is what triggered the
+      // user's bug report; the catch above each await keeps that from surfacing,
+      // and this final guard handles anything synchronous we missed.
+      console.error(
+        "[donnit] gmail callback unexpected:",
+        err instanceof Error ? err.message.slice(0, 200) : "unknown",
+      );
+      return safeRedirect("unexpected");
     }
   });
 
