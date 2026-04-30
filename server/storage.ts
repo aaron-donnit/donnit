@@ -18,81 +18,106 @@ import type {
   User,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { asc, desc, eq } from "drizzle-orm";
+import path from "node:path";
 
-const sqlite = new Database("data.db");
-sqlite.pragma("journal_mode = WAL");
+// Pick a writable location for the demo SQLite file. On Vercel only /tmp is
+// writable from a serverless function, so default there when running in that
+// environment. Outside Vercel we keep the original ./data.db so local dev and
+// the bundled `npm start` server behave exactly as before.
+function resolveDemoDbPath() {
+  if (process.env.DONNIT_DEMO_DB_PATH) return process.env.DONNIT_DEMO_DB_PATH;
+  if (process.env.VERCEL) return path.join("/tmp", "donnit-demo.db");
+  return "data.db";
+}
 
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    role TEXT NOT NULL DEFAULT 'member',
-    persona TEXT NOT NULL DEFAULT 'operator',
-    manager_id INTEGER,
-    can_assign INTEGER NOT NULL DEFAULT 0
-  );
+let cachedDb: BetterSQLite3Database | null = null;
 
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open',
-    urgency TEXT NOT NULL DEFAULT 'normal',
-    due_date TEXT,
-    estimated_minutes INTEGER NOT NULL DEFAULT 30,
-    assigned_to_id INTEGER NOT NULL,
-    assigned_by_id INTEGER NOT NULL,
-    source TEXT NOT NULL DEFAULT 'chat',
-    recurrence TEXT NOT NULL DEFAULT 'none',
-    reminder_days_before INTEGER NOT NULL DEFAULT 0,
-    accepted_at TEXT,
-    denied_at TEXT,
-    completed_at TEXT,
-    completion_notes TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
+function getDb(): BetterSQLite3Database {
+  if (cachedDb) return cachedDb;
+  const sqlite = new Database(resolveDemoDbPath());
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'member',
+      persona TEXT NOT NULL DEFAULT 'operator',
+      manager_id INTEGER,
+      can_assign INTEGER NOT NULL DEFAULT 0
+    );
 
-  CREATE TABLE IF NOT EXISTS task_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id INTEGER NOT NULL,
-    actor_id INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      urgency TEXT NOT NULL DEFAULT 'normal',
+      due_date TEXT,
+      estimated_minutes INTEGER NOT NULL DEFAULT 30,
+      assigned_to_id INTEGER NOT NULL,
+      assigned_by_id INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'chat',
+      recurrence TEXT NOT NULL DEFAULT 'none',
+      reminder_days_before INTEGER NOT NULL DEFAULT 0,
+      accepted_at TEXT,
+      denied_at TEXT,
+      completed_at TEXT,
+      completion_notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS chat_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    task_id INTEGER,
-    created_at TEXT NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      actor_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS email_suggestions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_email TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    preview TEXT NOT NULL,
-    suggested_title TEXT NOT NULL,
-    suggested_due_date TEXT,
-    urgency TEXT NOT NULL DEFAULT 'normal',
-    status TEXT NOT NULL DEFAULT 'pending',
-    assigned_to_id INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
-  );
-`);
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      task_id INTEGER,
+      created_at TEXT NOT NULL
+    );
 
-export const db = drizzle(sqlite);
+    CREATE TABLE IF NOT EXISTS email_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      preview TEXT NOT NULL,
+      suggested_title TEXT NOT NULL,
+      suggested_due_date TEXT,
+      urgency TEXT NOT NULL DEFAULT 'normal',
+      status TEXT NOT NULL DEFAULT 'pending',
+      assigned_to_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+  `);
+  cachedDb = drizzle(sqlite);
+  seedIfEmpty(cachedDb);
+  return cachedDb;
+}
+
+// Backwards-compatible export. Reading `db` triggers initialization on first
+// use, so importing this module remains a no-op on serverless cold starts.
+export const db: BetterSQLite3Database = new Proxy({} as BetterSQLite3Database, {
+  get(_t, prop, receiver) {
+    return Reflect.get(getDb() as object, prop, receiver);
+  },
+});
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function seedIfEmpty() {
+function seedIfEmpty(db: BetterSQLite3Database) {
   const existingUsers = db.select().from(users).all();
   if (existingUsers.length === 0) {
     const seededUsers: InsertUser[] = [
@@ -220,8 +245,6 @@ function seedIfEmpty() {
   }
 }
 
-seedIfEmpty();
-
 export interface IStorage {
   listUsers(): Promise<User[]>;
   getUser(id: number): Promise<User | undefined>;
@@ -240,19 +263,19 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async listUsers(): Promise<User[]> {
-    return db.select().from(users).orderBy(asc(users.id)).all();
+    return getDb().select().from(users).orderBy(asc(users.id)).all();
   }
 
   async getUser(id: number): Promise<User | undefined> {
-    return db.select().from(users).where(eq(users.id, id)).get();
+    return getDb().select().from(users).where(eq(users.id, id)).get();
   }
 
   async listTasks(): Promise<Task[]> {
-    return db.select().from(tasks).all();
+    return getDb().select().from(tasks).all();
   }
 
   async createTask(task: InsertTask): Promise<Task> {
-    const created = db.insert(tasks).values({ ...task, createdAt: nowIso() }).returning().get();
+    const created = getDb().insert(tasks).values({ ...task, createdAt: nowIso() }).returning().get();
     await this.addEvent({
       taskId: created.id,
       actorId: created.assignedById,
@@ -263,31 +286,31 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateTask(id: number, patch: Partial<Task>): Promise<Task | undefined> {
-    return db.update(tasks).set(patch).where(eq(tasks.id, id)).returning().get();
+    return getDb().update(tasks).set(patch).where(eq(tasks.id, id)).returning().get();
   }
 
   async addEvent(event: InsertTaskEvent): Promise<TaskEvent> {
-    return db.insert(taskEvents).values({ ...event, createdAt: nowIso() }).returning().get();
+    return getDb().insert(taskEvents).values({ ...event, createdAt: nowIso() }).returning().get();
   }
 
   async listEvents(): Promise<TaskEvent[]> {
-    return db.select().from(taskEvents).orderBy(desc(taskEvents.createdAt)).all();
+    return getDb().select().from(taskEvents).orderBy(desc(taskEvents.createdAt)).all();
   }
 
   async createChatMessage(message: InsertChatMessage): Promise<ChatMessage> {
-    return db.insert(chatMessages).values({ ...message, createdAt: nowIso() }).returning().get();
+    return getDb().insert(chatMessages).values({ ...message, createdAt: nowIso() }).returning().get();
   }
 
   async listChatMessages(): Promise<ChatMessage[]> {
-    return db.select().from(chatMessages).orderBy(asc(chatMessages.id)).all();
+    return getDb().select().from(chatMessages).orderBy(asc(chatMessages.id)).all();
   }
 
   async listEmailSuggestions(): Promise<EmailSuggestion[]> {
-    return db.select().from(emailSuggestions).orderBy(desc(emailSuggestions.createdAt)).all();
+    return getDb().select().from(emailSuggestions).orderBy(desc(emailSuggestions.createdAt)).all();
   }
 
   async createEmailSuggestion(suggestion: InsertEmailSuggestion): Promise<EmailSuggestion> {
-    return db
+    return getDb()
       .insert(emailSuggestions)
       .values({ ...suggestion, status: "pending", createdAt: nowIso() })
       .returning()
@@ -295,12 +318,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async approveEmailSuggestion(id: number, actorId: number): Promise<{ suggestion?: EmailSuggestion; task?: Task }> {
-    const suggestion = db.select().from(emailSuggestions).where(eq(emailSuggestions.id, id)).get();
+    const dbi = getDb();
+    const suggestion = dbi.select().from(emailSuggestions).where(eq(emailSuggestions.id, id)).get();
     if (!suggestion) {
       return {};
     }
 
-    const updatedSuggestion = db
+    const updatedSuggestion = dbi
       .update(emailSuggestions)
       .set({ status: "approved" })
       .where(eq(emailSuggestions.id, id))
@@ -332,7 +356,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async dismissEmailSuggestion(id: number): Promise<EmailSuggestion | undefined> {
-    return db
+    return getDb()
       .update(emailSuggestions)
       .set({ status: "dismissed" })
       .where(eq(emailSuggestions.id, id))

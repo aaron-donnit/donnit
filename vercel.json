@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/public",
+  "installCommand": "npm install --include=optional",
+  "framework": null,
+  "functions": {
+    "api/[...path].ts": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/((?!api/|api$|assets/|favicon\\.svg|manifest\\.webmanifest|sw\\.js|robots\\.txt|sitemap\\.xml).*)", "destination": "/index.html" }
+  ]
+}
