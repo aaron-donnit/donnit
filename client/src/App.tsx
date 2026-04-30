@@ -28,6 +28,7 @@ import { queryClient, apiRequest } from "./lib/queryClient";
 import { AuthGate, type AuthedContext } from "@/components/AuthGate";
 import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
+import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/hooks/use-toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -962,6 +963,7 @@ type GmailOAuthStatus = {
   configured: boolean;
   authenticated: boolean;
   connected: boolean;
+  requiresReconnect?: boolean;
   email?: string | null;
   lastScannedAt?: string | null;
   status?: string | null;
@@ -1038,8 +1040,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
     onError: (error: unknown) => {
       // apiRequest throws Error("<status>: <body>") on non-2xx. Parse the body
-      // so we can surface a connector-friendly message rather than raw JSON.
-      // We never display connector JSON to users.
+      // so we can surface a typed message rather than raw JSON. We never
+      // display server JSON to users — only the strings below.
       const message = error instanceof Error ? error.message : String(error);
       const sep = message.indexOf(": ");
       let parsed: { reason?: string; message?: string } = {};
@@ -1051,25 +1053,62 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         }
       }
       const reason = parsed.reason;
-      const isAuth = reason === "gmail_auth_required" || reason === "gmail_oauth_token_invalid";
-      const isRuntime = reason === "gmail_runtime_unavailable" || message.startsWith("503:");
       const oauthConfigured = oauthStatus.data?.configured ?? false;
-      const oauthConnected = oauthStatus.data?.connected ?? false;
-      const title = isAuth
-        ? "Reconnect Gmail"
-        : isRuntime
-          ? "Email scan unavailable on this server"
-          : "Email scan unavailable";
-      const description =
-        parsed.message ??
-        (isAuth
-          ? "Gmail authorization needs to be refreshed. Reconnect Gmail and try again."
-          : isRuntime
-            ? oauthConfigured && !oauthConnected
-              ? "Connect your Gmail account so Donnit can scan unread email directly."
-              : "Email scan is unavailable on this preview. Configure Gmail OAuth (GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI) on the server, or try again after redeploy."
-            : "Gmail scan is unavailable right now. Try again shortly.");
-      toast({ title, description, variant: "destructive" });
+
+      // Reason -> {title, description, action} map. The action drives the
+      // toast button so the user can connect/reconnect Gmail directly from
+      // the failure toast instead of hunting for the right control.
+      let title: string;
+      let description: string;
+      let action: { label: string; run: () => void } | null = null;
+
+      if (reason === "gmail_oauth_not_connected") {
+        title = "Connect Gmail to scan";
+        description =
+          "Donnit needs permission to read unread Gmail. Click Connect Gmail to authorize.";
+        action = { label: "Connect Gmail", run: () => connectGmail.mutate() };
+      } else if (
+        reason === "gmail_oauth_token_invalid" ||
+        reason === "gmail_auth_required"
+      ) {
+        title = "Reconnect Gmail";
+        description =
+          parsed.message ??
+          "Gmail authorization expired. Reconnect Gmail and try again.";
+        action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
+      } else if (reason === "gmail_oauth_not_configured") {
+        title = "Email scan not available";
+        description =
+          "Google OAuth is not configured on this server. Ask the operator to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
+      } else if (reason === "gmail_runtime_unavailable" || message.startsWith("503:")) {
+        if (oauthConfigured) {
+          title = "Email scan paused";
+          description =
+            "Gmail is temporarily unavailable. Try again in a moment.";
+        } else {
+          title = "Email scan not available";
+          description =
+            "Google OAuth is not configured on this server. Ask the operator to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
+        }
+      } else {
+        title = "Email scan unavailable";
+        description =
+          parsed.message ??
+          "Gmail scan failed. Try again shortly.";
+      }
+
+      toast({
+        title,
+        description,
+        variant: "destructive",
+        action: action
+          ? (
+              <ToastAction altText={action.label} onClick={action.run}>
+                {action.label}
+              </ToastAction>
+            )
+          : undefined,
+      });
       // IMPORTANT: do NOT auto-open manual import. Manual paste is not the
       // primary product behavior; Scan email must always mean "scan unread
       // Gmail itself." The user can still reach manual import from the
@@ -1129,6 +1168,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const oauthData = oauthStatus.data;
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
+  const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const actions: FunctionAction[] = [
     {
       id: "create-todo",
@@ -1155,11 +1195,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       ? [
           {
             id: "connect-gmail",
-            label: "Connect Gmail",
+            label: needsReconnect ? "Reconnect Gmail" : "Connect Gmail",
             icon: MailPlus,
+            primary: !needsReconnect ? false : true,
             onClick: () => connectGmail.mutate(),
             loading: connectGmail.isPending,
-            hint: "Authorize Donnit to scan your unread Gmail",
+            hint: needsReconnect
+              ? "Gmail authorization expired — re-authorize to resume scans"
+              : "Authorize Donnit to scan your unread Gmail",
           } satisfies FunctionAction,
         ]
       : []),
@@ -1297,7 +1340,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           <span>
             Auth: {data.integrations.auth.provider} · Email loop:{" "}
             {data.integrations.email.provider}
-            {oauthData?.connected ? ` · Gmail OAuth: ${oauthData.email ?? "connected"}` : null}
+            {oauthData?.connected
+              ? ` · Gmail OAuth: ${oauthData.email ?? "connected"}`
+              : oauthData?.requiresReconnect
+                ? " · Gmail OAuth: needs reconnect"
+                : oauthData?.configured && !oauthData?.connected
+                  ? " · Gmail OAuth: not connected"
+                  : !oauthData?.configured
+                    ? " · Gmail OAuth: not configured"
+                    : null}
           </span>
           <span className="flex items-center gap-3">
             <span>

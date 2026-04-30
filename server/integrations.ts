@@ -322,6 +322,8 @@ export type GmailScanResult =
         | "gmail_auth_required"
         | "gmail_runtime_unavailable"
         | "gmail_oauth_token_invalid"
+        | "gmail_oauth_not_connected"
+        | "gmail_oauth_not_configured"
         | "gmail_not_connected_or_tool_unavailable";
       message: string;
     };

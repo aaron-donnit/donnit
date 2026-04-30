@@ -822,57 +822,136 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/integrations/gmail/scan", async (req: Request, res: Response) => {
-    // Pick the scan strategy:
-    //   1. If the authenticated user has a stored Gmail OAuth token, use it.
-    //      Refresh first if it's expired or near expiry.
-    //   2. Otherwise fall through to the platform connector (external-tool).
+    // Strategy:
+    //   1. When first-party Gmail OAuth env is configured (production), the
+    //      authenticated user MUST have a connected Gmail account. If they
+    //      don't, return a typed `gmail_oauth_not_connected` so the UI can
+    //      prompt "Connect Gmail" instead of the vague connector message.
+    //      If their stored token won't refresh, return
+    //      `gmail_oauth_token_invalid` so the UI says "Reconnect Gmail".
+    //   2. When OAuth env is NOT configured (preview/dev), fall back to the
+    //      external-tool connector. If that runtime is unavailable, surface
+    //      `gmail_oauth_not_configured` so the operator knows to set the env.
+    const oauth = getGmailOAuthConfig();
     let oauthAccessToken: string | null = null;
-    if (req.donnitAuth) {
+    let oauthAccountStatus: "missing" | "connected" | "error" = "missing";
+
+    if (oauth.configured) {
+      if (!req.donnitAuth) {
+        res.status(401).json({
+          ok: false,
+          reason: "gmail_auth_required",
+          message: "Sign in to Donnit before scanning Gmail.",
+        });
+        return;
+      }
       try {
         const auth = req.donnitAuth;
         const store = new DonnitStore(auth.client, auth.userId);
         const account = await store.getGmailAccount();
-        if (account && account.status === "connected") {
-          const expiresMs = new Date(account.expires_at).getTime();
-          const now = Date.now();
-          if (expiresMs - now > 30_000) {
-            oauthAccessToken = account.access_token;
-          } else if (account.refresh_token) {
-            try {
-              const refreshed = await refreshGmailAccessToken(account.refresh_token);
-              await store.patchGmailAccount({
-                access_token: refreshed.accessToken,
-                expires_at: new Date(refreshed.expiresAt).toISOString(),
-                scope: refreshed.scope || account.scope,
-                token_type: refreshed.tokenType || account.token_type,
-              });
-              oauthAccessToken = refreshed.accessToken;
-            } catch (refreshErr) {
-              console.error("[donnit] gmail oauth refresh failed", refreshErr);
-              await store.patchGmailAccount({ status: "error" });
-              oauthAccessToken = null;
-            }
+        if (!account) {
+          res.status(412).json({
+            ok: false,
+            reason: "gmail_oauth_not_connected",
+            message:
+              "Connect your Gmail account so Donnit can scan unread email directly.",
+          });
+          return;
+        }
+        if (account.status === "error") {
+          oauthAccountStatus = "error";
+          res.status(401).json({
+            ok: false,
+            reason: "gmail_oauth_token_invalid",
+            message:
+              "Gmail authorization expired. Reconnect Gmail and try again.",
+          });
+          return;
+        }
+        oauthAccountStatus = "connected";
+        const expiresMs = new Date(account.expires_at).getTime();
+        const now = Date.now();
+        if (expiresMs - now > 30_000) {
+          oauthAccessToken = account.access_token;
+        } else if (account.refresh_token) {
+          try {
+            const refreshed = await refreshGmailAccessToken(account.refresh_token);
+            await store.patchGmailAccount({
+              access_token: refreshed.accessToken,
+              expires_at: new Date(refreshed.expiresAt).toISOString(),
+              scope: refreshed.scope || account.scope,
+              token_type: refreshed.tokenType || account.token_type,
+            });
+            oauthAccessToken = refreshed.accessToken;
+          } catch (refreshErr) {
+            // Never log token bodies — only the safe summary the helper threw.
+            console.error(
+              "[donnit] gmail oauth refresh failed:",
+              refreshErr instanceof Error ? refreshErr.message : "unknown",
+            );
+            await store.patchGmailAccount({ status: "error" });
+            res.status(401).json({
+              ok: false,
+              reason: "gmail_oauth_token_invalid",
+              message: "Gmail authorization expired. Reconnect Gmail and try again.",
+            });
+            return;
           }
+        } else {
+          // Token expired and we have no refresh_token — force reconnect.
+          await store.patchGmailAccount({ status: "error" });
+          res.status(401).json({
+            ok: false,
+            reason: "gmail_oauth_token_invalid",
+            message: "Gmail authorization expired. Reconnect Gmail and try again.",
+          });
+          return;
         }
       } catch (lookupErr) {
-        // Don't fail the scan if the lookup throws — fall back to connector.
-        console.error("[donnit] gmail account lookup failed", lookupErr);
+        console.error(
+          "[donnit] gmail account lookup failed:",
+          lookupErr instanceof Error ? lookupErr.message : "unknown",
+        );
+        res.status(500).json({
+          ok: false,
+          reason: "gmail_not_connected_or_tool_unavailable",
+          message: "Could not load your Gmail connection. Try again shortly.",
+        });
+        return;
       }
     }
 
     const result = await scanGmailForTaskCandidates({ oauthAccessToken });
     if (!result.ok) {
+      // If OAuth path failed mid-scan with 401, mark the account as needing
+      // reconnect so the next status fetch reflects reality.
+      if (oauthAccountStatus === "connected" && result.reason === "gmail_oauth_token_invalid" && req.donnitAuth) {
+        try {
+          const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
+          await store.patchGmailAccount({ status: "error" });
+        } catch {
+          // best-effort
+        }
+      }
+      // When the connector path returns runtime_unavailable but OAuth env is
+      // missing, rebrand as `gmail_oauth_not_configured` so the message tells
+      // the operator (not the user) what to fix.
+      let reason: string = result.reason;
+      let message = result.message;
+      if (!oauth.configured && result.reason === "gmail_runtime_unavailable") {
+        reason = "gmail_oauth_not_configured";
+        message =
+          "Google OAuth env is not configured on this server. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
+      }
       const status =
-        result.reason === "gmail_auth_required" || result.reason === "gmail_oauth_token_invalid"
+        reason === "gmail_auth_required" || reason === "gmail_oauth_token_invalid"
           ? 401
-          : result.reason === "gmail_runtime_unavailable"
+          : reason === "gmail_runtime_unavailable" || reason === "gmail_oauth_not_configured"
             ? 503
-            : 424;
-      res.status(status).json({
-        ok: false,
-        reason: result.reason,
-        message: result.message,
-      });
+            : reason === "gmail_oauth_not_connected"
+              ? 412
+              : 424;
+      res.status(status).json({ ok: false, reason, message });
       return;
     }
     const candidates = result.candidates;
@@ -994,16 +1073,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/integrations/gmail/oauth/status", async (req: Request, res: Response) => {
     const cfg = getGmailOAuthConfig();
     if (!req.donnitAuth) {
-      res.json({ configured: cfg.configured, connected: false, authenticated: false });
+      res.json({
+        configured: cfg.configured,
+        connected: false,
+        authenticated: false,
+        requiresReconnect: false,
+      });
       return;
     }
     try {
       const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
       const account = await store.getGmailAccount();
+      const connected = Boolean(account && account.status === "connected");
+      const requiresReconnect = Boolean(account && account.status === "error");
       res.json({
         configured: cfg.configured,
         authenticated: true,
-        connected: Boolean(account && account.status === "connected"),
+        connected,
+        requiresReconnect,
         email: account?.email ?? null,
         lastScannedAt: account?.last_scanned_at ?? null,
         status: account?.status ?? null,
