@@ -6,12 +6,14 @@
   "installCommand": "npm install --include=optional",
   "framework": null,
   "functions": {
-    "api/[...path].ts": {
+    "api/index.ts": {
       "memory": 1024,
       "maxDuration": 30
     }
   },
   "rewrites": [
+    { "source": "/api", "destination": "/api/index" },
+    { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/|api$|assets/|favicon\\.svg|manifest\\.webmanifest|sw\\.js|robots\\.txt|sitemap\\.xml).*)", "destination": "/index.html" }
   ]
 }
