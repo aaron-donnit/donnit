@@ -7,10 +7,15 @@ import {
 } from "@shared/schema";
 import type { InsertTask, Task, User } from "@shared/schema";
 import {
+  buildGmailAuthUrl,
   buildManualEmailCandidate,
+  exchangeGmailAuthCode,
+  getGmailOAuthConfig,
   getIntegrationStatus,
+  refreshGmailAccessToken,
   scanGmailForTaskCandidates,
 } from "./integrations";
+import crypto from "node:crypto";
 import { z } from "zod";
 import { storage } from "./storage";
 import { attachSupabaseAuth, requireDonnitAuth } from "./auth-supabase";
@@ -27,6 +32,15 @@ const DEMO_USER_ID = 1;
 // human-readable message and a structured payload that is safe to log/return:
 // it intentionally only surfaces fields PostgREST already exposes
 // (message/code/details/hint) and never includes secrets or full stack traces.
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function serializeSupabaseError(error: unknown): { message: string; code?: string; details?: string; hint?: string } {
   if (error instanceof Error) {
     const anyErr = error as Error & { code?: unknown; details?: unknown; hint?: unknown };
@@ -315,6 +329,9 @@ async function buildAuthenticatedBootstrap(req: Request) {
       fromEmail: s.from_email,
       subject: s.subject,
       preview: s.preview,
+      body: s.body ?? "",
+      receivedAt: s.received_at,
+      actionItems: Array.isArray(s.action_items) ? s.action_items : [],
       suggestedTitle: s.suggested_title,
       suggestedDueDate: s.suggested_due_date,
       urgency: s.urgency,
@@ -805,10 +822,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/integrations/gmail/scan", async (req: Request, res: Response) => {
-    const result = await scanGmailForTaskCandidates();
+    // Pick the scan strategy:
+    //   1. If the authenticated user has a stored Gmail OAuth token, use it.
+    //      Refresh first if it's expired or near expiry.
+    //   2. Otherwise fall through to the platform connector (external-tool).
+    let oauthAccessToken: string | null = null;
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const account = await store.getGmailAccount();
+        if (account && account.status === "connected") {
+          const expiresMs = new Date(account.expires_at).getTime();
+          const now = Date.now();
+          if (expiresMs - now > 30_000) {
+            oauthAccessToken = account.access_token;
+          } else if (account.refresh_token) {
+            try {
+              const refreshed = await refreshGmailAccessToken(account.refresh_token);
+              await store.patchGmailAccount({
+                access_token: refreshed.accessToken,
+                expires_at: new Date(refreshed.expiresAt).toISOString(),
+                scope: refreshed.scope || account.scope,
+                token_type: refreshed.tokenType || account.token_type,
+              });
+              oauthAccessToken = refreshed.accessToken;
+            } catch (refreshErr) {
+              console.error("[donnit] gmail oauth refresh failed", refreshErr);
+              await store.patchGmailAccount({ status: "error" });
+              oauthAccessToken = null;
+            }
+          }
+        }
+      } catch (lookupErr) {
+        // Don't fail the scan if the lookup throws — fall back to connector.
+        console.error("[donnit] gmail account lookup failed", lookupErr);
+      }
+    }
+
+    const result = await scanGmailForTaskCandidates({ oauthAccessToken });
     if (!result.ok) {
       const status =
-        result.reason === "gmail_auth_required"
+        result.reason === "gmail_auth_required" || result.reason === "gmail_oauth_token_invalid"
           ? 401
           : result.reason === "gmail_runtime_unavailable"
             ? 503
@@ -831,11 +886,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(409).json({ message: "Workspace not bootstrapped." });
           return;
         }
+        // Mark scan completion on the OAuth account (best-effort).
+        if (oauthAccessToken) {
+          try {
+            await store.patchGmailAccount({ last_scanned_at: new Date().toISOString() });
+          } catch {
+            // ignore
+          }
+        }
         const existing = await store.listEmailSuggestions(orgId);
-        const existingKeys = new Set(existing.map((item) => `${item.from_email}|${item.subject}`));
+        const existingKeys = new Set(
+          existing.map((item) => item.gmail_message_id ?? `${item.from_email}|${item.subject}`),
+        );
         const created = [];
         for (const candidate of candidates) {
-          const key = `${candidate.fromEmail}|${candidate.subject}`;
+          const key = candidate.gmailMessageId ?? `${candidate.fromEmail}|${candidate.subject}`;
           if (existingKeys.has(key)) continue;
           existingKeys.add(key);
           const suggestion = await store.createEmailSuggestion(orgId, {
@@ -843,6 +908,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             from_email: candidate.fromEmail,
             subject: candidate.subject,
             preview: candidate.preview,
+            body: candidate.body,
+            received_at: candidate.receivedAt,
+            action_items: candidate.actionItems,
             suggested_title: candidate.suggestedTitle,
             suggested_due_date: candidate.suggestedDueDate,
             urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
@@ -850,7 +918,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
           created.push(suggestion);
         }
-        res.json({ ok: true, scannedCandidates: candidates.length, createdSuggestions: created.length, suggestions: created });
+        res.json({
+          ok: true,
+          source: result.source,
+          scannedCandidates: candidates.length,
+          createdSuggestions: created.length,
+          suggestions: created,
+        });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -876,7 +950,190 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       created.push(suggestion);
     }
-    res.json({ ok: true, scannedCandidates: candidates.length, createdSuggestions: created.length, suggestions: created });
+    res.json({
+      ok: true,
+      source: result.source,
+      scannedCandidates: candidates.length,
+      createdSuggestions: created.length,
+      suggestions: created,
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // Gmail OAuth (first-party) — production scaffolding
+  // ------------------------------------------------------------------
+  // The hosted Perplexity preview cannot always reach the platform
+  // connector's runtime token. To make automated unread Gmail scanning the
+  // primary product behavior in production, Donnit also supports first-party
+  // Google OAuth: the operator configures GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI
+  // and each user connects their Gmail once. Tokens are server-only.
+  //
+  // Endpoints:
+  //   GET  /api/integrations/gmail/oauth/status     — is OAuth configured? is the user connected?
+  //   POST /api/integrations/gmail/oauth/connect    — returns Google consent URL (state in body)
+  //   GET  /api/integrations/gmail/oauth/callback   — Google redirects here with ?code&state
+  //   POST /api/integrations/gmail/oauth/disconnect — revoke locally (clears token row)
+  //
+  // The callback is GET-only because Google redirects the browser to it; it
+  // requires the user be signed in via Supabase. State is verified to be a
+  // pending challenge that the user just generated. We keep the in-flight
+  // state map process-local because it is short-lived (5 min) and only
+  // matters for the duration of the consent round-trip.
+
+  type OAuthStateEntry = { userId: string; orgId: string; createdAt: number };
+  const oauthStates = new Map<string, OAuthStateEntry>();
+  const OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
+
+  function gcOAuthStates() {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    oauthStates.forEach((v, k) => {
+      if (v.createdAt < cutoff) oauthStates.delete(k);
+    });
+  }
+
+  app.get("/api/integrations/gmail/oauth/status", async (req: Request, res: Response) => {
+    const cfg = getGmailOAuthConfig();
+    if (!req.donnitAuth) {
+      res.json({ configured: cfg.configured, connected: false, authenticated: false });
+      return;
+    }
+    try {
+      const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
+      const account = await store.getGmailAccount();
+      res.json({
+        configured: cfg.configured,
+        authenticated: true,
+        connected: Boolean(account && account.status === "connected"),
+        email: account?.email ?? null,
+        lastScannedAt: account?.last_scanned_at ?? null,
+        status: account?.status ?? null,
+      });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/integrations/gmail/oauth/connect", requireDonnitAuth, async (req: Request, res: Response) => {
+    const cfg = getGmailOAuthConfig();
+    if (!cfg.configured) {
+      res.status(412).json({
+        ok: false,
+        reason: "oauth_not_configured",
+        message:
+          "Gmail OAuth is not configured on this server. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.",
+      });
+      return;
+    }
+    const auth = req.donnitAuth!;
+    try {
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      gcOAuthStates();
+      const state = crypto.randomBytes(24).toString("base64url");
+      oauthStates.set(state, { userId: auth.userId, orgId, createdAt: Date.now() });
+      const url = buildGmailAuthUrl(state);
+      res.json({ ok: true, url });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/integrations/gmail/oauth/callback", async (req: Request, res: Response) => {
+    const code = typeof req.query.code === "string" ? req.query.code : null;
+    const state = typeof req.query.state === "string" ? req.query.state : null;
+    const errorParam = typeof req.query.error === "string" ? req.query.error : null;
+    if (errorParam) {
+      res
+        .status(400)
+        .type("html")
+        .send(
+          `<!doctype html><meta charset="utf-8"><title>Gmail connect</title>` +
+            `<p>Gmail did not authorize the connection: ${escapeHtml(errorParam)}.</p>` +
+            `<p><a href="/">Return to Donnit</a></p>`,
+        );
+      return;
+    }
+    if (!code || !state) {
+      res.status(400).type("html").send(`<p>Missing code or state.</p>`);
+      return;
+    }
+    gcOAuthStates();
+    const entry = oauthStates.get(state);
+    if (!entry) {
+      res
+        .status(400)
+        .type("html")
+        .send(
+          `<p>This Gmail connect link has expired. <a href="/">Return to Donnit</a> and try again.</p>`,
+        );
+      return;
+    }
+    oauthStates.delete(state);
+    if (!req.donnitAuth || req.donnitAuth.userId !== entry.userId) {
+      res
+        .status(401)
+        .type("html")
+        .send(
+          `<p>You must be signed in to the same Donnit account that started the Gmail connection. <a href="/">Sign in and try again</a>.</p>`,
+        );
+      return;
+    }
+    try {
+      const tokens = await exchangeGmailAuthCode(code);
+      const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
+      // Best-effort fetch of the connected Gmail address (no PII written if it fails).
+      let email = req.donnitAuth.email ?? "";
+      try {
+        const profileRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+          headers: { authorization: `Bearer ${tokens.accessToken}` },
+        });
+        if (profileRes.ok) {
+          const profile = (await profileRes.json()) as { emailAddress?: string };
+          if (profile.emailAddress) email = profile.emailAddress;
+        }
+      } catch {
+        // ignore — keep auth email
+      }
+      await store.upsertGmailAccount({
+        org_id: entry.orgId,
+        email,
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+        scope: tokens.scope,
+        token_type: tokens.tokenType,
+        expires_at: new Date(tokens.expiresAt).toISOString(),
+      });
+      res
+        .type("html")
+        .send(
+          `<!doctype html><meta charset="utf-8"><title>Gmail connected</title>` +
+            `<p>Gmail connected for ${escapeHtml(email)}. You can close this window and return to Donnit.</p>` +
+            `<script>window.close && window.close();</script>` +
+            `<p><a href="/">Return to Donnit</a></p>`,
+        );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[donnit] gmail oauth callback failed", msg);
+      res
+        .status(500)
+        .type("html")
+        .send(`<p>Could not finish Gmail connect. <a href="/">Return to Donnit</a> and try again.</p>`);
+    }
+  });
+
+  app.post("/api/integrations/gmail/oauth/disconnect", requireDonnitAuth, async (req: Request, res: Response) => {
+    const auth = req.donnitAuth!;
+    try {
+      const store = new DonnitStore(auth.client, auth.userId);
+      await store.deleteGmailAccount();
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   // Manual email import — used as a fallback when the hosted preview cannot
@@ -909,6 +1166,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
+          body: candidate.body,
+          received_at: candidate.receivedAt,
+          action_items: candidate.actionItems,
           suggested_title: candidate.suggestedTitle,
           suggested_due_date: candidate.suggestedDueDate,
           urgency: candidate.urgency as "low" | "normal" | "high" | "critical",

@@ -7,7 +7,18 @@ const execFileAsync = promisify(execFile);
 export const APPROVED_CHANNEL_ORDER = ["in_app", "email", "push", "sms"] as const;
 export const APPROVED_REMINDER_ORDER = ["due_date", "urgency", "assignment_acceptance", "annual_advance"] as const;
 
+// Hosted preview servers (Perplexity Computer) sometimes cannot reach the
+// `external-tool` runtime credential, so unread-Gmail scans fail with a
+// bare UNAUTHORIZED. The product MUST scan unread Gmail itself — manual
+// paste is never the primary behavior. To make production Gmail scanning
+// possible without depending on the hosted preview's runtime token, we also
+// expose a first-party Gmail OAuth path the operator can configure with
+// their own Google Cloud credentials. See docs/GMAIL_OAUTH.md.
+export const GMAIL_OAUTH_SCOPE =
+  "https://www.googleapis.com/auth/gmail.readonly";
+
 export function getIntegrationStatus() {
+  const oauth = getGmailOAuthConfig();
   return {
     auth: {
       provider: "supabase",
@@ -20,6 +31,11 @@ export function getIntegrationStatus() {
       sourceId: process.env.GMAIL_CONNECTOR_SOURCE_ID ?? "gcal",
       status: process.env.GMAIL_CONNECTED === "true" ? "connected" : "connected_or_requires_runtime_auth",
       mode: "approval_before_task_creation",
+      oauth: {
+        configured: oauth.configured,
+        clientIdPresent: Boolean(process.env.GOOGLE_CLIENT_ID),
+        redirectUriPresent: Boolean(process.env.GOOGLE_REDIRECT_URI),
+      },
     },
     reminders: {
       channelOrder: process.env.REMINDER_CHANNEL_ORDER?.split(",") ?? [...APPROVED_CHANNEL_ORDER],
@@ -31,6 +47,124 @@ export function getIntegrationStatus() {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Gmail OAuth (first-party) — production scaffolding
+// ---------------------------------------------------------------------------
+
+export type GmailOAuthConfig = {
+  configured: boolean;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+};
+
+export function getGmailOAuthConfig(): GmailOAuthConfig {
+  const clientId = process.env.GOOGLE_CLIENT_ID ?? "";
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "";
+  return {
+    configured: Boolean(clientId && clientSecret && redirectUri),
+    clientId,
+    clientSecret,
+    redirectUri,
+  };
+}
+
+export function buildGmailAuthUrl(state: string): string {
+  const cfg = getGmailOAuthConfig();
+  const params = new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    response_type: "code",
+    scope: GMAIL_OAUTH_SCOPE,
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true",
+    state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+export type GmailTokenSet = {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number; // epoch ms
+  scope: string;
+  tokenType: string;
+};
+
+export async function exchangeGmailAuthCode(code: string): Promise<GmailTokenSet> {
+  const cfg = getGmailOAuthConfig();
+  if (!cfg.configured) throw new Error("Gmail OAuth is not configured on this server.");
+  const body = new URLSearchParams({
+    code,
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret,
+    redirect_uri: cfg.redirectUri,
+    grant_type: "authorization_code",
+  });
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Google token exchange failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+    scope: string;
+    token_type: string;
+  };
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token ?? null,
+    expiresAt: Date.now() + (json.expires_in - 30) * 1000,
+    scope: json.scope,
+    tokenType: json.token_type,
+  };
+}
+
+export async function refreshGmailAccessToken(refreshToken: string): Promise<GmailTokenSet> {
+  const cfg = getGmailOAuthConfig();
+  if (!cfg.configured) throw new Error("Gmail OAuth is not configured on this server.");
+  const body = new URLSearchParams({
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret,
+    refresh_token: refreshToken,
+    grant_type: "refresh_token",
+  });
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Google token refresh failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+    scope?: string;
+    token_type: string;
+  };
+  return {
+    accessToken: json.access_token,
+    refreshToken: null,
+    expiresAt: Date.now() + (json.expires_in - 30) * 1000,
+    scope: json.scope ?? "",
+    tokenType: json.token_type,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Email content shape — used by both the connector and OAuth scan paths.
+// ---------------------------------------------------------------------------
 
 type GmailEmail = {
   email_id?: string;
@@ -70,6 +204,55 @@ function inferDueDate(email: GmailEmail) {
   return null;
 }
 
+// Sanitize an email body for display/storage: strip control characters,
+// collapse whitespace, drop quoted reply chains (lines starting with "On … wrote:"
+// or ">"), and clamp to a safe length. We never persist the raw MIME source.
+export function sanitizeEmailBody(raw: string): string {
+  if (!raw) return "";
+  // Strip control chars except newline/tab.
+  let text = raw.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "");
+  // Cut at typical "On <date> <name> wrote:" reply boundaries.
+  text = text.replace(/\n+On\s+[^\n]{0,80}wrote:[\s\S]*$/i, "");
+  // Drop quoted lines (>). Keep first chunk only.
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (/^\s*>/.test(line)) continue;
+    if (/^--\s*$/.test(line)) break; // signature delimiter
+    kept.push(line);
+  }
+  text = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (text.length > 4000) text = text.slice(0, 4000);
+  return text;
+}
+
+// Heuristic action-item extraction. We deliberately keep this dependency-free
+// and conservative — it's a hint for the user, not authoritative parsing.
+// Rules: pick lines containing imperative cues ("please review", "can you",
+// "needs", "deadline", numbered/bulleted lists) up to 5 items, each ≤ 200 chars.
+export function extractActionItems(body: string, subject: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const cues =
+    /\b(please|kindly|need(?:s|ed)?|require[ds]?|action required|review|approve|sign|complete|finish|send|reply|respond|deadline|due\b|by\s+(?:tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d))/i;
+  const lines = (subject + "\n" + body).split(/\r?\n|(?<=[.!?])\s+/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.length < 6 || line.length > 240) continue;
+    if (!cues.test(line)) {
+      // Keep numbered or bulleted list items even without a cue word.
+      if (!/^(?:[-*•]|\d+[.)])\s+\S/.test(line)) continue;
+    }
+    const cleaned = line.replace(/^(?:[-*•]|\d+[.)])\s+/, "").slice(0, 200).trim();
+    const key = cleaned.toLowerCase();
+    if (cleaned.length < 6 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 function extractEmails(raw: unknown): GmailEmail[] {
   if (!raw || typeof raw !== "object") return [];
   const container = raw as { email_results?: { emails?: GmailEmail[] }; emails?: GmailEmail[] };
@@ -83,11 +266,6 @@ type ToolFailure = {
   authUrl?: string;
 };
 
-// Parse the JSON envelope that the external-tool CLI prints to stderr on
-// failure. The CLI emits e.g. {"error": "...", "status": 401} or, for
-// connector auth issues, {"error": "auth_required", "auth_url": "..."}.
-// Inner `error` strings are sometimes themselves JSON like
-// {"detail":{"error_code":"UNAUTHORIZED"}}, so we try to peel one layer.
 function parseToolFailure(error: unknown): ToolFailure {
   const out: ToolFailure = {};
   if (!error || typeof error !== "object") return out;
@@ -98,7 +276,6 @@ function parseToolFailure(error: unknown): ToolFailure {
       ? err.message
       : "";
   if (!text) return out;
-  // Find the first JSON object in the text
   const start = text.indexOf("{");
   if (start === -1) return out;
   const slice = text.slice(start).trim();
@@ -128,7 +305,6 @@ function parseToolFailure(error: unknown): ToolFailure {
           }
         }
       } catch {
-        // inner wasn't JSON; treat error string as a plain message
         if (!out.message) out.message = o.error;
       }
     }
@@ -136,32 +312,35 @@ function parseToolFailure(error: unknown): ToolFailure {
   return out;
 }
 
+export type EmailScanCandidate = ReturnType<typeof toCandidate>;
+
 export type GmailScanResult =
-  | { ok: true; candidates: ReturnType<typeof toCandidate>[] }
+  | { ok: true; source: "connector" | "oauth"; candidates: EmailScanCandidate[] }
   | {
       ok: false;
       reason:
         | "gmail_auth_required"
         | "gmail_runtime_unavailable"
+        | "gmail_oauth_token_invalid"
         | "gmail_not_connected_or_tool_unavailable";
       message: string;
     };
 
-// When the Gmail connector is configured at the platform layer but the
-// running app server cannot reach the external-tool runtime (e.g. the
-// hosted preview process does not have a usable programmatic credential),
-// the CLI fails with UNAUTHORIZED before ever reaching Gmail. We treat
-// that case as a runtime-token problem, not a connector reauthorize one,
-// so the user is not told to reconnect Gmail.
 const RUNTIME_UNAVAILABLE_MESSAGE =
-  "Email scan is connected in Computer, but this preview server cannot access the Gmail runtime token. Try again after redeploy or use Manual email import for now.";
+  "Email scan is connected, but this server cannot reach the Gmail runtime token. " +
+  "If you are running in production, configure first-party Gmail OAuth (GOOGLE_CLIENT_ID, " +
+  "GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI) so Donnit can scan unread Gmail directly.";
 
 function toCandidate(email: GmailEmail) {
+  const sanitizedBody = sanitizeEmailBody(email.body ?? email.snippet ?? "");
+  const actionItems = extractActionItems(sanitizedBody, email.subject ?? "");
   return {
     gmailMessageId: email.email_id ?? null,
     fromEmail: email.from_ ?? "Unknown sender",
     subject: email.subject ?? "No subject",
-    preview: email.snippet ?? "",
+    preview: (email.snippet ?? sanitizedBody.slice(0, 240) ?? "").slice(0, 240),
+    body: sanitizedBody,
+    actionItems,
     suggestedTitle: inferTitle(email),
     suggestedDueDate: inferDueDate(email),
     urgency: inferUrgency(email),
@@ -170,22 +349,15 @@ function toCandidate(email: GmailEmail) {
   };
 }
 
-// Build a task candidate from a manually pasted email subject/body. Used by
-// the UI fallback when the hosted preview cannot reach the external-tool
-// runtime. The synthetic source id keeps these rows trivially distinguishable
-// from real Gmail-derived suggestions and namespaces them so dedupe still
-// works when a user later re-runs the live scan.
 export function buildManualEmailCandidate(input: {
   subject: string;
   body: string;
   fromEmail?: string;
 }) {
   const subject = input.subject.trim().slice(0, 240) || "Pasted email";
-  const body = input.body.trim().slice(0, 4000);
+  const body = sanitizeEmailBody(input.body.trim().slice(0, 4000));
   const from = (input.fromEmail ?? "manual import").trim().slice(0, 240) || "manual import";
   const synthetic = `manual:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  // Strip the body to a short preview — never persist full pasted content
-  // beyond what the existing preview field is sized for.
   const preview = body.slice(0, 240);
   const email: GmailEmail = {
     email_id: synthetic,
@@ -197,19 +369,32 @@ export function buildManualEmailCandidate(input: {
   return toCandidate(email);
 }
 
-export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
+// ---------------------------------------------------------------------------
+// Path 1: external-tool connector scan (Perplexity Computer preview)
+// ---------------------------------------------------------------------------
+
+// Build queries that focus on UNREAD inbox emails. The connector accepts an
+// array of search queries; we ask for unread inbox first, then narrow on
+// action-oriented unread variants. Filtering is done in-process rather than
+// trusting the connector to dedupe.
+function buildUnreadQueries(): string[] {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const after = sevenDaysAgo.toISOString().slice(0, 10);
+  return [
+    `in:inbox is:unread after:${after}`,
+    `is:unread newer_than:7d`,
+    `is:unread (subject:ticket OR subject:urgent OR subject:"action required" OR subject:"please review")`,
+    `is:unread (urgent OR "action required" OR "please review" OR deadline)`,
+  ];
+}
+
+export async function scanGmailViaConnector(): Promise<GmailScanResult> {
   const sourceId = process.env.GMAIL_CONNECTOR_SOURCE_ID ?? "gcal";
   const payload = JSON.stringify({
     source_id: sourceId,
     tool_name: "search_email",
-    arguments: {
-      queries: [
-        "subject:ticket after:2026-04-22T00:00:00-04:00",
-        "urgent after:2026-04-22T00:00:00-04:00",
-        "\"please review\" after:2026-04-22T00:00:00-04:00",
-        "\"action required\" after:2026-04-22T00:00:00-04:00",
-      ],
-    },
+    arguments: { queries: buildUnreadQueries() },
   });
 
   let stdout: string;
@@ -221,11 +406,6 @@ export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
     stdout = result.stdout;
   } catch (error) {
     const failure = parseToolFailure(error);
-    // A real connector-side reauthorize is signalled by `error: auth_required`
-    // (often with an `auth_url`). A bare UNAUTHORIZED from the CLI without an
-    // auth_url means this app process cannot reach the external-tool runtime
-    // token at all — telling the user to reconnect Gmail in that case is a
-    // lie. Treat it as a runtime-token problem instead.
     if (failure.errorCode === "auth_required" || failure.authUrl) {
       return {
         ok: false,
@@ -256,12 +436,10 @@ export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
     return {
       ok: false,
       reason: "gmail_not_connected_or_tool_unavailable",
-      message:
-        "Gmail scan returned an unexpected response. Try again in a moment.",
+      message: "Gmail scan returned an unexpected response. Try again in a moment.",
     };
   }
 
-  // Some connectors return an authenticated:false envelope on success path
   if (raw && typeof raw === "object" && (raw as { authenticated?: unknown }).authenticated === false) {
     return {
       ok: false,
@@ -277,10 +455,204 @@ export async function scanGmailForTaskCandidates(): Promise<GmailScanResult> {
       const key = email.email_id ?? `${email.from_}-${email.subject}`;
       if (seen.has(key)) return false;
       seen.add(key);
-      const text = `${email.subject ?? ""} ${email.snippet ?? ""} ${email.body ?? ""}`.toLowerCase();
-      return /(ticket|urgent|asap|please review|action required|deadline|reset|login|contract|renewal)/.test(text);
+      return true;
     })
-    .slice(0, 5)
+    .slice(0, 10)
     .map(toCandidate);
-  return { ok: true, candidates };
+  return { ok: true, source: "connector", candidates };
+}
+
+// ---------------------------------------------------------------------------
+// Path 2: first-party Gmail OAuth scan (production)
+// ---------------------------------------------------------------------------
+
+function decodeBase64Url(encoded: string): string {
+  if (!encoded) return "";
+  const padded = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4));
+  try {
+    return Buffer.from(padded + pad, "base64").toString("utf-8");
+  } catch {
+    return "";
+  }
+}
+
+type GmailApiHeader = { name?: string; value?: string };
+type GmailApiPart = {
+  partId?: string;
+  mimeType?: string;
+  filename?: string;
+  headers?: GmailApiHeader[];
+  body?: { size?: number; data?: string };
+  parts?: GmailApiPart[];
+};
+type GmailApiMessage = {
+  id?: string;
+  threadId?: string;
+  snippet?: string;
+  internalDate?: string;
+  payload?: GmailApiPart;
+};
+
+function pickHeader(headers: GmailApiHeader[] | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  const lower = name.toLowerCase();
+  for (const h of headers) {
+    if ((h.name ?? "").toLowerCase() === lower) return h.value;
+  }
+  return undefined;
+}
+
+// Walk the MIME tree and prefer text/plain. Fall back to the first text part.
+function extractMessageBody(payload: GmailApiPart | undefined): string {
+  if (!payload) return "";
+  let plain = "";
+  let fallback = "";
+  const walk = (part: GmailApiPart) => {
+    const mime = (part.mimeType ?? "").toLowerCase();
+    const data = part.body?.data;
+    if (data) {
+      const decoded = decodeBase64Url(data);
+      if (mime === "text/plain" && !plain) plain = decoded;
+      else if (!fallback && (mime.startsWith("text/") || mime === "")) fallback = decoded;
+    }
+    if (part.parts) {
+      for (const child of part.parts) walk(child);
+    }
+  };
+  walk(payload);
+  // Strip HTML tags from fallback if used.
+  if (!plain && fallback) {
+    fallback = fallback.replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+  return plain || fallback;
+}
+
+async function gmailApiFetch<T>(
+  accessToken: string,
+  path: string,
+  init?: { method?: string; query?: Record<string, string> },
+): Promise<T> {
+  const url = new URL(`https://gmail.googleapis.com${path}`);
+  if (init?.query) {
+    for (const [k, v] of Object.entries(init.query)) url.searchParams.set(k, v);
+  }
+  const res = await fetch(url.toString(), {
+    method: init?.method ?? "GET",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/json",
+    },
+  });
+  if (res.status === 401) {
+    throw Object.assign(new Error("Gmail OAuth token rejected (401)."), { gmailStatus: 401 });
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Gmail API ${path} failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as T;
+}
+
+type GmailListResponse = {
+  messages?: { id: string; threadId: string }[];
+  resultSizeEstimate?: number;
+};
+
+export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanResult> {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const after = sevenDaysAgo.toISOString().slice(0, 10);
+  const queries = [
+    `in:inbox is:unread newer_than:7d`,
+    `is:unread (urgent OR "action required" OR "please review" OR deadline) after:${after}`,
+  ];
+
+  const messageIds = new Set<string>();
+  for (const q of queries) {
+    try {
+      const list = await gmailApiFetch<GmailListResponse>(accessToken, "/gmail/v1/users/me/messages", {
+        query: { q, maxResults: "20" },
+      });
+      for (const m of list.messages ?? []) messageIds.add(m.id);
+    } catch (error) {
+      const status = (error as { gmailStatus?: number }).gmailStatus;
+      if (status === 401) {
+        return {
+          ok: false,
+          reason: "gmail_oauth_token_invalid",
+          message: "Gmail OAuth token rejected. Reconnect Gmail and try again.",
+        };
+      }
+      return {
+        ok: false,
+        reason: "gmail_not_connected_or_tool_unavailable",
+        message: "Gmail API call failed. Try again shortly.",
+      };
+    }
+    if (messageIds.size >= 25) break;
+  }
+
+  if (messageIds.size === 0) {
+    return { ok: true, source: "oauth", candidates: [] };
+  }
+
+  const candidates: EmailScanCandidate[] = [];
+  for (const id of Array.from(messageIds).slice(0, 15)) {
+    let msg: GmailApiMessage;
+    try {
+      msg = await gmailApiFetch<GmailApiMessage>(accessToken, `/gmail/v1/users/me/messages/${id}`, {
+        query: { format: "full" },
+      });
+    } catch (error) {
+      const status = (error as { gmailStatus?: number }).gmailStatus;
+      if (status === 401) {
+        return {
+          ok: false,
+          reason: "gmail_oauth_token_invalid",
+          message: "Gmail OAuth token rejected during fetch. Reconnect Gmail and try again.",
+        };
+      }
+      continue;
+    }
+    const headers = msg.payload?.headers;
+    const subject = pickHeader(headers, "Subject") ?? "(no subject)";
+    const from = pickHeader(headers, "From") ?? "Unknown sender";
+    const dateHeader = pickHeader(headers, "Date");
+    const internalIso = msg.internalDate
+      ? new Date(Number(msg.internalDate)).toISOString()
+      : null;
+    const body = extractMessageBody(msg.payload);
+    candidates.push(
+      toCandidate({
+        email_id: msg.id,
+        from_: from,
+        subject,
+        snippet: msg.snippet ?? "",
+        body,
+        date: dateHeader ?? internalIso ?? undefined,
+      }),
+    );
+  }
+  return { ok: true, source: "oauth", candidates };
+}
+
+// Public entry point. Prefer first-party OAuth when an access token is
+// supplied (server has already loaded/refreshed it from gmail_accounts).
+// Fall back to the connector path otherwise.
+export async function scanGmailForTaskCandidates(opts?: {
+  oauthAccessToken?: string | null;
+}): Promise<GmailScanResult> {
+  if (opts?.oauthAccessToken) {
+    return scanGmailViaOAuth(opts.oauthAccessToken);
+  }
+  return scanGmailViaConnector();
 }

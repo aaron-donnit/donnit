@@ -20,6 +20,7 @@ export const DONNIT_TABLES = {
   chatMessages: "chat_messages",
   emailSuggestions: "email_suggestions",
   reminderPreferences: "reminder_preferences",
+  gmailAccounts: "gmail_accounts",
 } as const;
 
 export function getSupabaseConfig() {

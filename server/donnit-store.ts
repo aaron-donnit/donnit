@@ -90,12 +90,29 @@ export type DonnitEmailSuggestion = {
   from_email: string;
   subject: string;
   preview: string;
+  body: string;
+  received_at: string | null;
+  action_items: string[];
   suggested_title: string;
   suggested_due_date: string | null;
   urgency: "low" | "normal" | "high" | "critical";
   status: "pending" | "approved" | "dismissed";
   assigned_to: string | null;
   created_at: string;
+};
+
+export type DonnitGmailAccount = {
+  user_id: string;
+  org_id: string;
+  email: string;
+  access_token: string;
+  refresh_token: string | null;
+  scope: string;
+  token_type: string;
+  expires_at: string;
+  connected_at: string;
+  last_scanned_at: string | null;
+  status: "connected" | "revoked" | "error";
 };
 
 export class DonnitStore {
@@ -274,5 +291,51 @@ export class DonnitStore {
       .maybeSingle();
     if (error) throw error;
     return (data as DonnitEmailSuggestion | null) ?? null;
+  }
+
+  // ---- gmail_accounts (first-party OAuth) -------------------------------
+
+  async getGmailAccount(): Promise<DonnitGmailAccount | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.gmailAccounts)
+      .select("*")
+      .eq("user_id", this.userId)
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("get gmail_account failed", error);
+    return (data as DonnitGmailAccount | null) ?? null;
+  }
+
+  async upsertGmailAccount(
+    input: Omit<DonnitGmailAccount, "user_id" | "connected_at" | "last_scanned_at" | "status">,
+  ): Promise<DonnitGmailAccount> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.gmailAccounts)
+      .upsert(
+        { ...input, user_id: this.userId, status: "connected" },
+        { onConflict: "user_id" },
+      )
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("upsert gmail_account failed", error);
+    return data as DonnitGmailAccount;
+  }
+
+  async patchGmailAccount(patch: Partial<DonnitGmailAccount>): Promise<DonnitGmailAccount | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.gmailAccounts)
+      .update(patch)
+      .eq("user_id", this.userId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("patch gmail_account failed", error);
+    return (data as DonnitGmailAccount | null) ?? null;
+  }
+
+  async deleteGmailAccount(): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.gmailAccounts)
+      .delete()
+      .eq("user_id", this.userId);
+    if (error) throw wrapSupabaseError("delete gmail_account failed", error);
   }
 }

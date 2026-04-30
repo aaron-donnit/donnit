@@ -107,6 +107,9 @@ type EmailSuggestion = {
   fromEmail: string;
   subject: string;
   preview: string;
+  body?: string;
+  receivedAt?: string | null;
+  actionItems?: string[];
   suggestedTitle: string;
   suggestedDueDate: string | null;
   urgency: string;
@@ -589,6 +592,12 @@ function AcceptancePanel({
     onSuccess: invalidateWorkspace,
   });
 
+  const visibleSuggestions = pendingSuggestions.slice(0, 3);
+  const remainingSuggestionsAfterVisible = Math.max(
+    0,
+    pendingSuggestions.length - visibleSuggestions.length,
+  );
+
   return (
     <div className="panel" data-testid="panel-acceptance">
       <div className="border-b border-border px-4 py-3">
@@ -628,7 +637,25 @@ function AcceptancePanel({
           </div>
         ))}
 
-        {overflowLabel && (
+        {visibleSuggestions.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <p className="ui-label text-[10px] uppercase tracking-wider text-muted-foreground">
+              From your inbox
+            </p>
+            {visibleSuggestions.map((suggestion) => (
+              <SuggestionCard
+                key={suggestion.id}
+                suggestion={suggestion}
+                onApprove={() => approveSuggestion.mutate(suggestion.id)}
+                onDismiss={() => dismissSuggestion.mutate(suggestion.id)}
+                approving={approveSuggestion.isPending}
+                dismissing={dismissSuggestion.isPending}
+              />
+            ))}
+          </div>
+        )}
+
+        {(overflowLabel || remainingSuggestionsAfterVisible > 0) && (
           <button
             type="button"
             onClick={() => {
@@ -639,11 +666,122 @@ function AcceptancePanel({
           >
             <span className="inline-flex items-center gap-1.5">
               <MailPlus className="size-3.5" />
-              {overflowLabel}
+              {overflowLabel ??
+                `+${remainingSuggestionsAfterVisible} email suggestion${
+                  remainingSuggestionsAfterVisible === 1 ? "" : "s"
+                }`}
             </span>
             <span className="ui-label">Open</span>
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function formatReceivedAt(value: string | null | undefined): string {
+  if (!value) return "Unknown date";
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return value.slice(0, 24);
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function SuggestionCard({
+  suggestion,
+  onApprove,
+  onDismiss,
+  approving,
+  dismissing,
+}: {
+  suggestion: EmailSuggestion;
+  onApprove: () => void;
+  onDismiss: () => void;
+  approving: boolean;
+  dismissing: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const actionItems = suggestion.actionItems ?? [];
+  const body = (suggestion.body ?? "").trim();
+  const preview = (suggestion.preview ?? body.slice(0, 240)).trim();
+  return (
+    <div
+      className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
+      data-testid={`row-suggestion-${suggestion.id}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground break-words" data-testid={`text-suggestion-title-${suggestion.id}`}>
+            {suggestion.suggestedTitle}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground break-words" data-testid={`text-suggestion-from-${suggestion.id}`}>
+            From {suggestion.fromEmail} · {formatReceivedAt(suggestion.receivedAt ?? null)}
+          </p>
+          <p className="mt-0.5 text-xs italic text-muted-foreground break-words">
+            {suggestion.subject}
+          </p>
+        </div>
+        {suggestion.suggestedDueDate && (
+          <span className="ui-label whitespace-nowrap text-[10px]">
+            Due {suggestion.suggestedDueDate}
+          </span>
+        )}
+      </div>
+
+      {actionItems.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-foreground" data-testid={`list-action-items-${suggestion.id}`}>
+          {actionItems.map((item, index) => (
+            <li key={`${suggestion.id}-ai-${index}`}>{item}</li>
+          ))}
+        </ul>
+      )}
+
+      {(preview || body) && (
+        <div className="mt-2 rounded-sm bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+          {expanded && body ? (
+            <pre className="whitespace-pre-wrap break-words font-sans" data-testid={`text-suggestion-body-${suggestion.id}`}>
+              {body}
+            </pre>
+          ) : (
+            <p className="line-clamp-3 break-words" data-testid={`text-suggestion-preview-${suggestion.id}`}>
+              {preview || body.slice(0, 240)}
+            </p>
+          )}
+          {body && body.length > preview.length && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-[11px] font-medium text-brand-green hover:underline"
+              data-testid={`button-suggestion-expand-${suggestion.id}`}
+            >
+              {expanded ? "Show less" : "Show full email"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          onClick={onApprove}
+          disabled={approving || dismissing}
+          data-testid={`button-suggestion-approve-${suggestion.id}`}
+        >
+          <Check className="size-4" /> Add as task
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onDismiss}
+          disabled={approving || dismissing}
+          data-testid={`button-suggestion-dismiss-${suggestion.id}`}
+        >
+          <X className="size-4" /> Dismiss
+        </Button>
       </div>
     </div>
   );
@@ -751,10 +889,10 @@ function ManualEmailImportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Manual email import</DialogTitle>
+          <DialogTitle>Manual email import (diagnostic)</DialogTitle>
           <DialogDescription>
-            Paste an email subject and body to create an actionable suggestion. Useful when the
-            hosted preview cannot reach the Gmail runtime token.
+            Donnit's primary email flow is "Scan email", which reads unread Gmail directly. Use this
+            paste form only as a one-off diagnostic when Gmail OAuth is not yet configured.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -820,15 +958,66 @@ function ManualEmailImportDialog({
   );
 }
 
+type GmailOAuthStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  connected: boolean;
+  email?: string | null;
+  lastScannedAt?: string | null;
+  status?: string | null;
+};
+
+function useGmailOAuthStatus(authenticated: boolean) {
+  return useQuery<GmailOAuthStatus>({
+    queryKey: ["/api/integrations/gmail/oauth/status"],
+    enabled: authenticated,
+  });
+}
+
 function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
   const [manualImportOpen, setManualImportOpen] = useState(false);
+  const oauthStatus = useGmailOAuthStatus(auth.authenticated);
+
+  const connectGmail = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/gmail/oauth/connect");
+      return (await res.json()) as { ok: boolean; url?: string };
+    },
+    onSuccess: (result) => {
+      if (result?.url) {
+        window.location.href = result.url;
+      }
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const isNotConfigured = message.startsWith("412:");
+      toast({
+        title: isNotConfigured ? "Gmail OAuth not configured" : "Could not start Gmail connect",
+        description: isNotConfigured
+          ? "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI on the server, then redeploy."
+          : "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const disconnectGmail = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/integrations/gmail/oauth/disconnect");
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
+      toast({ title: "Gmail disconnected", description: "Donnit will no longer scan this Gmail account." });
+    },
+  });
 
   const scan = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/integrations/gmail/scan");
       return (await res.json()) as {
         ok: boolean;
+        source?: "connector" | "oauth";
         scannedCandidates?: number;
         createdSuggestions?: number;
       };
@@ -841,16 +1030,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         title: "Email scan complete",
         description:
           created > 0
-            ? `Added ${created} new email${created === 1 ? "" : "s"} to the acceptance queue.`
+            ? `Added ${created} new unread email${created === 1 ? "" : "s"} to your queue.`
             : scanned > 0
-              ? "No new emails to add. Existing suggestions are already queued."
-              : "No matching emails found in the current window.",
+              ? "No new unread emails to add. Existing suggestions are already queued."
+              : "No matching unread emails found.",
       });
     },
     onError: (error: unknown) => {
-      // apiRequest throws Error("<status>: <body>") on non-2xx. Try to parse
-      // the body so we can surface the connector-friendly message rather
-      // than the raw status. We never display connector JSON to users.
+      // apiRequest throws Error("<status>: <body>") on non-2xx. Parse the body
+      // so we can surface a connector-friendly message rather than raw JSON.
+      // We never display connector JSON to users.
       const message = error instanceof Error ? error.message : String(error);
       const sep = message.indexOf(": ");
       let parsed: { reason?: string; message?: string } = {};
@@ -862,26 +1051,29 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         }
       }
       const reason = parsed.reason;
-      const isAuth = reason === "gmail_auth_required";
+      const isAuth = reason === "gmail_auth_required" || reason === "gmail_oauth_token_invalid";
       const isRuntime = reason === "gmail_runtime_unavailable" || message.startsWith("503:");
+      const oauthConfigured = oauthStatus.data?.configured ?? false;
+      const oauthConnected = oauthStatus.data?.connected ?? false;
       const title = isAuth
         ? "Reconnect Gmail"
         : isRuntime
-          ? "Use manual import for now"
+          ? "Email scan unavailable on this server"
           : "Email scan unavailable";
       const description =
         parsed.message ??
         (isAuth
-          ? "Gmail authorization needs to be refreshed. Reconnect Gmail or refresh the preview and try again."
+          ? "Gmail authorization needs to be refreshed. Reconnect Gmail and try again."
           : isRuntime
-            ? "Email scan is connected in Computer, but this preview server cannot access the Gmail runtime token. Try again after redeploy or use Manual email import for now."
+            ? oauthConfigured && !oauthConnected
+              ? "Connect your Gmail account so Donnit can scan unread email directly."
+              : "Email scan is unavailable on this preview. Configure Gmail OAuth (GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI) on the server, or try again after redeploy."
             : "Gmail scan is unavailable right now. Try again shortly.");
-      toast({
-        title,
-        description,
-        variant: "destructive",
-      });
-      if (isRuntime) setManualImportOpen(true);
+      toast({ title, description, variant: "destructive" });
+      // IMPORTANT: do NOT auto-open manual import. Manual paste is not the
+      // primary product behavior; Scan email must always mean "scan unread
+      // Gmail itself." The user can still reach manual import from the
+      // diagnostic menu if they explicitly choose to.
     },
   });
 
@@ -935,6 +1127,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     );
   }
 
+  const oauthData = oauthStatus.data;
+  const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const actions: FunctionAction[] = [
     {
       id: "create-todo",
@@ -953,14 +1147,36 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: Inbox,
       onClick: () => scan.mutate(),
       loading: scan.isPending,
+      hint: oauthData?.connected
+        ? `Scan unread Gmail for ${oauthData.email ?? "your inbox"}`
+        : "Scan unread Gmail and queue suggested tasks",
     },
-    {
-      id: "manual-email-import",
-      label: "Manual email import",
-      icon: MailPlus,
-      onClick: () => setManualImportOpen(true),
-      hint: "Paste an email to queue it manually",
-    },
+    ...(showConnectGmail
+      ? [
+          {
+            id: "connect-gmail",
+            label: "Connect Gmail",
+            icon: MailPlus,
+            onClick: () => connectGmail.mutate(),
+            loading: connectGmail.isPending,
+            hint: "Authorize Donnit to scan your unread Gmail",
+          } satisfies FunctionAction,
+        ]
+      : []),
+    ...(oauthData?.connected
+      ? [
+          {
+            id: "disconnect-gmail",
+            label: "Disconnect Gmail",
+            icon: MailPlus,
+            onClick: () => disconnectGmail.mutate(),
+            loading: disconnectGmail.isPending,
+            hint: oauthData.email
+              ? `Stop scanning ${oauthData.email}`
+              : "Stop scanning Gmail",
+          } satisfies FunctionAction,
+        ]
+      : []),
     {
       id: "build-agenda",
       label: "Build agenda",
@@ -1081,9 +1297,21 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           <span>
             Auth: {data.integrations.auth.provider} · Email loop:{" "}
             {data.integrations.email.provider}
+            {oauthData?.connected ? ` · Gmail OAuth: ${oauthData.email ?? "connected"}` : null}
           </span>
-          <span>
-            Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
+          <span className="flex items-center gap-3">
+            <span>
+              Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
+            </span>
+            <button
+              type="button"
+              onClick={() => setManualImportOpen(true)}
+              className="text-[11px] underline-offset-2 hover:underline"
+              data-testid="link-manual-email-debug"
+              title="Diagnostic only — Scan email is the primary email-to-task flow"
+            >
+              Manual import (debug)
+            </button>
           </span>
         </div>
       </footer>

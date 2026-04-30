@@ -1,0 +1,131 @@
+# Gmail OAuth — first-party setup for "Scan email"
+
+## Why this exists
+
+Donnit's `Scan email` function reads **unread Gmail** directly and surfaces
+suggested action items to the user. There are two execution paths:
+
+1. **Platform connector** — used inside the Perplexity Computer preview. Calls
+   the `external-tool` CLI with `source_id=gcal`, `tool_name=search_email`. This
+   path requires the app process to have a valid runtime credential, which the
+   hosted preview cannot always provide (it returns bare `UNAUTHORIZED`).
+2. **First-party Gmail OAuth** — used in production and any deploy where
+   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` are
+   configured. Each Donnit user authorizes Donnit once via Google's OAuth
+   consent screen; tokens are stored server-side in `donnit.gmail_accounts`
+   (RLS-gated, never exposed to the browser).
+
+The server prefers (2) when a stored token exists for the signed-in user, and
+falls back to (1) otherwise. The two paths produce identical
+`donnit.email_suggestions` rows.
+
+## What Aaron must do
+
+These are the exact external setup tasks. The application will not be able to
+scan Gmail in production until all of them are complete.
+
+### 1. Google Cloud project
+
+1. Open <https://console.cloud.google.com/> and select (or create) a project
+   for Donnit.
+2. **APIs & Services → Library** → search for **Gmail API** → click
+   **Enable**.
+
+### 2. OAuth consent screen
+
+1. **APIs & Services → OAuth consent screen**.
+2. User type: **External**. Click **Create**.
+3. App name: `Donnit`. User support email: your address. Developer contact: your
+   address.
+4. Authorized domains: add `donnit.ai` (and any other production domain you
+   intend to host on).
+5. **Scopes** → **Add or remove scopes** → add
+   `https://www.googleapis.com/auth/gmail.readonly`. Donnit only ever reads;
+   it does not need send/modify scopes.
+6. **Test users** (while the app is in Testing): add the Gmail addresses of
+   Aaron and any other internal testers. Once the consent screen is published
+   and verified, this list is no longer required.
+
+### 3. OAuth client
+
+1. **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
+2. Application type: **Web application**.
+3. Name: `Donnit web`.
+4. **Authorized redirect URIs** — add **exactly** the URL the deployed Donnit
+   server will receive the OAuth callback on:
+   - Production: `https://donnit.ai/api/integrations/gmail/oauth/callback`
+   - Per-environment preview: `https://<your-preview-host>/api/integrations/gmail/oauth/callback`
+   These must match the value of `GOOGLE_REDIRECT_URI` byte-for-byte (no
+   trailing slash, no fragment, scheme included).
+5. Click **Create**. Copy the **Client ID** and **Client secret**.
+
+### 4. Server environment variables
+
+Set these on the deployed Donnit server (Vercel / Railway / your host of
+choice). Do NOT commit them.
+
+```
+GOOGLE_CLIENT_ID=<from step 3>
+GOOGLE_CLIENT_SECRET=<from step 3>
+GOOGLE_REDIRECT_URI=https://donnit.ai/api/integrations/gmail/oauth/callback
+```
+
+Restart / redeploy the server. The `Connect Gmail` button only appears in the
+UI when `GET /api/integrations/gmail/oauth/status` reports
+`configured: true`.
+
+### 5. Apply the Supabase migration
+
+The OAuth path needs a token-storage table and three new columns on
+`donnit.email_suggestions`. The migration file lives at
+`supabase/migrations/0006_email_suggestions_body_and_gmail_accounts.sql`. It is
+non-destructive and re-runnable.
+
+Apply it with whatever workflow the project uses for prior migrations (psql,
+Supabase Dashboard SQL editor, or `supabase db push` if the CLI is wired up).
+A safe one-shot via the dashboard:
+
+1. Supabase → SQL editor → paste the contents of `0006_*.sql` → Run.
+2. Confirm in **Table editor** that `donnit.gmail_accounts` exists and that
+   `donnit.email_suggestions` now has `body`, `received_at`, `action_items`.
+
+There is **no automatic apply** in this PR — Aaron must run the migration
+explicitly.
+
+### 6. Smoke test the OAuth flow
+
+1. Sign in to Donnit on the deployed URL.
+2. Click `Connect Gmail` in the toolbar (only visible when OAuth is
+   configured and the user is not yet connected).
+3. Complete Google's consent dialog. The browser is redirected back to
+   `/api/integrations/gmail/oauth/callback`, which writes a row to
+   `donnit.gmail_accounts` and renders a small confirmation page.
+4. Return to Donnit. The toolbar now shows `Disconnect Gmail` and the footer
+   shows `Gmail OAuth: <your address>`.
+5. Click `Scan email`. The toast should say
+   `Added N new unread emails to your queue` (or similar). The Waiting-on-you
+   panel now shows email suggestions with sender, received date, body
+   preview, and extracted action items.
+6. Approve a suggestion. A task is created in the To-do list with the
+   suggestion's title, due date, and urgency.
+
+## Encrypting tokens (recommended for production)
+
+The migration stores `access_token` and `refresh_token` as plain text. RLS
+restricts access to `auth.uid() = user_id`, but a defense-in-depth deployment
+should wrap those columns with `pgsodium`-managed transparent encryption.
+That is out of scope for this PR; track as a follow-up.
+
+## Operational notes
+
+- Refresh tokens are issued only on the **first** consent that includes
+  `prompt=consent`. The `connect` route always passes `prompt=consent` so the
+  refresh token is reliably re-issued on reconnect.
+- Tokens are refreshed automatically inside `POST /api/integrations/gmail/scan`
+  when the stored access token is within 30 seconds of expiry.
+- Disconnecting deletes the row in `donnit.gmail_accounts`. The Google grant
+  itself remains until the user revokes it at
+  <https://myaccount.google.com/permissions>; instruct testers accordingly.
+- The connector path remains as a fallback. If both the connector and OAuth
+  fail, the UI surfaces a friendly message; it does NOT auto-open the manual
+  paste dialog (manual paste is a diagnostic, not a product behavior).
