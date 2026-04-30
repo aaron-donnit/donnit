@@ -401,6 +401,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", attachSupabaseAuth);
 
   // ------------------------------------------------------------------
+  // Health probe — no auth required, no secrets exposed.
+  // Reports BOOLEAN presence of each required env var so an operator can
+  // verify a Vercel deploy without `vercel env pull`. Used by the OAuth
+  // troubleshooting flow: if /api/integrations/gmail/oauth/callback ever
+  // 302s to /?gmail=server_misconfigured, hit /api/health to see which
+  // env is missing.
+  // ------------------------------------------------------------------
+  app.get("/api/health", (_req: Request, res: Response) => {
+    try {
+      res.json({
+        ok: true,
+        time: new Date().toISOString(),
+        node: process.version,
+        env: {
+          supabaseUrl: Boolean(process.env.SUPABASE_URL),
+          supabaseAnonKey: Boolean(process.env.SUPABASE_ANON_KEY),
+          supabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+          googleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+          googleClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+          googleRedirectUri: Boolean(process.env.GOOGLE_REDIRECT_URI),
+          gmailOauthStateSecret: Boolean(process.env.GMAIL_OAUTH_STATE_SECRET),
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        message: err instanceof Error ? err.message.slice(0, 200) : "health failed",
+      });
+    }
+  });
+
+  // ------------------------------------------------------------------
   // Public + auth utility
   // ------------------------------------------------------------------
   app.get("/api/auth/me", async (req: Request, res: Response) => {

@@ -64,17 +64,32 @@ export async function createApiApp(httpServer: Server | null): Promise<Express> 
 
   await registerRoutes((httpServer ?? null) as unknown as Server, app);
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    const status = err?.status || err?.statusCode || 500;
+    // Never echo `err.message` to the client — it may contain stack-derived
+    // detail that we'd rather not surface. Log the trimmed message; respond
+    // with a fixed string.
+    console.error(
+      "[donnit] route error:",
+      err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    );
 
     if (res.headersSent) {
       return next(err);
     }
 
-    return res.status(status).json({ message });
+    // The Gmail OAuth callback is a top-level browser navigation; the user
+    // would otherwise see a raw Vercel crash page. Always redirect to the
+    // SPA with a typed gmail=server_error param so the SPA can show a toast.
+    if (req.path && /\/integrations\/gmail\/oauth\/callback$/.test(req.path)) {
+      try {
+        return res.status(302).setHeader("Location", "/?gmail=server_error").end();
+      } catch {
+        // fall through to JSON
+      }
+    }
+
+    return res.status(status).json({ ok: false, message: "Internal Server Error" });
   });
 
   return app;
