@@ -32,6 +32,7 @@ const allowlist = [
 
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
+  await rm("api/_bundle.cjs", { force: true });
 
   console.log("building client...");
   await viteBuild();
@@ -50,6 +51,25 @@ async function buildAll() {
     bundle: true,
     format: "cjs",
     outfile: "dist/index.cjs",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+  });
+
+  console.log("building vercel api bundle...");
+  // Pre-bundle the server tree into a single CJS file that the Vercel
+  // serverless entry (api/index.ts) loads via createRequire. Sidesteps Node
+  // ESM's strict relative-extension rule (which broke `import "../server/app"`
+  // in the deployed function) and resolves the `@shared/*` path alias.
+  await esbuild({
+    entryPoints: ["server/app.ts"],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: "api/_bundle.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
     },
