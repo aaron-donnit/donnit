@@ -6,7 +6,7 @@
   "installCommand": "npm install --include=optional",
   "framework": null,
   "functions": {
-    "api/index.cjs": {
+    "api/index.js": {
       "memory": 1024,
       "maxDuration": 30,
       "includeFiles": "api/_bundle.cjs"

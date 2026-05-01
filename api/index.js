@@ -1,38 +1,31 @@
-// Vercel serverless function entry — written as plain CommonJS JavaScript
-// (NOT TypeScript) so Vercel cannot recompile it into an ESM file that
-// statically imports "../server/app". An earlier deploy shipped an
-// auto-compiled api/index.js that did exactly that, producing
-// `Cannot find module '/var/task/server/app'` at runtime even after the
-// repo source removed the static import. Checking in the JS source as the
-// canonical entry eliminates that whole class of build-pipeline drift.
+// Vercel serverless function entry. Written as ESM (.js) because
+// package.json sets "type": "module". The Express app is pre-bundled into
+// ./_bundle.cjs by `npm run build`; we load that CJS bundle here via
+// createRequire so we never trip Node ESM's strict relative-extension rule
+// or accidentally tree-shake away the runtime entry.
 //
-// vercel.json rewrites /api/* to this file. The Express app is bundled
-// into ./_bundle.cjs by `npm run build` and loaded lazily. Every async
-// step is wrapped so no exception can escape into Vercel's
-// FUNCTION_INVOCATION_FAILED 500 page.
+// Earlier deploys failed because:
+//   - api/index.ts had a static `import "../server/app"` that did not exist
+//     on disk in the deployed function (ERR_MODULE_NOT_FOUND).
+//   - A checked-in api/index.cjs entry was rejected by Vercel's function
+//     pattern matcher ("doesn't match any Serverless Functions").
+// This file is the supported pattern: api/index.js, ESM, lazy CJS load,
+// no static server/app import anywhere.
 
-"use strict";
+import { createRequire } from "node:module";
 
-// dotenv is a no-op on Vercel (env vars come straight from the platform);
-// the require may legitimately fail in environments without dotenv installed.
+const require = createRequire(import.meta.url);
+
+// dotenv is a no-op on Vercel (env comes straight from the platform); the
+// require may legitimately fail in environments without dotenv installed.
 try {
   require("dotenv/config");
 } catch (_ignored) {
   // ignore — env already present
 }
 
-// Build-time marker so /api/health (and curl -i) can confirm the deployed
-// code matches the expected commit. Updated by the build command via
-// scripts/stamp-build-marker, OR left at the literal default below if the
-// build step did not run. The literal sentinel is intentional: when the
-// user sees "DEV" in the marker they know the build pipeline did not
-// regenerate the entry.
-//
-// We also expose a static schema/runtime label so the user can distinguish
-// this safe loader from any stale compiled entry that might still be in
-// the deployment cache.
 const BUILD_MARKER = process.env.VERCEL_GIT_COMMIT_SHA || "unknown";
-const ENTRY_VERSION = "donnit-api-2"; // bump when changing this file
+const ENTRY_VERSION = "donnit-api-3"; // bump when changing this file
 
 let cachedApp = null;
 let inFlightInit = null;
@@ -41,10 +34,6 @@ function loadApp() {
   if (cachedApp) return Promise.resolve(cachedApp);
   if (inFlightInit) return inFlightInit;
   inFlightInit = (async () => {
-    // Bundle load. If the build did not produce _bundle.cjs (or the include
-    // path is wrong), this throws synchronously inside the Promise — caught
-    // by the outer handler. Failed init clears inFlightInit so the next
-    // request retries; we never cache a rejected promise.
     const bundle = require("./_bundle.cjs");
     if (!bundle || typeof bundle.createApiApp !== "function") {
       throw new Error("api/_bundle.cjs is missing createApiApp export");
@@ -60,9 +49,6 @@ function loadApp() {
 }
 
 function isOAuthCallback(req) {
-  // req.url is e.g. "/api/integrations/gmail/oauth/callback?..." after the
-  // vercel.json rewrite. Match both the rewritten and the platform-stripped
-  // forms defensively.
   const url = (req && req.url) || "";
   return /\/integrations\/gmail\/oauth\/callback(?:\?|$)/.test(url);
 }
@@ -102,15 +88,12 @@ function safeError(res, req, reason) {
     try {
       res.end();
     } catch (_ignored2) {
-      // last-resort: nothing we can do
+      // last-resort
     }
   }
 }
 
-module.exports = async function handler(req, res) {
-  // Annotate every response so the user can verify the safe loader is in
-  // play. Set BEFORE dispatching to Express so even Express-handled paths
-  // include them.
+export default async function handler(req, res) {
   try {
     res.setHeader("x-donnit-entry", ENTRY_VERSION);
     res.setHeader("x-donnit-commit", BUILD_MARKER);
@@ -136,13 +119,9 @@ module.exports = async function handler(req, res) {
     );
     return safeError(res, req, "server_error");
   }
-};
+}
 
-// Process-level traps. Each Lambda reuses one Node process when warm, so
-// a stray unhandled rejection from a misbehaving async path could crash
-// the function. These traps log + swallow so the Lambda survives long
-// enough to send a controlled response. They install once per process.
-if (!global.__donnitTrapsInstalled) {
+if (!globalThis.__donnitTrapsInstalled) {
   process.on("unhandledRejection", (reason) => {
     console.error(
       "[donnit] unhandledRejection:",
@@ -155,5 +134,5 @@ if (!global.__donnitTrapsInstalled) {
       err && err.message ? String(err.message).slice(0, 200) : "unknown",
     );
   });
-  global.__donnitTrapsInstalled = true;
+  globalThis.__donnitTrapsInstalled = true;
 }
