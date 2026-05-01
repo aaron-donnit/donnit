@@ -11,6 +11,12 @@
 //     pattern matcher ("doesn't match any Serverless Functions").
 // This file is the supported pattern: api/index.js, ESM, lazy CJS load,
 // no static server/app import anywhere.
+//
+// /api/health is handled DIRECTLY here, before the bundle is loaded, so a
+// broken bundle (missing _bundle.cjs, server/app init throw, native binding
+// failure inside routes.ts) cannot poison the health probe. Operators can
+// always hit /api/health to learn whether the function entry runs and which
+// env vars are present.
 
 import { createRequire } from "node:module";
 
@@ -25,22 +31,37 @@ try {
 }
 
 const BUILD_MARKER = process.env.VERCEL_GIT_COMMIT_SHA || "unknown";
-const ENTRY_VERSION = "donnit-api-3"; // bump when changing this file
+const ENTRY_VERSION = "donnit-api-4"; // bump when changing this file
 
 let cachedApp = null;
 let inFlightInit = null;
+let lastInitError = null;
 
 function loadApp() {
   if (cachedApp) return Promise.resolve(cachedApp);
   if (inFlightInit) return inFlightInit;
   inFlightInit = (async () => {
-    const bundle = require("./_bundle.cjs");
+    let bundle;
+    try {
+      bundle = require("./_bundle.cjs");
+    } catch (err) {
+      const message = err && err.message ? String(err.message).slice(0, 200) : "require failed";
+      lastInitError = "bundle_require_failed:" + message;
+      throw err;
+    }
     if (!bundle || typeof bundle.createApiApp !== "function") {
+      lastInitError = "bundle_missing_createApiApp";
       throw new Error("api/_bundle.cjs is missing createApiApp export");
     }
-    const app = await bundle.createApiApp(null);
-    cachedApp = app;
-    return app;
+    try {
+      const app = await bundle.createApiApp(null);
+      cachedApp = app;
+      return app;
+    } catch (err) {
+      const message = err && err.message ? String(err.message).slice(0, 200) : "createApiApp failed";
+      lastInitError = "create_app_failed:" + message;
+      throw err;
+    }
   })().catch((err) => {
     inFlightInit = null;
     throw err;
@@ -48,9 +69,69 @@ function loadApp() {
   return inFlightInit;
 }
 
+function getPath(req) {
+  const url = (req && req.url) || "";
+  const q = url.indexOf("?");
+  return q === -1 ? url : url.slice(0, q);
+}
+
 function isOAuthCallback(req) {
   const url = (req && req.url) || "";
   return /\/integrations\/gmail\/oauth\/callback(?:\?|$)/.test(url);
+}
+
+function isHealthPath(req) {
+  const path = getPath(req);
+  // Vercel rewrites /api/health -> /api/index, so the rewritten request
+  // arrives with path /api/index. The original path is preserved in
+  // x-vercel-original-pathname.
+  if (path === "/api/health") return true;
+  const orig = req && req.headers && req.headers["x-vercel-original-pathname"];
+  if (typeof orig === "string" && orig === "/api/health") return true;
+  return false;
+}
+
+// Direct health response. Does NOT load the bundle. Reports BOOLEAN env
+// presence only — never the values themselves. Useful for verifying that:
+//   1. The function entry is reachable at all (status 200).
+//   2. ENTRY_VERSION matches the deployed commit.
+//   3. The required env vars are wired up in Vercel project settings.
+//   4. If a previous request tripped bundle init, lastInitError is exposed.
+function respondHealth(res) {
+  try {
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-donnit-entry", ENTRY_VERSION);
+    res.setHeader("x-donnit-commit", BUILD_MARKER);
+    res.end(
+      JSON.stringify({
+        ok: true,
+        source: "entry",
+        entry: ENTRY_VERSION,
+        commit: BUILD_MARKER,
+        time: new Date().toISOString(),
+        node: process.version,
+        env: {
+          supabaseUrl: Boolean(process.env.SUPABASE_URL),
+          supabaseAnonKey: Boolean(process.env.SUPABASE_ANON_KEY),
+          supabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+          googleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+          googleClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+          googleRedirectUri: Boolean(process.env.GOOGLE_REDIRECT_URI),
+          gmailOauthStateSecret: Boolean(process.env.GMAIL_OAUTH_STATE_SECRET),
+        },
+        lastInitError: lastInitError,
+      }),
+    );
+  } catch (_ignored) {
+    try {
+      res.statusCode = 500;
+      res.end();
+    } catch (_ignored2) {
+      // last resort
+    }
+  }
 }
 
 function safeError(res, req, reason) {
@@ -82,6 +163,7 @@ function safeError(res, req, reason) {
         reason: reason,
         entry: ENTRY_VERSION,
         commit: BUILD_MARKER,
+        lastInitError: lastInitError,
       }),
     );
   } catch (_ignored) {
@@ -100,6 +182,13 @@ export default async function handler(req, res) {
   } catch (_ignored) {
     // headers already sent (very unlikely at this point)
   }
+
+  // Direct entry-level health response. MUST run before loadApp() so a
+  // broken bundle cannot mask whether the function entry is reachable.
+  if (isHealthPath(req)) {
+    return respondHealth(res);
+  }
+
   let app;
   try {
     app = await loadApp();
