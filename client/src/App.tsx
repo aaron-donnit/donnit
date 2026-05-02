@@ -318,7 +318,8 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           placeholder="Add spouse birthday for 2026-05-30, remind me 15 days before."
-          className="min-h-[72px] resize-none"
+          rows={3}
+          className="h-24 max-h-24 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
               if (message.trim().length >= 2) chat.mutate();
