@@ -92,6 +92,27 @@ function describeSupabaseError(err: unknown): {
   return { name: null, message: null, code: null, details: null, hint: null, status: null };
 }
 
+// Returns true when describeSupabaseError yielded no signal — every
+// recognized PostgREST/Postgres field is null. supabase-js occasionally
+// hands us a non-null `error` object whose shape we can't read (e.g. an
+// empty `{}` from a stale client wrapper, or a frozen sentinel). Such a
+// value is indistinguishable from "no error" for diagnostic purposes:
+// REST already returned 200 at the root, the schema-pinned client
+// completed the round trip, and nothing actionable can be extracted.
+// Treating it as accessible avoids the false-negative that surfaced when
+// the table is empty (count: null) and supabase-js returned a hollow
+// error object alongside.
+function isEmptySupabaseError(err: ReturnType<typeof describeSupabaseError>): boolean {
+  return (
+    err.name === null &&
+    err.message === null &&
+    err.code === null &&
+    err.details === null &&
+    err.hint === null &&
+    err.status === null
+  );
+}
+
 // Translate a Supabase/PostgREST/network error into one of a small set
 // of operator-actionable reason codes. Order matters: cheaper-to-fix
 // reasons come first so a single error never gets bucketed as "unknown"
@@ -724,21 +745,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       // Step 2: HEAD-select gmail_accounts with the schema-pinned client.
+      // A successful HEAD probe returns `error: null` (and `count` may be
+      // null when supabase-js can't read the Content-Range header — this
+      // is normal for an empty table, NOT a failure). Some supabase-js
+      // versions return a hollow `{}` error object on success; treat any
+      // error whose extracted fields are all null as "no real error" so
+      // an empty table doesn't read as inaccessible.
       const gmailProbe = await admin
         .from("gmail_accounts")
         .select("user_id", { count: "exact", head: true })
         .limit(1);
-      if (!gmailProbe.error) {
+      const gmailErrRaw = gmailProbe.error;
+      const gmailErr = gmailErrRaw
+        ? describeSupabaseError(gmailErrRaw)
+        : { name: null, message: null, code: null, details: null, hint: null, status: null };
+      const gmailHasRealError = gmailErrRaw !== null && !isEmptySupabaseError(gmailErr);
+      if (!gmailHasRealError) {
         res.json({
           ok: true,
           ...baseResponse,
           rest: { status: rootProbe.status },
           gmailAccountsTable: true,
+          gmailAccountsRowCount: typeof gmailProbe.count === "number" ? gmailProbe.count : null,
         });
         return;
       }
 
-      const gmailErr = describeSupabaseError(gmailProbe.error);
       const gmailReason = classifySupabaseError(gmailErr, {
         schema: DONNIT_SCHEMA,
         table: "gmail_accounts",
@@ -746,16 +778,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Step 3: HEAD-select profiles to disambiguate "schema not exposed"
       // (both probes fail the same way) from "table missing"
-      // (profiles works, gmail_accounts does not).
+      // (profiles works, gmail_accounts does not). Same empty-error
+      // tolerance as gmail_accounts above.
       const profilesProbe = await admin
         .from("profiles")
         .select("id", { count: "exact", head: true })
         .limit(1);
-      const profilesOk = !profilesProbe.error;
-      const profilesErr = profilesProbe.error
-        ? describeSupabaseError(profilesProbe.error)
+      const profilesErrRaw = profilesProbe.error;
+      const profilesErrDescribed = profilesErrRaw
+        ? describeSupabaseError(profilesErrRaw)
         : null;
-      const profilesReason = profilesErr
+      const profilesHasRealError =
+        profilesErrRaw !== null &&
+        profilesErrDescribed !== null &&
+        !isEmptySupabaseError(profilesErrDescribed);
+      const profilesOk = !profilesHasRealError;
+      const profilesErr = profilesHasRealError ? profilesErrDescribed : null;
+      const profilesReason: DbProbeReason = profilesErr
         ? classifySupabaseError(profilesErr, { schema: DONNIT_SCHEMA, table: "profiles" })
         : "ok";
 
@@ -1681,6 +1720,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           // toast reason matches what the operator sees on the probe.
           // Never log tokens, auth code, or the service-role value.
           const described = describeSupabaseError(upsertError);
+          // Hollow error object (every recognized field null) means
+          // supabase-js handed us a non-null `{}` without a real failure.
+          // Treat it as success so a working upsert doesn't redirect to a
+          // false-negative error toast. Real PostgREST errors always
+          // carry at least a code, status, or message.
+          if (isEmptySupabaseError(described)) {
+            return safeRedirect("connected");
+          }
           const reason = classifySupabaseError(described, {
             schema: DONNIT_SCHEMA,
             table: "gmail_accounts",
