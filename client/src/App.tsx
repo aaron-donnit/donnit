@@ -1064,6 +1064,36 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         title: "Could not save Gmail connection",
         description: "Database write failed. Click Connect Gmail to try again, or contact support if it persists.",
       },
+      missing_table: {
+        title: "Gmail table not found in Supabase",
+        description:
+          "donnit.gmail_accounts does not exist. Server admin: apply supabase/migrations/0006_email_suggestions_body_and_gmail_accounts.sql to project bchwrbqaacdijavtugdt and ensure the donnit schema is exposed in Project Settings → API → Exposed schemas.",
+      },
+      schema_not_exposed: {
+        title: "donnit schema not exposed in Supabase",
+        description:
+          "Server admin: in Supabase → Project Settings → API → Exposed schemas, add 'donnit' alongside 'public', then redeploy.",
+      },
+      fk_missing_profile_or_org: {
+        title: "Profile or workspace not bootstrapped",
+        description:
+          "The donnit profile or organization referenced by your account does not exist yet. Sign out, sign back in to bootstrap your workspace, then click Connect Gmail again.",
+      },
+      missing_required_column: {
+        title: "Gmail account row missing a required column",
+        description:
+          "Server admin: see function log line `[donnit] gmail upsert failed` for the column that was null. Most often signals a stale schema.",
+      },
+      rls_denied: {
+        title: "Gmail save blocked by Supabase RLS",
+        description:
+          "Server admin: the SUPABASE_SERVICE_ROLE_KEY value in Vercel does not appear to be the service-role key (it is being treated as anon). Replace with the project's service_role key and redeploy.",
+      },
+      invalid_column: {
+        title: "Gmail schema mismatch",
+        description:
+          "donnit.gmail_accounts is missing a column the server expects. Server admin: re-apply migration 0006 to project bchwrbqaacdijavtugdt.",
+      },
       unexpected: {
         title: "Gmail connect failed",
         description: "An unexpected error occurred. Click Connect Gmail to try again.",
