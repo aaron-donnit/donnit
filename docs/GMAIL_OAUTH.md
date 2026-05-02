@@ -188,6 +188,66 @@ policy check but the user is not allowed to consent because:
 A more specific variant of (2) above. Google tells you the URI it received;
 copy that string and add it verbatim to **Authorized redirect URIs**.
 
+### `Gmail token exchange failed` (toast after consent screen)
+
+The user clicked **Connect Gmail**, completed Google's consent screen, and was
+redirected back to Donnit — but the server's POST to
+`https://oauth2.googleapis.com/token` was rejected. The callback now redirects
+to one of four typed reasons; the SPA toast tells you which:
+
+- **`?gmail=redirect_mismatch`** — Google returned `redirect_uri_mismatch`. The
+  `redirect_uri` Donnit sent to `/token` does not match an Authorized redirect
+  URI on the OAuth client. Donnit always reuses `GOOGLE_REDIRECT_URI` for both
+  the auth URL and the token exchange, so the fix is on Google's side: open the
+  OAuth client and confirm **Authorized redirect URIs** contains the exact value
+  of `GOOGLE_REDIRECT_URI` (same scheme, host, path, no trailing slash, no
+  query/fragment). Common gotcha: testing on a Vercel preview
+  (`donnit-1-<hash>.vercel.app`) while only the production URL is registered —
+  add both, or set `GOOGLE_REDIRECT_URI` to whichever host you are actually
+  serving from.
+
+- **`?gmail=invalid_client`** — Google returned `invalid_client` /
+  `unauthorized_client`. The client ID/secret pair was rejected. Causes:
+  1. `GOOGLE_CLIENT_SECRET` was rotated in the Google Console but not updated
+     in the Vercel env (or only updated for one environment — Production vs
+     Preview vs Development).
+  2. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` come from different OAuth
+     clients (copy/paste from the wrong row).
+  3. The OAuth client was deleted/disabled.
+  4. Whitespace or stray newline pasted into the env var.
+  Fix: APIs & Services → Credentials → open the client → either copy the
+  existing secret or click **Reset Secret**. Update both
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` on Vercel for **all**
+  environments that serve the redirect URI, then redeploy.
+
+- **`?gmail=invalid_grant`** — Google returned `invalid_grant`. The
+  authorization code itself was rejected. Causes, in order of likelihood:
+  1. **Code was already used.** Authorization codes are single-use. This
+     usually means the callback fired twice — e.g. the user clicked back,
+     refreshed the callback page, or a double-redirect happened. Click
+     **Connect Gmail** again to start a fresh authorization. The fresh code
+     will work.
+  2. **Code expired.** Google codes are valid for ~10 minutes; if the user got
+     stuck on the consent screen, the code may have aged out before the
+     callback ran. Click **Connect Gmail** again.
+  3. **`redirect_uri` differs between the auth URL and the token exchange.**
+     Donnit reads `GOOGLE_REDIRECT_URI` at call time on each request, so this
+     can happen if the env was changed mid-flow (between the user clicking
+     Connect Gmail and Google sending them back). Avoid editing
+     `GOOGLE_REDIRECT_URI` while users are mid-OAuth.
+
+- **`?gmail=token_exchange_failed`** — generic fallback when Google's response
+  did not match any of the above. Check the server logs — the line
+  `[donnit] gmail token exchange failed: { status, googleError,
+  googleErrorDescription, reason }` contains Google's safe error fields (the
+  auth code, client secret, and tokens are NEVER logged). Look up
+  `googleError` in
+  [Google's OAuth 2.0 error reference](https://developers.google.com/identity/protocols/oauth2/web-server#exchange-authorization-code).
+
+In every case, the user can recover by clicking **Connect Gmail** again — but
+fix the underlying server config first or the next consent will fail the same
+way.
+
 ## Operational notes
 
 - Refresh tokens are issued only on the **first** consent that includes

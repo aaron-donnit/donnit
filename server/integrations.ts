@@ -207,6 +207,83 @@ export type GmailTokenSet = {
   tokenType: string;
 };
 
+// Typed reasons surfaced to the callback handler / UI. We map Google's
+// documented `error` field (invalid_grant, invalid_client, redirect_uri_mismatch,
+// unauthorized_client, invalid_request, ...) to a small stable set so the SPA
+// toast can be specific without leaking secrets. See:
+// https://developers.google.com/identity/protocols/oauth2/web-server#exchange-authorization-code
+export type GmailTokenExchangeReason =
+  | "redirect_mismatch"
+  | "invalid_client"
+  | "invalid_grant"
+  | "token_exchange_failed";
+
+export class GmailTokenExchangeError extends Error {
+  reason: GmailTokenExchangeReason;
+  status: number;
+  googleError: string | null;
+  googleErrorDescription: string | null;
+  constructor(args: {
+    reason: GmailTokenExchangeReason;
+    status: number;
+    googleError: string | null;
+    googleErrorDescription: string | null;
+  }) {
+    super(
+      `Google token exchange failed (${args.status}, ${args.googleError ?? "no_error_field"})`,
+    );
+    this.name = "GmailTokenExchangeError";
+    this.reason = args.reason;
+    this.status = args.status;
+    this.googleError = args.googleError;
+    this.googleErrorDescription = args.googleErrorDescription;
+  }
+}
+
+function classifyGoogleTokenError(googleError: string | null): GmailTokenExchangeReason {
+  // Google's RFC 6749 §5.2 error codes:
+  //   invalid_grant — code is bad, expired, already used, or redirect_uri
+  //     does not match the one used in the original auth request.
+  //   redirect_uri_mismatch — registered URIs do not contain the redirect_uri
+  //     we sent (some Google deployments still return this distinct code).
+  //   invalid_client — client_id/client_secret rejected (rotated secret,
+  //     wrong project, deleted client).
+  //   unauthorized_client — client type forbids this grant.
+  switch (googleError) {
+    case "redirect_uri_mismatch":
+      return "redirect_mismatch";
+    case "invalid_client":
+    case "unauthorized_client":
+      return "invalid_client";
+    case "invalid_grant":
+      return "invalid_grant";
+    default:
+      return "token_exchange_failed";
+  }
+}
+
+// Parse Google's error body without ever logging or rethrowing the raw
+// auth code or token contents. Google returns short JSON like:
+//   { "error": "invalid_grant", "error_description": "Bad Request" }
+// We take only `error` and a clamped `error_description`.
+function parseGoogleTokenErrorBody(text: string): {
+  error: string | null;
+  errorDescription: string | null;
+} {
+  if (!text) return { error: null, errorDescription: null };
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; error_description?: unknown };
+    const error = typeof parsed.error === "string" ? parsed.error.slice(0, 80) : null;
+    const errorDescription =
+      typeof parsed.error_description === "string"
+        ? parsed.error_description.slice(0, 200)
+        : null;
+    return { error, errorDescription };
+  } catch {
+    return { error: null, errorDescription: null };
+  }
+}
+
 export async function exchangeGmailAuthCode(code: string): Promise<GmailTokenSet> {
   const cfg = getGmailOAuthConfig();
   if (!cfg.configured) throw new Error("Gmail OAuth is not configured on this server.");
@@ -214,6 +291,9 @@ export async function exchangeGmailAuthCode(code: string): Promise<GmailTokenSet
     code,
     client_id: cfg.clientId,
     client_secret: cfg.clientSecret,
+    // MUST be byte-for-byte identical to the redirect_uri sent in the
+    // authorization request (RFC 6749 §4.1.3). We always source it from the
+    // same env var (cfg.redirectUri) for both the auth URL and this call.
     redirect_uri: cfg.redirectUri,
     grant_type: "authorization_code",
   });
@@ -224,7 +304,13 @@ export async function exchangeGmailAuthCode(code: string): Promise<GmailTokenSet
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Google token exchange failed (${res.status}): ${text.slice(0, 200)}`);
+    const { error, errorDescription } = parseGoogleTokenErrorBody(text);
+    throw new GmailTokenExchangeError({
+      reason: classifyGoogleTokenError(error),
+      status: res.status,
+      googleError: error,
+      googleErrorDescription: errorDescription,
+    });
   }
   const json = (await res.json()) as {
     access_token: string;

@@ -10,6 +10,7 @@ import {
   buildGmailAuthUrl,
   buildManualEmailCandidate,
   exchangeGmailAuthCode,
+  GmailTokenExchangeError,
   getGmailOAuthConfig,
   getIntegrationStatus,
   refreshGmailAccessToken,
@@ -1215,10 +1216,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       try {
         tokens = await exchangeGmailAuthCode(code);
       } catch (err) {
-        // Token-exchange errors never include the auth code or tokens (Google
-        // returns short error_description strings). Log only the error code.
+        // Token-exchange errors must NEVER include the auth code, client
+        // secret, access token, or refresh token. We log only Google's
+        // documented `error` / `error_description` fields plus the HTTP
+        // status. The typed reason flows to the SPA toast so the user (or
+        // admin) sees a specific message instead of a generic one.
+        if (err instanceof GmailTokenExchangeError) {
+          console.error(
+            "[donnit] gmail token exchange failed:",
+            JSON.stringify({
+              status: err.status,
+              googleError: err.googleError,
+              googleErrorDescription: err.googleErrorDescription,
+              reason: err.reason,
+            }),
+          );
+          return safeRedirect(err.reason);
+        }
         console.error(
-          "[donnit] gmail token exchange failed:",
+          "[donnit] gmail token exchange failed (unexpected):",
           err instanceof Error ? err.message.slice(0, 200) : "unknown",
         );
         return safeRedirect("token_exchange_failed");

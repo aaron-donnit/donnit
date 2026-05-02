@@ -1032,6 +1032,21 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         title: "Gmail token exchange failed",
         description: "Google rejected the auth code. Click Connect Gmail to try again.",
       },
+      redirect_mismatch: {
+        title: "Gmail redirect URI mismatch",
+        description:
+          "GOOGLE_REDIRECT_URI on the server does not match an Authorized redirect URI on the Google OAuth client. Server admin must align them and redeploy.",
+      },
+      invalid_client: {
+        title: "Gmail OAuth client rejected",
+        description:
+          "Google did not accept GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Server admin must verify the secret matches the client and redeploy.",
+      },
+      invalid_grant: {
+        title: "Gmail authorization could not be completed",
+        description:
+          "The authorization code was expired or already used (often from a double redirect or browser back). Click Connect Gmail to start a fresh authorization.",
+      },
       persist_failed: {
         title: "Could not save Gmail connection",
         description: "Database write failed. Click Connect Gmail to try again, or contact support if it persists.",
