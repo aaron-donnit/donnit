@@ -116,6 +116,78 @@ restricts access to `auth.uid() = user_id`, but a defense-in-depth deployment
 should wrap those columns with `pgsodium`-managed transparent encryption.
 That is out of scope for this PR; track as a follow-up.
 
+## Troubleshooting
+
+### `Access blocked: Authorization Error … doesn't comply with Google's OAuth 2.0 policy for keeping apps secure. Error 400: invalid_request`
+
+Google rejects the request before the consent screen renders. The Donnit
+server has already built a textbook authorization URL (`response_type=code`,
+URL-encoded `scope`, `redirect_uri`, `state`, `access_type=offline`,
+`prompt=consent`), so this error always points at the **Google Cloud OAuth
+client configuration**, not at Donnit code. Check, in order:
+
+1. **OAuth client type must be `Web application`.** This is the #1 cause of
+   this exact error. If the client was created as `Desktop`, `iOS`, `Android`,
+   `TV/Limited input`, or `Other`, Google blocks the standard browser-redirect
+   flow with this generic policy message. Fix: APIs & Services → Credentials
+   → delete the wrong client → Create credentials → OAuth client ID →
+   **Application type: Web application**. Copy the new Client ID/Secret into
+   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and redeploy.
+
+2. **`GOOGLE_REDIRECT_URI` must match an Authorized redirect URI byte-for-byte.**
+   Open the OAuth client and confirm the **Authorized redirect URIs** list
+   contains the exact value of `GOOGLE_REDIRECT_URI`:
+   - Same scheme (`https://`).
+   - Same host. If you are testing on the Vercel preview
+     `https://donnit-1.vercel.app`, the registered URI must be
+     `https://donnit-1.vercel.app/api/integrations/gmail/oauth/callback`,
+     **not** `https://donnit.ai/...`. Add both if you test on both.
+   - Same path (`/api/integrations/gmail/oauth/callback`). No trailing slash.
+   - No `#` fragment, no query string.
+   Note: Google propagates redirect-URI changes within seconds, but caches in
+   the consent screen can be stale for a minute.
+
+3. **No placeholder values in env.** If `GOOGLE_CLIENT_ID` is literally
+   `<from step 3>` or similar, Google returns this same generic error. Hit
+   `/api/health` — it reports presence (boolean) of each env var; for the
+   actual values, run `vercel env ls` or open the Vercel project settings.
+
+4. **`client_id` must come from the same Google Cloud project as the OAuth
+   consent screen.** If you have multiple projects, copying a client ID from
+   project A while the consent screen lives in project B produces this error.
+
+5. **Consent screen must be configured for `External` user type** (unless the
+   project is in a Workspace org and you explicitly want `Internal`). The
+   consent screen needs a published `App name`, support email, and developer
+   contact email before it will serve any user.
+
+6. **OAuth client must not be deleted/disabled.** A common pitfall: rotating
+   to a new client without updating the env. Confirm the client referenced by
+   `GOOGLE_CLIENT_ID` still exists in the Credentials list.
+
+### `Error 403: access_denied` (or "Donnit has not completed the Google verification process")
+
+Distinct from the policy error above. The consent screen passed Google's
+policy check but the user is not allowed to consent because:
+
+- **App is in `Testing` mode and the user is not a registered test user.**
+  Fix: APIs & Services → OAuth consent screen → **Test users** → add the
+  exact Gmail address you are signing in with. Up to 100 test users are
+  allowed without verification.
+- **App is in `In production` (Published) with the sensitive
+  `gmail.readonly` scope and has not completed Google verification.** A
+  published app with a sensitive/restricted scope serves only the developer's
+  own account until verification is approved (which can take weeks and
+  requires a homepage, privacy policy, demo video, and a CASA security
+  assessment). For developer-only / internal testing, **keep the app in
+  Testing** and add yourself as a test user — that avoids verification
+  entirely.
+
+### `redirect_uri_mismatch`
+
+A more specific variant of (2) above. Google tells you the URI it received;
+copy that string and add it verbatim to **Authorized redirect URIs**.
+
 ## Operational notes
 
 - Refresh tokens are issued only on the **first** consent that includes
