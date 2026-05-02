@@ -433,6 +433,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Diagnostic DB probe — answers whether the service-role client can reach
+  // donnit.gmail_accounts. Returns BOOLEANS only (table presence + schema
+  // exposure), plus a typed reason. Never returns row contents or any token.
+  // Useful when the OAuth callback redirects to /?gmail=missing_table or
+  // /?gmail=schema_not_exposed and the operator wants a one-shot confirmation
+  // before re-applying migration 0006.
+  app.get("/api/health/db", async (_req: Request, res: Response) => {
+    try {
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(200).json({
+          ok: false,
+          reason: "missing_service_role",
+          serviceRoleClient: false,
+        });
+        return;
+      }
+      // HEAD-style count query: cheap, never returns rows. We just want the
+      // PostgREST status code.
+      const { error } = await admin
+        .from("gmail_accounts")
+        .select("user_id", { count: "exact", head: true })
+        .limit(1);
+      if (!error) {
+        res.json({ ok: true, serviceRoleClient: true, gmailAccountsTable: true });
+        return;
+      }
+      const code = (error.code ?? "").toString();
+      const lowered = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+      let reason = "unknown";
+      if (
+        code === "PGRST205" ||
+        code === "42P01" ||
+        lowered.includes("could not find the table") ||
+        lowered.includes('relation "donnit.gmail_accounts"')
+      ) {
+        reason = "missing_table";
+      } else if (code === "PGRST106") {
+        reason = "schema_not_exposed";
+      } else if (code === "42501") {
+        reason = "rls_denied_or_anon_key";
+      }
+      res.json({
+        ok: false,
+        serviceRoleClient: true,
+        gmailAccountsTable: false,
+        reason,
+        code: error.code ?? null,
+      });
+    } catch (err) {
+      res.status(200).json({
+        ok: false,
+        reason: "probe_threw",
+        message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+      });
+    }
+  });
+
   // ------------------------------------------------------------------
   // Public + auth utility
   // ------------------------------------------------------------------
@@ -1305,9 +1363,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             { onConflict: "user_id" },
           );
         if (upsertError) {
+          // PostgREST + Postgres surface stable codes we can map to typed
+          // toast reasons. Never include tokens or auth code in the log.
+          const code = (upsertError.code ?? "").toString();
+          const message = (upsertError.message ?? "").toString();
+          const details = (upsertError.details ?? "").toString();
+          const lowered = `${message} ${details}`.toLowerCase();
           console.error(
             "[donnit] gmail upsert failed:",
-            // PostgREST errors carry safe fields; never includes tokens.
             JSON.stringify({
               code: upsertError.code,
               message: upsertError.message,
@@ -1315,7 +1378,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               hint: upsertError.hint,
             }).slice(0, 500),
           );
-          return safeRedirect("persist_failed");
+          // PGRST205 / 42P01: relation/table missing.
+          // PGRST106: schema not exposed via PostgREST settings.
+          // 23503: foreign-key violation (profile or org not bootstrapped).
+          // 23502: NOT NULL violation. 23505: unique violation (won't normally
+          //   trigger here because we onConflict on user_id, but possible if
+          //   the unique constraint name differs).
+          // 42501: insufficient privilege (RLS still blocking — only happens
+          //   if the service-role key was wrong/anon).
+          // PGRST204: column missing (schema drift between code & DB).
+          let reason = "persist_failed";
+          if (
+            code === "PGRST205" ||
+            code === "42P01" ||
+            lowered.includes("could not find the table") ||
+            lowered.includes('relation "donnit.gmail_accounts"') ||
+            lowered.includes("relation \"gmail_accounts\"")
+          ) {
+            reason = "missing_table";
+          } else if (
+            code === "PGRST106" ||
+            lowered.includes("schema") && lowered.includes("not") && lowered.includes("expose")
+          ) {
+            reason = "schema_not_exposed";
+          } else if (code === "23503") {
+            reason = "fk_missing_profile_or_org";
+          } else if (code === "23502") {
+            reason = "missing_required_column";
+          } else if (code === "42501") {
+            reason = "rls_denied";
+          } else if (code === "PGRST204" || code === "42703") {
+            reason = "invalid_column";
+          }
+          return safeRedirect(reason, {
+            googleError: code || null,
+            googleErrorDescription: (message || details || null)?.slice(0, 200) ?? null,
+          });
         }
       } catch (err) {
         console.error(
