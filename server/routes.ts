@@ -26,9 +26,209 @@ import {
   requireDonnitAuth,
 } from "./auth-supabase";
 import { DonnitStore, type DonnitTask } from "./donnit-store";
-import { isSupabaseConfigured } from "./supabase";
+import { DONNIT_SCHEMA, isSupabaseConfigured } from "./supabase";
 
 const DEMO_USER_ID = 1;
+
+// ---------------------------------------------------------------------
+// Supabase diagnostic helpers (used by /api/health/db and the Gmail
+// OAuth upsert path). Shared so both code paths emit the same typed
+// reasons and the same operator-facing fields.
+// ---------------------------------------------------------------------
+
+// Parse the Supabase project ref (e.g. "bchwrbqaacdijavtugdt") from
+// SUPABASE_URL. Returns null if the env var is missing or doesn't look
+// like a Supabase URL. The ref itself is part of the public REST URL
+// every browser request hits — it is NOT a secret.
+function parseSupabaseRef(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const m = u.host.match(/^([a-z0-9]+)\.supabase\.(co|in)$/i);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// Pull the documented PostgREST/Postgres fields off any Supabase error
+// shape (Error, plain object, or unknown). Truncates each field so a
+// pathological message can't blow up the JSON response. Never includes
+// stack traces, tokens, or auth code.
+function describeSupabaseError(err: unknown): {
+  name: string | null;
+  message: string | null;
+  code: string | null;
+  details: string | null;
+  hint: string | null;
+  status: number | null;
+} {
+  if (err && typeof err === "object") {
+    const a = err as {
+      name?: unknown;
+      message?: unknown;
+      code?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+    };
+    const cap = (v: unknown, n: number): string | null =>
+      typeof v === "string" && v.length > 0 ? v.slice(0, n) : null;
+    const num = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+    return {
+      name: cap(a.name, 80),
+      message: cap(a.message, 300),
+      code: cap(a.code, 40),
+      details: cap(a.details, 300),
+      hint: cap(a.hint, 200),
+      status: num(a.status) ?? num(a.statusCode),
+    };
+  }
+  if (typeof err === "string") {
+    return { name: null, message: err.slice(0, 300), code: null, details: null, hint: null, status: null };
+  }
+  return { name: null, message: null, code: null, details: null, hint: null, status: null };
+}
+
+// Translate a Supabase/PostgREST/network error into one of a small set
+// of operator-actionable reason codes. Order matters: cheaper-to-fix
+// reasons come first so a single error never gets bucketed as "unknown"
+// when something more specific applies.
+type DbProbeReason =
+  | "ok"
+  | "missing_service_role"
+  | "invalid_service_role_or_url"
+  | "wrong_project_or_key"
+  | "schema_not_exposed"
+  | "missing_table"
+  | "rls_denied"
+  | "fk_missing_profile_or_org"
+  | "missing_required_column"
+  | "invalid_column"
+  | "network_unreachable"
+  | "postgrest_error"
+  | "unknown_with_message";
+
+function classifySupabaseError(
+  err: ReturnType<typeof describeSupabaseError>,
+  context: { schema: string; table: string },
+): DbProbeReason {
+  const code = (err.code ?? "").toUpperCase();
+  const lowered = `${err.message ?? ""} ${err.details ?? ""} ${err.hint ?? ""}`.toLowerCase();
+  const name = (err.name ?? "").toLowerCase();
+  const status = err.status;
+
+  // 1. Network / DNS / TLS — supabase-js wraps these as plain TypeError.
+  //    No code, no status, message is "fetch failed" or similar.
+  if (
+    !code &&
+    !status &&
+    (name === "typeerror" ||
+      lowered.includes("fetch failed") ||
+      lowered.includes("getaddrinfo") ||
+      lowered.includes("enotfound") ||
+      lowered.includes("econnrefused") ||
+      lowered.includes("network") ||
+      lowered.includes("timeout") ||
+      lowered.includes("certificate"))
+  ) {
+    return "network_unreachable";
+  }
+
+  // 2. Auth / wrong key. PostgREST 401/403 with codes PGRST301/PGRST302
+  //    or "JWT", "Invalid API key", "No API key found".
+  if (
+    status === 401 ||
+    code === "PGRST301" ||
+    code === "PGRST302" ||
+    lowered.includes("invalid api key") ||
+    lowered.includes("no api key") ||
+    lowered.includes("jwt expired") ||
+    lowered.includes("jwt malformed") ||
+    lowered.includes("invalid jwt") ||
+    lowered.includes("invalid signature")
+  ) {
+    return "invalid_service_role_or_url";
+  }
+
+  // 3. Schema not exposed via PostgREST settings (db-schemas / db-extra-search-path).
+  if (code === "PGRST106" || (lowered.includes("schema") && lowered.includes("not") && lowered.includes("expose"))) {
+    return "schema_not_exposed";
+  }
+
+  // 4. Table missing in the schema cache (PostgREST PGRST205) or in
+  //    Postgres (42P01). The PGRST205 message names the qualified
+  //    identifier — match on it so a cached/stale schema is still tagged
+  //    correctly.
+  const qualified = `${context.schema}.${context.table}`.toLowerCase();
+  if (
+    code === "PGRST205" ||
+    code === "42P01" ||
+    lowered.includes("could not find the table") ||
+    lowered.includes(`relation "${qualified}"`) ||
+    lowered.includes(`relation "${context.table}"`)
+  ) {
+    return "missing_table";
+  }
+
+  // 5. RLS / privilege errors. With a valid service-role key these
+  //    should not appear, so when they do the most likely cause is the
+  //    deployed key actually being the anon key (or a key from a
+  //    different project that doesn't have service_role).
+  if (code === "42501" || lowered.includes("permission denied") || lowered.includes("rls")) {
+    return "rls_denied";
+  }
+
+  if (code === "23503") return "fk_missing_profile_or_org";
+  if (code === "23502") return "missing_required_column";
+  if (code === "PGRST204" || code === "42703") return "invalid_column";
+
+  // 6. Anything else with a real code/status from PostgREST.
+  if (code || status) return "postgrest_error";
+
+  // 7. We have a message but nothing else — better than the previous
+  //    "unknown" because the message itself ships in the response.
+  if (err.message) return "unknown_with_message";
+
+  return "postgrest_error";
+}
+
+// Bare-fetch probe of the PostgREST root. supabase-js swallows
+// non-PostgREST responses (e.g. 401 Cloudflare HTML when the project is
+// paused) into a generic message; hitting REST directly with the
+// service-role key as `apikey`/`Authorization` lets us read the real
+// HTTP status. Never logs the key value.
+async function probePostgrestRoot(
+  url: string,
+  serviceRole: string,
+): Promise<{ status: number | null; bodySnippet: string | null; error: string | null }> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${url.replace(/\/+$/, "")}/rest/v1/`, {
+      method: "GET",
+      headers: { apikey: serviceRole, authorization: `Bearer ${serviceRole}` },
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    let snippet: string | null = null;
+    try {
+      const text = await res.text();
+      snippet = text.slice(0, 200);
+    } catch {
+      snippet = null;
+    }
+    return { status: res.status, bodySnippet: snippet, error: null };
+  } catch (err) {
+    return {
+      status: null,
+      bodySnippet: null,
+      error: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    };
+  }
+}
 
 // Supabase RPC errors (and most PostgREST errors) come back as plain objects
 // with `{ message, code, details, hint }` rather than Error instances. Passing
@@ -433,60 +633,174 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Diagnostic DB probe — answers whether the service-role client can reach
-  // donnit.gmail_accounts. Returns BOOLEANS only (table presence + schema
-  // exposure), plus a typed reason. Never returns row contents or any token.
-  // Useful when the OAuth callback redirects to /?gmail=missing_table or
-  // /?gmail=schema_not_exposed and the operator wants a one-shot confirmation
-  // before re-applying migration 0006.
+  // Diagnostic DB probe — answers whether the deployed service-role client
+  // can reach donnit.gmail_accounts. Returns BOOLEANS + sanitized PostgREST
+  // error fields + a typed reason from the DbProbeReason union above.
+  //
+  // NEVER includes: the service-role key itself, any token, any row data, a
+  // stack trace, or the auth code. The Supabase project ref IS included —
+  // it appears in every browser request to *.supabase.co and is not a
+  // secret; including it lets an operator confirm at a glance whether the
+  // deployed SUPABASE_URL points at the project they expected.
+  //
+  // Probe layout (each step short-circuits on the first definitive answer):
+  //   1. service-role env var present?
+  //   2. PostgREST root reachable with that key (catches paused project,
+  //      wrong URL, wrong/anon key, network outages — none of which
+  //      supabase-js surfaces with a useful code).
+  //   3. service-role client can HEAD-select donnit.gmail_accounts.
+  //   4. (always, when 3 fails) HEAD-select donnit.profiles for comparison
+  //      so the operator can tell "schema works, this table is missing"
+  //      apart from "schema not exposed at all".
   app.get("/api/health/db", async (_req: Request, res: Response) => {
+    const supabaseUrl = process.env.SUPABASE_URL ?? "";
+    const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+    const projectRef = parseSupabaseRef(supabaseUrl);
+    const baseResponse = {
+      schema: DONNIT_SCHEMA,
+      projectRef,
+      supabaseUrlPresent: Boolean(supabaseUrl),
+      serviceRoleKeyPresent: Boolean(serviceRole),
+    };
+
     try {
+      if (!serviceRole || !supabaseUrl) {
+        res.status(200).json({
+          ok: false,
+          reason: "missing_service_role",
+          ...baseResponse,
+        });
+        return;
+      }
+
+      // Step 1: bare-fetch the REST root. This catches the failure modes
+      // supabase-js hides behind generic "TypeError: fetch failed".
+      const rootProbe = await probePostgrestRoot(supabaseUrl, serviceRole);
+      if (rootProbe.error) {
+        res.status(200).json({
+          ok: false,
+          reason: "network_unreachable",
+          ...baseResponse,
+          rest: { status: null, error: rootProbe.error },
+        });
+        return;
+      }
+      // PostgREST root returns 200 (with a tiny JSON listing) for a valid
+      // key, and 401/403 with HTML/JSON for invalid/missing/wrong-project
+      // keys. Anything 5xx means the project itself is unhealthy.
+      if (rootProbe.status === 401 || rootProbe.status === 403) {
+        res.status(200).json({
+          ok: false,
+          reason: "invalid_service_role_or_url",
+          ...baseResponse,
+          rest: {
+            status: rootProbe.status,
+            bodySnippet: rootProbe.bodySnippet,
+          },
+        });
+        return;
+      }
+      if (rootProbe.status !== null && rootProbe.status >= 500) {
+        res.status(200).json({
+          ok: false,
+          reason: "postgrest_error",
+          ...baseResponse,
+          rest: {
+            status: rootProbe.status,
+            bodySnippet: rootProbe.bodySnippet,
+          },
+        });
+        return;
+      }
+
       const admin = createSupabaseAdminClient();
       if (!admin) {
         res.status(200).json({
           ok: false,
           reason: "missing_service_role",
-          serviceRoleClient: false,
+          ...baseResponse,
         });
         return;
       }
-      // HEAD-style count query: cheap, never returns rows. We just want the
-      // PostgREST status code.
-      const { error } = await admin
+
+      // Step 2: HEAD-select gmail_accounts with the schema-pinned client.
+      const gmailProbe = await admin
         .from("gmail_accounts")
         .select("user_id", { count: "exact", head: true })
         .limit(1);
-      if (!error) {
-        res.json({ ok: true, serviceRoleClient: true, gmailAccountsTable: true });
+      if (!gmailProbe.error) {
+        res.json({
+          ok: true,
+          ...baseResponse,
+          rest: { status: rootProbe.status },
+          gmailAccountsTable: true,
+        });
         return;
       }
-      const code = (error.code ?? "").toString();
-      const lowered = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
-      let reason = "unknown";
-      if (
-        code === "PGRST205" ||
-        code === "42P01" ||
-        lowered.includes("could not find the table") ||
-        lowered.includes('relation "donnit.gmail_accounts"')
-      ) {
-        reason = "missing_table";
-      } else if (code === "PGRST106") {
-        reason = "schema_not_exposed";
-      } else if (code === "42501") {
-        reason = "rls_denied_or_anon_key";
-      }
-      res.json({
-        ok: false,
-        serviceRoleClient: true,
-        gmailAccountsTable: false,
-        reason,
-        code: error.code ?? null,
+
+      const gmailErr = describeSupabaseError(gmailProbe.error);
+      const gmailReason = classifySupabaseError(gmailErr, {
+        schema: DONNIT_SCHEMA,
+        table: "gmail_accounts",
       });
-    } catch (err) {
+
+      // Step 3: HEAD-select profiles to disambiguate "schema not exposed"
+      // (both probes fail the same way) from "table missing"
+      // (profiles works, gmail_accounts does not).
+      const profilesProbe = await admin
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .limit(1);
+      const profilesOk = !profilesProbe.error;
+      const profilesErr = profilesProbe.error
+        ? describeSupabaseError(profilesProbe.error)
+        : null;
+      const profilesReason = profilesErr
+        ? classifySupabaseError(profilesErr, { schema: DONNIT_SCHEMA, table: "profiles" })
+        : "ok";
+
+      // Refine the reason: if profiles also fails with schema_not_exposed
+      // OR missing_table, the schema itself is the problem (or the JS
+      // client is wrong). If profiles works but gmail_accounts says
+      // missing_table, the table really is missing in this project.
+      let reason: DbProbeReason = gmailReason;
+      if (
+        gmailReason === "missing_table" &&
+        (profilesReason === "schema_not_exposed" ||
+          profilesReason === "missing_table" ||
+          profilesReason === "rls_denied" ||
+          profilesReason === "invalid_service_role_or_url")
+      ) {
+        // Two tables both unreachable: if profiles fails for a different
+        // reason than gmail_accounts, surface the more general one
+        // because a fix to the broader cause likely fixes both.
+        reason =
+          profilesReason === "schema_not_exposed"
+            ? "schema_not_exposed"
+            : profilesReason === "invalid_service_role_or_url"
+              ? "wrong_project_or_key"
+              : "wrong_project_or_key";
+      }
+
       res.status(200).json({
         ok: false,
-        reason: "probe_threw",
-        message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+        reason,
+        ...baseResponse,
+        rest: { status: rootProbe.status },
+        gmailAccountsTable: false,
+        gmailAccountsError: gmailErr,
+        profilesTable: profilesOk,
+        profilesError: profilesErr,
+        profilesReason,
+      });
+    } catch (err) {
+      const described = describeSupabaseError(err);
+      res.status(200).json({
+        ok: false,
+        reason: "unknown_with_message",
+        ...baseResponse,
+        threw: true,
+        error: described,
       });
     }
   });
@@ -1363,56 +1677,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             { onConflict: "user_id" },
           );
         if (upsertError) {
-          // PostgREST + Postgres surface stable codes we can map to typed
-          // toast reasons. Never include tokens or auth code in the log.
-          const code = (upsertError.code ?? "").toString();
-          const message = (upsertError.message ?? "").toString();
-          const details = (upsertError.details ?? "").toString();
-          const lowered = `${message} ${details}`.toLowerCase();
+          // Reuse the same diagnostic helpers /api/health/db uses so a
+          // toast reason matches what the operator sees on the probe.
+          // Never log tokens, auth code, or the service-role value.
+          const described = describeSupabaseError(upsertError);
+          const reason = classifySupabaseError(described, {
+            schema: DONNIT_SCHEMA,
+            table: "gmail_accounts",
+          });
           console.error(
             "[donnit] gmail upsert failed:",
             JSON.stringify({
-              code: upsertError.code,
-              message: upsertError.message,
-              details: upsertError.details,
-              hint: upsertError.hint,
+              reason,
+              schema: DONNIT_SCHEMA,
+              projectRef: parseSupabaseRef(process.env.SUPABASE_URL),
+              ...described,
             }).slice(0, 500),
           );
-          // PGRST205 / 42P01: relation/table missing.
-          // PGRST106: schema not exposed via PostgREST settings.
-          // 23503: foreign-key violation (profile or org not bootstrapped).
-          // 23502: NOT NULL violation. 23505: unique violation (won't normally
-          //   trigger here because we onConflict on user_id, but possible if
-          //   the unique constraint name differs).
-          // 42501: insufficient privilege (RLS still blocking — only happens
-          //   if the service-role key was wrong/anon).
-          // PGRST204: column missing (schema drift between code & DB).
-          let reason = "persist_failed";
-          if (
-            code === "PGRST205" ||
-            code === "42P01" ||
-            lowered.includes("could not find the table") ||
-            lowered.includes('relation "donnit.gmail_accounts"') ||
-            lowered.includes("relation \"gmail_accounts\"")
-          ) {
-            reason = "missing_table";
-          } else if (
-            code === "PGRST106" ||
-            lowered.includes("schema") && lowered.includes("not") && lowered.includes("expose")
-          ) {
-            reason = "schema_not_exposed";
-          } else if (code === "23503") {
-            reason = "fk_missing_profile_or_org";
-          } else if (code === "23502") {
-            reason = "missing_required_column";
-          } else if (code === "42501") {
-            reason = "rls_denied";
-          } else if (code === "PGRST204" || code === "42703") {
-            reason = "invalid_column";
-          }
+          // The toast reason set the SPA already understands stays a
+          // strict subset of DbProbeReason so older clients keep working.
           return safeRedirect(reason, {
-            googleError: code || null,
-            googleErrorDescription: (message || details || null)?.slice(0, 200) ?? null,
+            googleError: described.code ?? null,
+            googleErrorDescription:
+              (described.message || described.details || null)?.slice(0, 200) ?? null,
           });
         }
       } catch (err) {
