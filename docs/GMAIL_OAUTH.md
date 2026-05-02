@@ -311,6 +311,104 @@ reason applies, run this checklist top-to-bottom:
 7. Trigger a fresh **Connect Gmail** click from a clean browser tab (no
    back-button, no refresh on the consent screen).
 
+### `Gmail API call failed` (toast after clicking Scan email)
+
+The user is connected (the OAuth row exists in `donnit.gmail_accounts` and the
+access token refreshes cleanly), but `POST /api/integrations/gmail/scan`'s call
+to `https://gmail.googleapis.com/gmail/v1/users/me/messages` was rejected by
+Google. Donnit now parses Google's error envelope and routes each failure to a
+typed reason; the UI shows the matching toast and the Vercel function log
+prints a single sanitized line:
+
+```
+[donnit] gmail api error: {
+  "httpStatus": 403,
+  "googleStatus": "PERMISSION_DENIED",
+  "googleReason": "accessNotConfigured",
+  "googleDomain": "usageLimits",
+  "googleMessage": "Gmail API has not been used in project ... before or it is disabled.",
+  "mappedReason": "gmail_api_not_enabled"
+}
+```
+
+Tokens, full bodies, and request URLs with credentials are NEVER logged — only
+the structured envelope above.
+
+#### Triage by typed reason
+
+- **`gmail_api_not_enabled`** (toast: *Enable Gmail API in Google Cloud*) —
+  Google returned `accessNotConfigured` / `serviceDisabled`, or the message
+  literally says "Gmail API has not been used in project …". The OAuth client
+  was created in a Google Cloud project where the Gmail API library has never
+  been enabled. Fix: open
+  <https://console.cloud.google.com/> → select the project tied to
+  `GOOGLE_CLIENT_ID` → **APIs & Services → Library** → search **Gmail API** →
+  click **Enable**. Wait ~1 minute for propagation, redeploy if your platform
+  caches build outputs, then click **Scan email** again. No reconnect needed —
+  the existing OAuth token will start working as soon as the API is enabled
+  on the project that issued it.
+
+- **`gmail_scope_missing`** (toast: *Reconnect Gmail with read access*) —
+  Google returned `insufficientPermissions` / `insufficientScopes` or the
+  message mentions a missing scope. The user authorized Donnit but did not
+  grant `https://www.googleapis.com/auth/gmail.readonly` (often because they
+  unchecked the "Read your email" box on Google's granular-consent screen).
+  Fix: click **Disconnect Gmail**, then **Connect Gmail**, and on Google's
+  consent screen leave **all** Donnit permissions checked. The granular
+  consent screen lets users opt out of individual scopes — when that happens
+  the scan path always 403s.
+
+- **`gmail_reconnect_required`** (toast: *Reconnect Gmail*) — Google returned
+  401 / `UNAUTHENTICATED`. The access token is rejected and the refresh
+  attempt either failed or wasn't possible. Click **Reconnect Gmail**. If this
+  recurs, check that the user hasn't revoked Donnit at
+  <https://myaccount.google.com/permissions>.
+
+- **`gmail_api_forbidden`** (toast: *Gmail API access denied*) — Google
+  returned 403 / `PERMISSION_DENIED` and the reason did NOT match any of the
+  more specific cases above. Common causes:
+  - The OAuth client and the project where Gmail API is enabled are
+    **different Google Cloud projects**. The `client_id` carries the project,
+    so enabling Gmail API in project B doesn't help if `GOOGLE_CLIENT_ID`
+    points at project A. Either enable Gmail API in project A, or rotate
+    `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` to a client created in project B.
+  - The consenting Google account is in a Workspace org that disallows
+    third-party app access to Gmail. The Workspace admin must allowlist the
+    app or relax the policy.
+
+- **`gmail_rate_limited`** (toast: *Gmail API rate limit hit*) — Google
+  returned 429 or `rateLimitExceeded` / `quotaExceeded`. Wait a minute and
+  retry. If this is sustained, check the Gmail API quota in the Google Cloud
+  Console for the project.
+
+- **`gmail_api_unavailable`** (toast: *Gmail API temporarily unavailable*) —
+  Google returned 502/503/504. Transient Google outage; retry shortly. Check
+  <https://www.google.com/appsstatus/> if it persists.
+
+- **`gmail_api_bad_request`** (toast: *Gmail API rejected the request*) —
+  Google returned 400 / `INVALID_ARGUMENT`. This is a Donnit bug (a malformed
+  query string or message id). File an issue with the `googleMessage` from
+  the log line.
+
+- **`gmail_api_call_failed`** (toast: *Email scan unavailable*) — generic
+  fallback when none of the above matched. Look at the log line's
+  `httpStatus`, `googleStatus`, and `googleMessage` fields and compare against
+  Google's [Gmail API error reference](https://developers.google.com/gmail/api/guides/handle-errors).
+
+#### Quick checks
+
+1. **Is Gmail API enabled in the right project?** Open the Google Cloud
+   Console and switch to the project whose Credentials list contains
+   `GOOGLE_CLIENT_ID`. **APIs & Services → Enabled APIs & services** must list
+   **Gmail API**. If not, **APIs & Services → Library → Gmail API → Enable**.
+2. **Did the user grant the read scope?** On Google's consent screen there is
+   a checkbox per requested permission; if the user unchecked "Read, compose,
+   send, and permanently delete all your email from Gmail" the scope is not
+   granted. Reconnect and accept the read permission.
+3. **Is the OAuth client still in the same project as the enabled Gmail API?**
+   Compare the **Project** column of the Credentials list against the project
+   where Gmail API is enabled.
+
 ## Operational notes
 
 - Refresh tokens are issued only on the **first** consent that includes

@@ -1210,7 +1210,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       // display server JSON to users — only the strings below.
       const message = error instanceof Error ? error.message : String(error);
       const sep = message.indexOf(": ");
-      let parsed: { reason?: string; message?: string } = {};
+      let parsed: {
+        reason?: string;
+        message?: string;
+        googleStatus?: number;
+        googleError?: { status?: string; message?: string; reason?: string; domain?: string };
+      } = {};
       if (sep > -1) {
         try {
           parsed = JSON.parse(message.slice(sep + 2));
@@ -1235,13 +1240,42 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         action = { label: "Connect Gmail", run: () => connectGmail.mutate() };
       } else if (
         reason === "gmail_oauth_token_invalid" ||
-        reason === "gmail_auth_required"
+        reason === "gmail_auth_required" ||
+        reason === "gmail_reconnect_required"
       ) {
         title = "Reconnect Gmail";
         description =
           parsed.message ??
           "Gmail authorization expired. Reconnect Gmail and try again.";
         action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
+      } else if (reason === "gmail_scope_missing") {
+        title = "Reconnect Gmail with read access";
+        description =
+          parsed.message ??
+          "Donnit's Gmail authorization is missing the gmail.readonly scope. Reconnect Gmail and accept the 'Read your email' permission on Google's consent screen.";
+        action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
+      } else if (reason === "gmail_api_not_enabled") {
+        title = "Enable Gmail API in Google Cloud";
+        description =
+          parsed.message ??
+          "Gmail API is not enabled in the Google Cloud project tied to this OAuth client. Open console.cloud.google.com → APIs & Services → Library → Gmail API → Enable, then redeploy and try Scan email again.";
+      } else if (reason === "gmail_api_forbidden") {
+        title = "Gmail API access denied";
+        description =
+          parsed.message ??
+          "Google rejected the Gmail API request as forbidden. Confirm the OAuth client and Gmail API are in the same Google Cloud project, and that your account is allowed to use this app.";
+      } else if (reason === "gmail_rate_limited") {
+        title = "Gmail API rate limit hit";
+        description =
+          parsed.message ?? "Wait about a minute and click Scan email again.";
+      } else if (reason === "gmail_api_unavailable") {
+        title = "Gmail API temporarily unavailable";
+        description =
+          parsed.message ?? "Google reports the Gmail API is unavailable. Try again shortly.";
+      } else if (reason === "gmail_api_bad_request") {
+        title = "Gmail API rejected the request";
+        description =
+          parsed.message ?? "Donnit sent a request Gmail rejected as malformed. Please report this.";
       } else if (reason === "gmail_oauth_not_configured") {
         title = "Email scan not available";
         description =
@@ -1256,6 +1290,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           description =
             "Google OAuth is not configured on this server. Ask the operator to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
         }
+      } else if (reason === "gmail_api_call_failed") {
+        title = "Email scan unavailable";
+        description =
+          parsed.message ?? "Gmail API call failed. Try again shortly.";
       } else {
         title = "Email scan unavailable";
         description =

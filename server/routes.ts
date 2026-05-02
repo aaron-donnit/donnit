@@ -1395,9 +1395,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const result = await scanGmailForTaskCandidates({ oauthAccessToken });
     if (!result.ok) {
-      // If OAuth path failed mid-scan with 401, mark the account as needing
-      // reconnect so the next status fetch reflects reality.
-      if (oauthAccountStatus === "connected" && result.reason === "gmail_oauth_token_invalid" && req.donnitAuth) {
+      // If OAuth path failed mid-scan because the token/scope is invalid,
+      // mark the account as needing reconnect so the next status fetch
+      // reflects reality and the UI shows "Reconnect Gmail".
+      if (
+        oauthAccountStatus === "connected" &&
+        (result.reason === "gmail_oauth_token_invalid" ||
+          result.reason === "gmail_reconnect_required" ||
+          result.reason === "gmail_scope_missing") &&
+        req.donnitAuth
+      ) {
         try {
           const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
           await store.patchGmailAccount({ status: "error" });
@@ -1416,14 +1423,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           "Google OAuth env is not configured on this server. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
       }
       const status =
-        reason === "gmail_auth_required" || reason === "gmail_oauth_token_invalid"
+        reason === "gmail_auth_required" ||
+        reason === "gmail_oauth_token_invalid" ||
+        reason === "gmail_reconnect_required"
           ? 401
-          : reason === "gmail_runtime_unavailable" || reason === "gmail_oauth_not_configured"
+          : reason === "gmail_runtime_unavailable" ||
+              reason === "gmail_oauth_not_configured" ||
+              reason === "gmail_api_unavailable"
             ? 503
             : reason === "gmail_oauth_not_connected"
               ? 412
-              : 424;
-      res.status(status).json({ ok: false, reason, message });
+              : reason === "gmail_api_not_enabled" || reason === "gmail_api_forbidden"
+                ? 403
+                : reason === "gmail_scope_missing"
+                  ? 403
+                  : reason === "gmail_rate_limited"
+                    ? 429
+                    : reason === "gmail_api_bad_request"
+                      ? 400
+                      : 424;
+      // Pass through Google's sanitized envelope summary so the UI/log can
+      // show the operator exactly what Google said.
+      const payload: Record<string, unknown> = { ok: false, reason, message };
+      if ("googleStatus" in result && result.googleStatus !== undefined) {
+        payload.googleStatus = result.googleStatus;
+      }
+      if ("googleError" in result && result.googleError) {
+        payload.googleError = result.googleError;
+      }
+      res.status(status).json(payload);
       return;
     }
     const candidates = result.candidates;

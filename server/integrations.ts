@@ -536,8 +536,21 @@ export type GmailScanResult =
         | "gmail_oauth_token_invalid"
         | "gmail_oauth_not_connected"
         | "gmail_oauth_not_configured"
-        | "gmail_not_connected_or_tool_unavailable";
+        | "gmail_not_connected_or_tool_unavailable"
+        // First-party Gmail API error reasons. These map Google's HTTP+error
+        // payload (status, message, reason/domain) to an action the user or
+        // operator can take. Sanitized strings only — never tokens or bodies.
+        | "gmail_api_not_enabled"
+        | "gmail_scope_missing"
+        | "gmail_reconnect_required"
+        | "gmail_rate_limited"
+        | "gmail_api_forbidden"
+        | "gmail_api_unavailable"
+        | "gmail_api_bad_request"
+        | "gmail_api_call_failed";
       message: string;
+      googleStatus?: number;
+      googleError?: { status?: string; message?: string; reason?: string; domain?: string };
     };
 
 const RUNTIME_UNAVAILABLE_MESSAGE =
@@ -750,6 +763,72 @@ function extractMessageBody(payload: GmailApiPart | undefined): string {
   return plain || fallback;
 }
 
+// Gmail returns errors as either `{ error: { code, message, status, errors:[{reason,domain,message}] } }`
+// (the v1 envelope) or, for some 4xx auth failures, `{ error: "invalid_grant", error_description: "..." }`.
+// We extract a sanitized summary so callers can map to a typed reason without
+// ever touching the raw body again.
+type GmailApiErrorSummary = {
+  httpStatus: number;
+  status?: string; // e.g. "PERMISSION_DENIED", "UNAUTHENTICATED", "FAILED_PRECONDITION"
+  message?: string; // Google's short message, sanitized + truncated
+  reason?: string; // first errors[].reason — e.g. "accessNotConfigured", "insufficientPermissions", "rateLimitExceeded"
+  domain?: string; // first errors[].domain — e.g. "usageLimits", "global"
+};
+
+class GmailApiError extends Error {
+  summary: GmailApiErrorSummary;
+  constructor(summary: GmailApiErrorSummary) {
+    super(`Gmail API ${summary.httpStatus} ${summary.status ?? ""}`.trim());
+    this.name = "GmailApiError";
+    this.summary = summary;
+  }
+}
+
+function sanitize(input: unknown, max = 240): string | undefined {
+  if (typeof input !== "string") return undefined;
+  // Drop control chars / strip HTML-ish junk; trim long messages so we never
+  // log/return a full email body or token-laden URL.
+  const cleaned = input.replace(/[ -]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return undefined;
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
+}
+
+function parseGmailErrorBody(httpStatus: number, raw: string): GmailApiErrorSummary {
+  const summary: GmailApiErrorSummary = { httpStatus };
+  if (!raw) return summary;
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    summary.message = sanitize(raw);
+    return summary;
+  }
+  const err = (body as { error?: unknown })?.error;
+  if (typeof err === "string") {
+    // OAuth-style: { error: "invalid_grant", error_description: "..." }
+    summary.status = sanitize(err, 64);
+    summary.message = sanitize((body as { error_description?: unknown }).error_description);
+    return summary;
+  }
+  if (err && typeof err === "object") {
+    const e = err as {
+      code?: number;
+      status?: string;
+      message?: string;
+      errors?: Array<{ reason?: string; domain?: string; message?: string }>;
+    };
+    summary.status = sanitize(e.status, 64);
+    summary.message = sanitize(e.message);
+    const first = e.errors?.[0];
+    if (first) {
+      summary.reason = sanitize(first.reason, 64);
+      summary.domain = sanitize(first.domain, 64);
+      if (!summary.message) summary.message = sanitize(first.message);
+    }
+  }
+  return summary;
+}
+
 async function gmailApiFetch<T>(
   accessToken: string,
   path: string,
@@ -766,14 +845,108 @@ async function gmailApiFetch<T>(
       accept: "application/json",
     },
   });
-  if (res.status === 401) {
-    throw Object.assign(new Error("Gmail OAuth token rejected (401)."), { gmailStatus: 401 });
+  if (res.ok) {
+    return (await res.json()) as T;
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Gmail API ${path} failed (${res.status}): ${text.slice(0, 200)}`);
+  const text = await res.text().catch(() => "");
+  const summary = parseGmailErrorBody(res.status, text);
+  throw new GmailApiError(summary);
+}
+
+// Map a Google error envelope to one of our typed scan-failure reasons.
+// Order matters: we look at errors[].reason first (Google's most specific
+// machine-readable signal), then status, then HTTP code.
+function classifyGmailApiError(s: GmailApiErrorSummary): {
+  reason: Extract<
+    (GmailScanResult & { ok: false })["reason"],
+    | "gmail_api_not_enabled"
+    | "gmail_scope_missing"
+    | "gmail_reconnect_required"
+    | "gmail_rate_limited"
+    | "gmail_api_forbidden"
+    | "gmail_api_unavailable"
+    | "gmail_api_bad_request"
+    | "gmail_api_call_failed"
+  >;
+  message: string;
+} {
+  const reason = (s.reason ?? "").toLowerCase();
+  const status = (s.status ?? "").toUpperCase();
+  const http = s.httpStatus;
+  const tail = s.message ? ` (Google: ${s.message})` : "";
+
+  if (
+    reason === "accessnotconfigured" ||
+    reason === "servicedisabled" ||
+    /\bGmail API\b.*\b(not been used|disabled|enable it)\b/i.test(s.message ?? "")
+  ) {
+    return {
+      reason: "gmail_api_not_enabled",
+      message:
+        "Gmail API is not enabled in the Google Cloud project tied to this OAuth client. Enable it at console.cloud.google.com → APIs & Services → Library → Gmail API → Enable, then redeploy and click Scan email again." +
+        tail,
+    };
   }
-  return (await res.json()) as T;
+  if (
+    reason === "insufficientpermissions" ||
+    reason === "insufficientscopes" ||
+    reason === "forbidden" && /scope/i.test(s.message ?? "") ||
+    /insufficient.*scope/i.test(s.message ?? "")
+  ) {
+    return {
+      reason: "gmail_scope_missing",
+      message:
+        "Donnit's Gmail authorization is missing the gmail.readonly scope. Disconnect Gmail and reconnect — make sure you accept the 'Read your email' permission on Google's consent screen." +
+        tail,
+    };
+  }
+  if (
+    http === 401 ||
+    status === "UNAUTHENTICATED" ||
+    reason === "authError" ||
+    reason === "unauthorized"
+  ) {
+    return {
+      reason: "gmail_reconnect_required",
+      message: "Gmail authorization was rejected. Reconnect Gmail and try again." + tail,
+    };
+  }
+  if (
+    http === 429 ||
+    reason === "ratelimitexceeded" ||
+    reason === "userratelimitexceeded" ||
+    reason === "quotaexceeded" ||
+    status === "RESOURCE_EXHAUSTED"
+  ) {
+    return {
+      reason: "gmail_rate_limited",
+      message: "Gmail API rate limit hit. Wait a minute and try Scan email again." + tail,
+    };
+  }
+  if (http === 403 || status === "PERMISSION_DENIED") {
+    return {
+      reason: "gmail_api_forbidden",
+      message:
+        "Google rejected the Gmail API request as forbidden. Confirm the OAuth client and Gmail API are in the same Google Cloud project, and that the consenting account is allowed to use this app." +
+        tail,
+    };
+  }
+  if (http === 503 || http === 502 || http === 504 || status === "UNAVAILABLE") {
+    return {
+      reason: "gmail_api_unavailable",
+      message: "Gmail API is temporarily unavailable. Try again in a moment." + tail,
+    };
+  }
+  if (http === 400 || status === "INVALID_ARGUMENT") {
+    return {
+      reason: "gmail_api_bad_request",
+      message: "Gmail API rejected the request as malformed. This is a Donnit bug — please report it." + tail,
+    };
+  }
+  return {
+    reason: "gmail_api_call_failed",
+    message: `Gmail API call failed (HTTP ${http}${status ? ` ${status}` : ""}). Try again shortly.${tail}`,
+  };
 }
 
 type GmailListResponse = {
@@ -781,13 +954,51 @@ type GmailListResponse = {
   resultSizeEstimate?: number;
 };
 
+function gmailApiFailureToScanResult(error: unknown): GmailScanResult & { ok: false } {
+  if (error instanceof GmailApiError) {
+    const classified = classifyGmailApiError(error.summary);
+    // Log a single sanitized line for the operator. Tokens, URLs, and bodies
+    // are never included — only the structured Google envelope summary.
+    console.error("[donnit] gmail api error:", {
+      httpStatus: error.summary.httpStatus,
+      googleStatus: error.summary.status,
+      googleReason: error.summary.reason,
+      googleDomain: error.summary.domain,
+      googleMessage: error.summary.message,
+      mappedReason: classified.reason,
+    });
+    return {
+      ok: false,
+      reason: classified.reason,
+      message: classified.message,
+      googleStatus: error.summary.httpStatus,
+      googleError: {
+        status: error.summary.status,
+        message: error.summary.message,
+        reason: error.summary.reason,
+        domain: error.summary.domain,
+      },
+    };
+  }
+  console.error(
+    "[donnit] gmail api transport error:",
+    error instanceof Error ? error.message : "unknown",
+  );
+  return {
+    ok: false,
+    reason: "gmail_api_call_failed",
+    message: "Gmail API call failed before Google could respond. Check your connection and retry.",
+  };
+}
+
 export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanResult> {
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const after = sevenDaysAgo.toISOString().slice(0, 10);
+  // Target unread inbox mail in the last 30 days. We deliberately ask for
+  // `in:inbox` so promotional/spam folders are excluded, and fall back to a
+  // narrower urgency-keyword query so we still surface action-oriented mail
+  // even when the inbox is quiet.
   const queries = [
-    `in:inbox is:unread newer_than:7d`,
-    `is:unread (urgent OR "action required" OR "please review" OR deadline) after:${after}`,
+    `in:inbox is:unread newer_than:30d`,
+    `is:unread (urgent OR "action required" OR "please review" OR deadline) newer_than:30d`,
   ];
 
   const messageIds = new Set<string>();
@@ -798,19 +1009,7 @@ export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanR
       });
       for (const m of list.messages ?? []) messageIds.add(m.id);
     } catch (error) {
-      const status = (error as { gmailStatus?: number }).gmailStatus;
-      if (status === 401) {
-        return {
-          ok: false,
-          reason: "gmail_oauth_token_invalid",
-          message: "Gmail OAuth token rejected. Reconnect Gmail and try again.",
-        };
-      }
-      return {
-        ok: false,
-        reason: "gmail_not_connected_or_tool_unavailable",
-        message: "Gmail API call failed. Try again shortly.",
-      };
+      return gmailApiFailureToScanResult(error);
     }
     if (messageIds.size >= 25) break;
   }
@@ -827,13 +1026,19 @@ export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanR
         query: { format: "full" },
       });
     } catch (error) {
-      const status = (error as { gmailStatus?: number }).gmailStatus;
-      if (status === 401) {
-        return {
-          ok: false,
-          reason: "gmail_oauth_token_invalid",
-          message: "Gmail OAuth token rejected during fetch. Reconnect Gmail and try again.",
-        };
+      // Hard-fail on auth/scope/api-not-enabled errors so the user can act on
+      // them; tolerate transient per-message failures (rate limit, 5xx) by
+      // skipping the message and continuing.
+      if (error instanceof GmailApiError) {
+        const classified = classifyGmailApiError(error.summary);
+        if (
+          classified.reason === "gmail_reconnect_required" ||
+          classified.reason === "gmail_scope_missing" ||
+          classified.reason === "gmail_api_not_enabled" ||
+          classified.reason === "gmail_api_forbidden"
+        ) {
+          return gmailApiFailureToScanResult(error);
+        }
       }
       continue;
     }
