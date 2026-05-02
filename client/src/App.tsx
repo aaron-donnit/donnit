@@ -1087,7 +1087,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       rls_denied: {
         title: "Gmail save blocked by Supabase RLS",
         description:
-          "Server admin: the SUPABASE_SERVICE_ROLE_KEY value in Vercel does not appear to be the service-role key (it is being treated as anon). Replace with the project's service_role key and redeploy.",
+          "Postgres rejected the write with a row-level-security violation. If /api/health/db reports OK, the service-role key is fine — re-sign-in to bootstrap your donnit profile and try again, or check the function log line `[donnit] gmail upsert failed` for code/details/hint.",
+      },
+      permission_denied_grants_missing: {
+        title: "Gmail save blocked: missing table grants",
+        description:
+          "Postgres returned 42501 permission denied. The service-role key is valid (health/db OK) but the donnit schema is missing INSERT/UPDATE grants for service_role. Server admin: apply supabase/migrations/0007_grant_service_role_donnit_tables.sql and redeploy.",
+      },
+      gmail_persist_error: {
+        title: "Could not save Gmail connection",
+        description:
+          "The Gmail tokens were obtained but Supabase rejected the write. The service-role key is valid (preflight HEAD succeeded). Server admin: see the function log line `[donnit] gmail upsert failed` for the exact code, message, details, and hint.",
       },
       invalid_column: {
         title: "Gmail schema mismatch",

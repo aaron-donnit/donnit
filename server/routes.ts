@@ -124,12 +124,14 @@ type DbProbeReason =
   | "wrong_project_or_key"
   | "schema_not_exposed"
   | "missing_table"
+  | "permission_denied_grants_missing"
   | "rls_denied"
   | "fk_missing_profile_or_org"
   | "missing_required_column"
   | "invalid_column"
   | "network_unreachable"
   | "postgrest_error"
+  | "gmail_persist_error"
   | "unknown_with_message";
 
 function classifySupabaseError(
@@ -194,11 +196,41 @@ function classifySupabaseError(
     return "missing_table";
   }
 
-  // 5. RLS / privilege errors. With a valid service-role key these
-  //    should not appear, so when they do the most likely cause is the
-  //    deployed key actually being the anon key (or a key from a
-  //    different project that doesn't have service_role).
-  if (code === "42501" || lowered.includes("permission denied") || lowered.includes("rls")) {
+  // 5. Privilege / RLS errors. Two distinct cases that look similar in
+  //    Postgres but mean different things to the operator:
+  //
+  //    a) `42501 permission denied for table <x>` (or "permission denied
+  //       for schema") with NO row-level / RLS phrasing: the service-role
+  //       (or current) role lacks GRANT SELECT/INSERT/UPDATE/DELETE on
+  //       that object. Bypassing RLS does not bypass missing GRANTs —
+  //       Postgres still requires table privileges. Common cause: a
+  //       custom schema (donnit) created without `grant ... on tables to
+  //       service_role`. We surface this as
+  //       `permission_denied_grants_missing` so the toast can guide the
+  //       operator to apply the grants migration instead of incorrectly
+  //       blaming the service-role key.
+  //
+  //    b) `42501` whose message mentions row-level security / "violates"
+  //       / "policy": RLS actually denied the write. With a valid
+  //       service-role key (which bypasses RLS on Supabase by default)
+  //       this should not appear, so when it does the deployed key may
+  //       not be the project's service_role (it is being treated as
+  //       anon). We surface this as `rls_denied`.
+  //
+  //    The previous classifier collapsed both into `rls_denied`, which
+  //    showed users "SUPABASE_SERVICE_ROLE_KEY appears to be anon" even
+  //    when /api/health/db said the key was valid and the real fault was
+  //    a missing GRANT.
+  const looksLikeRowLevelDenial =
+    lowered.includes("row-level security") ||
+    lowered.includes("row level security") ||
+    lowered.includes("rls policy") ||
+    lowered.includes("violates row") ||
+    lowered.includes("policy for relation");
+  if (code === "42501" || lowered.includes("permission denied for")) {
+    return looksLikeRowLevelDenial ? "rls_denied" : "permission_denied_grants_missing";
+  }
+  if (looksLikeRowLevelDenial) {
     return "rls_denied";
   }
 
@@ -1698,6 +1730,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // which the service-role key bypasses. We still scope writes to the
       // userId/orgId from the verified state — never to data sourced from
       // the request.
+      //
+      // Preflight: a HEAD-select against gmail_accounts with the same
+      // admin client we are about to upsert with. If the HEAD probe
+      // succeeds but the upsert fails, the failure is NOT a missing
+      // service-role key / anon-key swap (the SELECT proved the key has
+      // privileges and the schema is reachable). That lets us emit a
+      // precise reason like `fk_missing_profile_or_org` or
+      // `gmail_persist_error` instead of telling the user
+      // "SUPABASE_SERVICE_ROLE_KEY appears to be anon" — which is what
+      // the previous classifier did for any 42501 / "permission denied".
+      let preflightOk = false;
+      try {
+        const preflight = await admin
+          .from("gmail_accounts")
+          .select("user_id", { count: "exact", head: true })
+          .limit(1);
+        const preflightErrRaw = preflight.error;
+        const preflightErr = preflightErrRaw
+          ? describeSupabaseError(preflightErrRaw)
+          : null;
+        preflightOk =
+          preflightErrRaw === null ||
+          (preflightErr !== null && isEmptySupabaseError(preflightErr));
+      } catch {
+        preflightOk = false;
+      }
+
       try {
         const { error: upsertError } = await admin
           .from("gmail_accounts")
@@ -1728,17 +1787,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (isEmptySupabaseError(described)) {
             return safeRedirect("connected");
           }
-          const reason = classifySupabaseError(described, {
+          let reason: DbProbeReason = classifySupabaseError(described, {
             schema: DONNIT_SCHEMA,
             table: "gmail_accounts",
           });
+          // Foreign-key violation (donnit.gmail_accounts.user_id ->
+          // donnit.profiles.id). Common when a Supabase auth user signs
+          // in but the workspace bootstrap that creates donnit.profiles
+          // has not yet run. Surface a precise reason rather than a
+          // generic postgrest_error so the toast can tell the user to
+          // re-sign-in / bootstrap.
+          if ((described.code ?? "").toUpperCase() === "23503") {
+            reason = "fk_missing_profile_or_org";
+          }
+          // Preflight succeeded (HEAD-select worked with this same
+          // admin client), so the failure cannot be a missing/anon
+          // service-role key. Override misleading reasons that would
+          // trigger the "service-role appears to be anon" toast.
+          if (
+            preflightOk &&
+            (reason === "rls_denied" ||
+              reason === "invalid_service_role_or_url" ||
+              reason === "wrong_project_or_key" ||
+              reason === "missing_service_role")
+          ) {
+            reason =
+              (described.code ?? "").toUpperCase() === "42501"
+                ? "permission_denied_grants_missing"
+                : "gmail_persist_error";
+          }
           console.error(
             "[donnit] gmail upsert failed:",
             JSON.stringify({
               reason,
+              preflightOk,
               schema: DONNIT_SCHEMA,
               projectRef: parseSupabaseRef(process.env.SUPABASE_URL),
-              ...described,
+              code: described.code,
+              status: described.status,
+              message: described.message,
+              details: described.details,
+              hint: described.hint,
             }).slice(0, 500),
           );
           // The toast reason set the SPA already understands stays a
