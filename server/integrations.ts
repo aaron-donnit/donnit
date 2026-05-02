@@ -216,6 +216,7 @@ export type GmailTokenExchangeReason =
   | "redirect_mismatch"
   | "invalid_client"
   | "invalid_grant"
+  | "invalid_request"
   | "token_exchange_failed";
 
 export class GmailTokenExchangeError extends Error {
@@ -240,7 +241,10 @@ export class GmailTokenExchangeError extends Error {
   }
 }
 
-function classifyGoogleTokenError(googleError: string | null): GmailTokenExchangeReason {
+function classifyGoogleTokenError(
+  googleError: string | null,
+  errorDescription: string | null,
+): GmailTokenExchangeReason {
   // Google's RFC 6749 §5.2 error codes:
   //   invalid_grant — code is bad, expired, already used, or redirect_uri
   //     does not match the one used in the original auth request.
@@ -249,6 +253,10 @@ function classifyGoogleTokenError(googleError: string | null): GmailTokenExchang
   //   invalid_client — client_id/client_secret rejected (rotated secret,
   //     wrong project, deleted client).
   //   unauthorized_client — client type forbids this grant.
+  //   invalid_request — Google's catch-all when the request body is malformed
+  //     or a required parameter is missing/invalid. The error_description
+  //     usually points at the offending field; if it mentions redirect_uri we
+  //     surface it as redirect_mismatch so the operator knows where to look.
   switch (googleError) {
     case "redirect_uri_mismatch":
       return "redirect_mismatch";
@@ -257,6 +265,11 @@ function classifyGoogleTokenError(googleError: string | null): GmailTokenExchang
       return "invalid_client";
     case "invalid_grant":
       return "invalid_grant";
+    case "invalid_request": {
+      const desc = (errorDescription ?? "").toLowerCase();
+      if (desc.includes("redirect")) return "redirect_mismatch";
+      return "invalid_request";
+    }
     default:
       return "token_exchange_failed";
   }
@@ -306,7 +319,7 @@ export async function exchangeGmailAuthCode(code: string): Promise<GmailTokenSet
     const text = await res.text().catch(() => "");
     const { error, errorDescription } = parseGoogleTokenErrorBody(text);
     throw new GmailTokenExchangeError({
-      reason: classifyGoogleTokenError(error),
+      reason: classifyGoogleTokenError(error, errorDescription),
       status: res.status,
       googleError: error,
       googleErrorDescription: errorDescription,

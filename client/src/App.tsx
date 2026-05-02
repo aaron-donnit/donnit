@@ -992,7 +992,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     const url = new URL(window.location.href);
     const gmailParam = url.searchParams.get("gmail");
     if (!gmailParam) return;
+    // Google's documented `error` / `error_description` fields, surfaced by
+    // the callback handler on the redirect URL. Safe to display: they
+    // describe what Google rejected, never the auth code, secret, or token.
+    const googleError = url.searchParams.get("gmail_error");
+    const googleErrorDescription = url.searchParams.get("gmail_error_description");
     url.searchParams.delete("gmail");
+    url.searchParams.delete("gmail_error");
+    url.searchParams.delete("gmail_error_description");
     const cleaned = url.pathname + (url.search ? url.search : "") + url.hash;
     window.history.replaceState({}, "", cleaned);
     queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
@@ -1030,7 +1037,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       },
       token_exchange_failed: {
         title: "Gmail token exchange failed",
-        description: "Google rejected the auth code. Click Connect Gmail to try again.",
+        description:
+          "Google rejected the token request. Server admin: check the function log line `[donnit] gmail token exchange failed` for Google's `googleError` / `googleErrorDescription`. Then click Connect Gmail to try again.",
       },
       redirect_mismatch: {
         title: "Gmail redirect URI mismatch",
@@ -1040,12 +1048,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       invalid_client: {
         title: "Gmail OAuth client rejected",
         description:
-          "Google did not accept GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Server admin must verify the secret matches the client and redeploy.",
+          "Google did not accept GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Server admin must verify the secret matches the client (no whitespace, same project, not rotated) and redeploy.",
       },
       invalid_grant: {
         title: "Gmail authorization could not be completed",
         description:
           "The authorization code was expired or already used (often from a double redirect or browser back). Click Connect Gmail to start a fresh authorization.",
+      },
+      invalid_request: {
+        title: "Gmail token request was malformed",
+        description:
+          "Google rejected the token request as invalid_request. This usually means a required field (often redirect_uri) is missing or malformed in the server config. Server admin: check the function log line `[donnit] gmail token exchange failed` for the offending field.",
       },
       persist_failed: {
         title: "Could not save Gmail connection",
@@ -1060,7 +1073,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       title: "Gmail connect failed",
       description: "Click Connect Gmail to try again.",
     };
-    toast({ ...entry, variant: "destructive" });
+    // Append Google's own short description if present so the operator sees
+    // exactly what Google said (e.g. "Bad Request", "redirect_uri_mismatch").
+    // Already clamped to 200 chars on the server.
+    const description = googleError
+      ? `${entry.description} (Google: ${googleError}${googleErrorDescription ? ` — ${googleErrorDescription}` : ""})`
+      : entry.description;
+    toast({ title: entry.title, description, variant: "destructive" });
   }, []);
 
   const connectGmail = useMutation({

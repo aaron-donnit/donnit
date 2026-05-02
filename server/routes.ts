@@ -1159,10 +1159,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   //      FUNCTION_INVOCATION_FAILED 500 to the user. Every error path
   //      redirects to "/?gmail=<reason>" so the SPA can show a real toast.
   app.get("/api/integrations/gmail/oauth/callback", async (req: Request, res: Response) => {
-    const safeRedirect = (reason: string) => {
+    const safeRedirect = (
+      reason: string,
+      detail?: { googleError?: string | null; googleErrorDescription?: string | null },
+    ) => {
       // Always redirect to "/" with a typed gmail param so the SPA can show
       // a toast and refresh oauth status without further server hops.
-      const redirectUrl = `/?gmail=${encodeURIComponent(reason)}`;
+      // Optional `gmail_error` / `gmail_error_description` carry Google's
+      // own short error code / description so the toast can show exactly
+      // what Google said. These fields come from Google's documented OAuth
+      // error response and never contain the auth code or any token.
+      const params = new URLSearchParams({ gmail: reason });
+      if (detail?.googleError) {
+        params.set("gmail_error", String(detail.googleError).slice(0, 80));
+      }
+      if (detail?.googleErrorDescription) {
+        params.set(
+          "gmail_error_description",
+          String(detail.googleErrorDescription).slice(0, 200),
+        );
+      }
+      const redirectUrl = `/?${params.toString()}`;
       try {
         res.status(302).setHeader("Location", redirectUrl).end();
       } catch {
@@ -1219,7 +1236,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Token-exchange errors must NEVER include the auth code, client
         // secret, access token, or refresh token. We log only Google's
         // documented `error` / `error_description` fields plus the HTTP
-        // status. The typed reason flows to the SPA toast so the user (or
+        // status, and the redirect_uri value (which is the public callback
+        // URL — not a secret) so an operator can confirm at a glance whether
+        // the deployed redirect_uri matches what is registered on the OAuth
+        // client. The typed reason flows to the SPA toast so the user (or
         // admin) sees a specific message instead of a generic one.
         if (err instanceof GmailTokenExchangeError) {
           console.error(
@@ -1229,9 +1249,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               googleError: err.googleError,
               googleErrorDescription: err.googleErrorDescription,
               reason: err.reason,
+              // The redirect_uri we sent to Google. Logged so operators can
+              // diff this against the Authorized redirect URIs in the Google
+              // OAuth client configuration. Public URL, never a secret.
+              redirectUri: cfg.redirectUri,
             }),
           );
-          return safeRedirect(err.reason);
+          return safeRedirect(err.reason, {
+            googleError: err.googleError,
+            googleErrorDescription: err.googleErrorDescription,
+          });
         }
         console.error(
           "[donnit] gmail token exchange failed (unexpected):",

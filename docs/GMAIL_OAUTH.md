@@ -192,16 +192,37 @@ copy that string and add it verbatim to **Authorized redirect URIs**.
 
 The user clicked **Connect Gmail**, completed Google's consent screen, and was
 redirected back to Donnit — but the server's POST to
-`https://oauth2.googleapis.com/token` was rejected. The callback now redirects
-to one of four typed reasons; the SPA toast tells you which:
+`https://oauth2.googleapis.com/token` was rejected. The callback redirects to
+one of five typed reasons; the SPA toast tells you which **and** appends
+Google's own `error` / `error_description` so you can see exactly what Google
+said. The full diagnostic line in the Vercel function log is:
 
-- **`?gmail=redirect_mismatch`** — Google returned `redirect_uri_mismatch`. The
+```
+[donnit] gmail token exchange failed: {
+  "status": 400,
+  "googleError": "<Google's documented error code>",
+  "googleErrorDescription": "<Google's short description>",
+  "reason": "<our typed reason>",
+  "redirectUri": "<the exact redirect_uri the server sent to Google>"
+}
+```
+
+The `redirectUri` field is the public callback URL — it is logged so an
+operator can diff it byte-for-byte against the **Authorized redirect URIs**
+list on the OAuth client. The auth code, client secret, access token, and
+refresh token are NEVER logged.
+
+#### Triage by typed reason
+
+- **`?gmail=redirect_mismatch`** — Google returned `redirect_uri_mismatch`, or
+  `invalid_request` with a description mentioning redirect_uri. The
   `redirect_uri` Donnit sent to `/token` does not match an Authorized redirect
   URI on the OAuth client. Donnit always reuses `GOOGLE_REDIRECT_URI` for both
   the auth URL and the token exchange, so the fix is on Google's side: open the
   OAuth client and confirm **Authorized redirect URIs** contains the exact value
   of `GOOGLE_REDIRECT_URI` (same scheme, host, path, no trailing slash, no
-  query/fragment). Common gotcha: testing on a Vercel preview
+  query/fragment). Compare it against the `redirectUri` field in the server log.
+  Common gotcha: testing on a Vercel preview
   (`donnit-1-<hash>.vercel.app`) while only the production URL is registered —
   add both, or set `GOOGLE_REDIRECT_URI` to whichever host you are actually
   serving from.
@@ -214,7 +235,11 @@ to one of four typed reasons; the SPA toast tells you which:
   2. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` come from different OAuth
      clients (copy/paste from the wrong row).
   3. The OAuth client was deleted/disabled.
-  4. Whitespace or stray newline pasted into the env var.
+  4. Whitespace or stray newline pasted into the env var. (Vercel's UI
+     occasionally adds a trailing newline if you paste from a clipboard that
+     wraps; re-enter the value typing instead of pasting if you suspect this.)
+  5. The client type is not **Web application** — Desktop / iOS / Android
+     clients cannot accept the standard browser-redirect grant.
   Fix: APIs & Services → Credentials → open the client → either copy the
   existing secret or click **Reset Secret**. Update both
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` on Vercel for **all**
@@ -235,18 +260,56 @@ to one of four typed reasons; the SPA toast tells you which:
      can happen if the env was changed mid-flow (between the user clicking
      Connect Gmail and Google sending them back). Avoid editing
      `GOOGLE_REDIRECT_URI` while users are mid-OAuth.
+  4. **Two browser tabs ran the consent flow concurrently.** Each consent
+     issues its own code; whichever tab completes the callback first
+     consumes the code, and the second tab's redelivered code is rejected.
+
+- **`?gmail=invalid_request`** — Google returned `invalid_request` and the
+  description did *not* mention redirect_uri. The token request body was
+  rejected as malformed or missing a required parameter. The body Donnit
+  sends is `application/x-www-form-urlencoded` with `code`, `client_id`,
+  `client_secret`, `redirect_uri`, `grant_type=authorization_code`. If you
+  see this reason, read `googleErrorDescription` in the log line — it names
+  the offending field.
 
 - **`?gmail=token_exchange_failed`** — generic fallback when Google's response
-  did not match any of the above. Check the server logs — the line
-  `[donnit] gmail token exchange failed: { status, googleError,
-  googleErrorDescription, reason }` contains Google's safe error fields (the
-  auth code, client secret, and tokens are NEVER logged). Look up
-  `googleError` in
+  did not match any of the above. The toast now appends `(Google: <error> —
+  <error_description>)`; copy that into
   [Google's OAuth 2.0 error reference](https://developers.google.com/identity/protocols/oauth2/web-server#exchange-authorization-code).
+  If `googleError` is empty (Google returned a non-JSON or empty body),
+  check the `status` field — a 5xx implies a transient Google outage; retry.
 
 In every case, the user can recover by clicking **Connect Gmail** again — but
 fix the underlying server config first or the next consent will fail the same
 way.
+
+#### Full operator checklist (all paths)
+
+When the toast says **Gmail token exchange failed** and you cannot tell which
+reason applies, run this checklist top-to-bottom:
+
+1. Open the Vercel function log for the deployed environment and grep for
+   `[donnit] gmail token exchange failed`. Note `googleError`,
+   `googleErrorDescription`, `status`, `reason`, `redirectUri`.
+2. Open `https://<deployed-host>/api/health`. Confirm
+   `env.googleClientId`, `env.googleClientSecret`, `env.googleRedirectUri`
+   are all `true`.
+3. APIs & Services → Credentials → open the OAuth client referenced by
+   `GOOGLE_CLIENT_ID`. Confirm:
+   - **Application type** is `Web application`.
+   - **Authorized redirect URIs** contains the value logged as `redirectUri`,
+     **byte-for-byte**. No trailing slash. No query string. No fragment.
+4. Compare `GOOGLE_REDIRECT_URI` env var on Vercel with the `redirectUri`
+   in the log line. They should be identical. If you have multiple Vercel
+   environments (Production, Preview, Development), set the env var on
+   each one that serves traffic — Vercel's "Apply to all environments" is
+   not the default.
+5. Reset and re-paste `GOOGLE_CLIENT_SECRET` (do NOT trust copy/paste —
+   verify length matches Google's display, or re-type it). Save and redeploy.
+6. After any env change you MUST redeploy: env edits are not picked up by
+   already-running functions on Vercel.
+7. Trigger a fresh **Connect Gmail** click from a clean browser tab (no
+   back-button, no refresh on the consent screen).
 
 ## Operational notes
 
