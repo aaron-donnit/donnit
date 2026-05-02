@@ -1094,6 +1094,31 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         description:
           "donnit.gmail_accounts is missing a column the server expects. Server admin: re-apply migration 0006 to project bchwrbqaacdijavtugdt.",
       },
+      network_unreachable: {
+        title: "Supabase unreachable from Vercel",
+        description:
+          "The server could not reach Supabase to save the Gmail connection. Server admin: verify SUPABASE_URL is correct and the project is not paused, then call /api/health/db for details.",
+      },
+      invalid_service_role_or_url: {
+        title: "Supabase rejected the server key",
+        description:
+          "Supabase returned 401/403 for the service-role request. Server admin: rotate SUPABASE_SERVICE_ROLE_KEY in Vercel to the project's service_role key (not anon), confirm SUPABASE_URL points at the same project, and redeploy.",
+      },
+      wrong_project_or_key: {
+        title: "Supabase project / key mismatch",
+        description:
+          "The deployed SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY appear to come from different projects (donnit.profiles and donnit.gmail_accounts both fail). Server admin: copy URL + service_role from the SAME project (bchwrbqaacdijavtugdt) and redeploy.",
+      },
+      postgrest_error: {
+        title: "Supabase returned an error",
+        description:
+          "PostgREST refused the write. Server admin: hit /api/health/db for the exact code/message and the response body.",
+      },
+      unknown_with_message: {
+        title: "Could not save Gmail connection",
+        description:
+          "Database write failed with an unrecognized error. Server admin: see /api/health/db for the exact message and the response body.",
+      },
       unexpected: {
         title: "Gmail connect failed",
         description: "An unexpected error occurred. Click Connect Gmail to try again.",
