@@ -57,6 +57,10 @@ type AgendaItem = {
   estimatedMinutes: number;
   dueDate: string | null;
   urgency: string;
+  startAt: string | null;
+  endAt: string | null;
+  timeZone: string;
+  scheduleStatus: "scheduled" | "unscheduled";
 };
 
 type User = {
@@ -181,35 +185,48 @@ function escapeIcsText(value: string) {
     .replace(/;/g, "\\;");
 }
 
-function addOneDayIso(date: string) {
-  const parsed = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return date;
-  parsed.setDate(parsed.getDate() + 1);
-  return parsed.toISOString().slice(0, 10);
+function formatIcsLocalDateTime(value: string) {
+  return value.replace(/[-:]/g, "").replace(/\.\d+$/, "");
+}
+
+function formatAgendaTime(value: string | null) {
+  if (!value) return "";
+  const match = value.match(/T(\d{2}):(\d{2})/);
+  if (!match) return "";
+  const hour24 = Number(match[1]);
+  const minute = match[2];
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${minute} ${suffix}`;
+}
+
+function formatAgendaSlot(item: AgendaItem) {
+  if (!item.startAt || !item.endAt || item.scheduleStatus !== "scheduled") {
+    return "Needs an open calendar slot";
+  }
+  return `${item.startAt.slice(0, 10)} / ${formatAgendaTime(item.startAt)}-${formatAgendaTime(item.endAt)}`;
 }
 
 function downloadAgendaCalendar(agenda: AgendaItem[]) {
-  if (agenda.length === 0) {
+  const scheduled = agenda.filter((item) => item.startAt && item.endAt && item.scheduleStatus === "scheduled");
+  if (scheduled.length === 0) {
     toast({
-      title: "No agenda to export",
-      description: "Add tasks with due dates, then build your agenda again.",
+      title: "No scheduled blocks to export",
+      description: "Build the agenda after connecting Google Calendar so Donnit can find open times.",
     });
     return;
   }
 
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  const events = agenda.map((item) => {
-    const dueDate = item.dueDate ?? new Date().toISOString().slice(0, 10);
-    const start = dueDate.replace(/-/g, "");
-    const end = addOneDayIso(dueDate).replace(/-/g, "");
+  const events = scheduled.map((item) => {
     return [
       "BEGIN:VEVENT",
       `UID:donnit-${item.taskId}-${stamp}@donnit`,
       `DTSTAMP:${stamp}`,
-      `DTSTART;VALUE=DATE:${start}`,
-      `DTEND;VALUE=DATE:${end}`,
+      `DTSTART;TZID=${item.timeZone}:${formatIcsLocalDateTime(item.startAt!)}`,
+      `DTEND;TZID=${item.timeZone}:${formatIcsLocalDateTime(item.endAt!)}`,
       `SUMMARY:${escapeIcsText(item.title)}`,
-      `DESCRIPTION:${escapeIcsText(`${item.urgency} urgency · ${item.estimatedMinutes} minutes`)}`,
+      `DESCRIPTION:${escapeIcsText(`${item.urgency} urgency / ${item.estimatedMinutes} minutes`)}`,
       "END:VEVENT",
     ].join("\r\n");
   });
@@ -234,7 +251,7 @@ function downloadAgendaCalendar(agenda: AgendaItem[]) {
   URL.revokeObjectURL(url);
   toast({
     title: "Calendar file ready",
-    description: `Exported ${agenda.length} agenda item${agenda.length === 1 ? "" : "s"} as an .ics file.`,
+    description: `Exported ${scheduled.length} scheduled agenda block${scheduled.length === 1 ? "" : "s"} as an .ics file.`,
   });
 }
 
@@ -860,13 +877,14 @@ function AgendaPanel({
   isBuilding: boolean;
 }) {
   const totalMinutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+  const scheduledCount = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
   return (
     <div className="panel" data-testid="panel-agenda" id="panel-agenda">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h3 className="display-font text-sm font-bold">Agenda</h3>
           <p className="ui-label mt-1">
-            {agenda.length > 0 ? `${agenda.length} blocks / ${totalMinutes} min` : "No blocks yet"}
+            {agenda.length > 0 ? `${scheduledCount}/${agenda.length} scheduled / ${totalMinutes} min` : "No blocks yet"}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
@@ -909,7 +927,7 @@ function AgendaPanel({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {item.dueDate ?? "No due date"} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                    {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
                   </p>
                 </div>
               </li>
@@ -1607,14 +1625,15 @@ function CalendarExportDialog({
 }) {
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsCalendarReconnect = Boolean(oauthStatus?.connected && oauthStatus.calendarRequiresReconnect);
+  const scheduledCount = agenda.filter((item) => item.startAt && item.endAt && item.scheduleStatus === "scheduled").length;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Calendar export</DialogTitle>
           <DialogDescription>
-            {agenda.length > 0
-              ? `${agenda.length} agenda block${agenda.length === 1 ? "" : "s"} ready.`
+            {scheduledCount > 0
+              ? `${scheduledCount} scheduled agenda block${scheduledCount === 1 ? "" : "s"} ready.`
               : "Build an agenda before exporting."}
           </DialogDescription>
         </DialogHeader>
@@ -1639,7 +1658,7 @@ function CalendarExportDialog({
               <Button
                 size="sm"
                 onClick={onExportGoogle}
-                disabled={!calendarReady || agenda.length === 0 || isExportingGoogle}
+                disabled={!calendarReady || scheduledCount === 0 || isExportingGoogle}
                 data-testid="button-google-calendar-export"
               >
                 {isExportingGoogle ? <Loader2 className="size-4 animate-spin" /> : <CalendarCheck className="size-4" />}
@@ -1674,7 +1693,7 @@ function CalendarExportDialog({
                 variant="outline"
                 size="sm"
                 onClick={onDownload}
-                disabled={agenda.length === 0}
+                disabled={scheduledCount === 0}
                 data-testid="button-download-calendar-file"
               >
                 <CalendarPlus className="size-4" />
@@ -2073,11 +2092,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
     onSuccess: (agenda) => {
       const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+      const scheduled = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
       toast({
         title: "Agenda built",
         description:
           agenda.length > 0
-            ? `${agenda.length} task${agenda.length === 1 ? "" : "s"} prioritized for about ${minutes} minutes.`
+            ? `${scheduled}/${agenda.length} task${agenda.length === 1 ? "" : "s"} scheduled for about ${minutes} minutes.`
             : "No open tasks are ready for today's agenda.",
       });
       window.setTimeout(() => {
@@ -2089,12 +2109,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const exportGoogleCalendar = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/integrations/google/calendar/export", {});
-      return (await res.json()) as { ok: boolean; exported: number; updated: number; total: number };
+      return (await res.json()) as { ok: boolean; exported: number; updated: number; skipped: number; total: number };
     },
     onSuccess: (result) => {
+      const synced = result.exported + result.updated;
       toast({
         title: "Google Calendar updated",
-        description: `${result.exported + result.updated} agenda block${result.total === 1 ? "" : "s"} synced.`,
+        description: `${synced} scheduled block${synced === 1 ? "" : "s"} synced${result.skipped ? `, ${result.skipped} still needs a slot` : ""}.`,
       });
       setCalendarExportOpen(false);
     },

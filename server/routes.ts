@@ -421,7 +421,7 @@ function parseChatTask(message: string, users: User[]): InsertTask {
   };
 }
 
-function sortTasks(tasks: Task[]) {
+function sortTasks<T extends { status: string; dueDate: string | null; urgency: string }>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => {
     const aDone = a.status === "completed" ? 1 : 0;
     const bDone = b.status === "completed" ? 1 : 0;
@@ -440,7 +440,22 @@ type AgendaItem = {
   estimatedMinutes: number;
   dueDate: string | null;
   urgency: string;
+  startAt: string | null;
+  endAt: string | null;
+  timeZone: string;
+  scheduleStatus: "scheduled" | "unscheduled";
 };
+
+type CalendarBusyBlock = {
+  date: string;
+  startMinute: number;
+  endMinute: number;
+};
+
+const DEFAULT_CALENDAR_TIME_ZONE = "America/New_York";
+const WORKDAY_START_MINUTE = 9 * 60;
+const WORKDAY_END_MINUTE = 17 * 60;
+const SCHEDULE_HORIZON_DAYS = 14;
 
 function addOneDayIso(date: string) {
   const parsed = new Date(`${date}T00:00:00`);
@@ -449,30 +464,142 @@ function addOneDayIso(date: string) {
   return parsed.toISOString().slice(0, 10);
 }
 
-function calendarEventIdForAgendaItem(item: AgendaItem) {
-  const input = `${item.taskId}:${item.dueDate ?? "today"}`;
+function addDaysIso(date: string, days: number) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function formatDateTimeLocal(date: string, minute: number) {
+  const hours = Math.floor(minute / 60);
+  const minutes = minute % 60;
+  return `${date}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
+}
+
+function getZonedParts(value: Date | string, timeZone: string) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  const hour = Number(get("hour")) % 24;
+  const minute = Number(get("minute"));
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    minute: hour * 60 + minute,
+  };
+}
+
+function calendarEventIdFromInput(input: string) {
   return `donnit${crypto.createHash("sha1").update(input).digest("hex").slice(0, 24)}`;
 }
 
-function buildAgenda(tasks: Task[]): AgendaItem[] {
-  const availableMinutes = 6 * 60;
-  let remaining = availableMinutes;
+function calendarEventIdForAgendaItem(item: AgendaItem) {
+  return calendarEventIdFromInput(String(item.taskId));
+}
+
+function legacyCalendarEventIdForAgendaItem(item: AgendaItem) {
+  return calendarEventIdFromInput(`${item.taskId}:${item.dueDate ?? "today"}`);
+}
+
+function cloneBusyByDate(busyByDate: Map<string, CalendarBusyBlock[]>) {
+  return new Map(
+    Array.from(busyByDate.entries()).map(([date, blocks]) => [
+      date,
+      blocks.map((block: CalendarBusyBlock) => ({ ...block })),
+    ]),
+  );
+}
+
+function getFreeSlotsForDate(date: string, busyByDate: Map<string, CalendarBusyBlock[]>) {
+  const busy = [...(busyByDate.get(date) ?? [])]
+    .map((block) => ({
+      startMinute: Math.max(WORKDAY_START_MINUTE, block.startMinute),
+      endMinute: Math.min(WORKDAY_END_MINUTE, block.endMinute),
+    }))
+    .filter((block) => block.endMinute > WORKDAY_START_MINUTE && block.startMinute < WORKDAY_END_MINUTE)
+    .sort((a, b) => a.startMinute - b.startMinute);
+  const slots: Array<{ startMinute: number; endMinute: number }> = [];
+  let cursor = WORKDAY_START_MINUTE;
+  for (const block of busy) {
+    if (block.startMinute > cursor) {
+      slots.push({ startMinute: cursor, endMinute: block.startMinute });
+    }
+    cursor = Math.max(cursor, block.endMinute);
+  }
+  if (cursor < WORKDAY_END_MINUTE) {
+    slots.push({ startMinute: cursor, endMinute: WORKDAY_END_MINUTE });
+  }
+  return slots;
+}
+
+function scheduleTasks<T extends {
+  id: string | number;
+  title: string;
+  estimatedMinutes: number;
+  dueDate: string | null;
+  urgency: string;
+  status: string;
+}>(
+  tasks: T[],
+  busyByDate: Map<string, CalendarBusyBlock[]> = new Map(),
+  options: { timeZone?: string; today?: string } = {},
+): AgendaItem[] {
+  const timeZone = options.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE;
+  const today = options.today ?? getZonedParts(new Date(), timeZone).date;
+  const mutableBusy = cloneBusyByDate(busyByDate);
   const candidates = sortTasks(tasks).filter((task) => task.status !== "completed" && task.status !== "denied");
 
-  return candidates
-    .filter((task) => {
-      if (remaining <= 0) return false;
-      remaining -= task.estimatedMinutes;
-      return true;
-    })
-    .map((task, index) => ({
+  return candidates.map((task, index) => {
+    const estimate = Math.min(Math.max(task.estimatedMinutes, 5), WORKDAY_END_MINUTE - WORKDAY_START_MINUTE);
+    const firstDate = task.dueDate && task.dueDate >= today ? task.dueDate : today;
+    for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
+      const date = addDaysIso(firstDate, offset);
+      const slot = getFreeSlotsForDate(date, mutableBusy).find(
+        (free) => free.endMinute - free.startMinute >= estimate,
+      );
+      if (!slot) continue;
+      const startMinute = slot.startMinute;
+      const endMinute = startMinute + estimate;
+      const scheduledBlock = { date, startMinute, endMinute };
+      mutableBusy.set(date, [...(mutableBusy.get(date) ?? []), scheduledBlock]);
+      return {
+        taskId: task.id,
+        order: index + 1,
+        title: task.title,
+        estimatedMinutes: task.estimatedMinutes,
+        dueDate: task.dueDate,
+        urgency: task.urgency,
+        startAt: formatDateTimeLocal(date, startMinute),
+        endAt: formatDateTimeLocal(date, endMinute),
+        timeZone,
+        scheduleStatus: "scheduled" as const,
+      };
+    }
+    return {
       taskId: task.id,
       order: index + 1,
       title: task.title,
       estimatedMinutes: task.estimatedMinutes,
       dueDate: task.dueDate,
       urgency: task.urgency,
-    }));
+      startAt: null,
+      endAt: null,
+      timeZone,
+      scheduleStatus: "unscheduled" as const,
+    };
+  });
+}
+
+function buildAgenda(tasks: Task[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE): AgendaItem[] {
+  return scheduleTasks(tasks, busyByDate, { timeZone });
 }
 
 // ---------------------------------------------------------------------------
@@ -515,24 +642,172 @@ function sortClientTasks<T extends { dueDate: string | null; urgency: string; st
   });
 }
 
-function buildClientAgenda(tasks: SupabaseTaskShape[]): AgendaItem[] {
-  const availableMinutes = 6 * 60;
-  let remaining = availableMinutes;
-  const candidates = sortClientTasks(tasks).filter((task) => task.status !== "completed" && task.status !== "denied");
-  return candidates
-    .filter((task) => {
-      if (remaining <= 0) return false;
-      remaining -= task.estimatedMinutes;
-      return true;
-    })
-    .map((task, index) => ({
-      taskId: task.id,
-      order: index + 1,
-      title: task.title,
-      estimatedMinutes: task.estimatedMinutes,
-      dueDate: task.dueDate,
-      urgency: task.urgency,
-    }));
+function buildClientAgenda(
+  tasks: SupabaseTaskShape[],
+  busyByDate: Map<string, CalendarBusyBlock[]> = new Map(),
+  timeZone = DEFAULT_CALENDAR_TIME_ZONE,
+): AgendaItem[] {
+  return scheduleTasks(sortClientTasks(tasks), busyByDate, { timeZone });
+}
+
+type GoogleCalendarContext = {
+  accessToken: string;
+  timeZone: string;
+  busyByDate: Map<string, CalendarBusyBlock[]>;
+};
+
+async function resolveGoogleCalendarAccess(store: DonnitStore): Promise<
+  | { ok: true; accessToken: string; account: Awaited<ReturnType<DonnitStore["getGmailAccount"]>> }
+  | { ok: false; status: number; reason: string; message: string }
+> {
+  const account = await store.getGmailAccount();
+  if (!account || account.status !== "connected") {
+    return {
+      ok: false,
+      status: 412,
+      reason: "google_oauth_not_connected",
+      message: "Connect your Google account before exporting to Google Calendar.",
+    };
+  }
+  if (!hasGoogleCalendarScope(account.scope)) {
+    return {
+      ok: false,
+      status: 412,
+      reason: "calendar_scope_missing",
+      message: "Reconnect Google so Donnit can read availability and add agenda blocks to Google Calendar.",
+    };
+  }
+
+  let accessToken = account.access_token;
+  const expiresMs = new Date(account.expires_at).getTime();
+  if (!Number.isFinite(expiresMs) || expiresMs - Date.now() < 60_000) {
+    if (!account.refresh_token) {
+      await store.patchGmailAccount({ status: "error" });
+      return {
+        ok: false,
+        status: 401,
+        reason: "google_oauth_token_invalid",
+        message: "Google authorization expired. Reconnect Google and try again.",
+      };
+    }
+    const refreshed = await refreshGmailAccessToken(account.refresh_token);
+    await store.patchGmailAccount({
+      access_token: refreshed.accessToken,
+      expires_at: new Date(refreshed.expiresAt).toISOString(),
+      scope: refreshed.scope || account.scope,
+      token_type: refreshed.tokenType || account.token_type,
+    });
+    accessToken = refreshed.accessToken;
+  }
+
+  return { ok: true, accessToken, account };
+}
+
+function addBusyBlock(busyByDate: Map<string, CalendarBusyBlock[]>, block: CalendarBusyBlock) {
+  if (block.endMinute <= block.startMinute) return;
+  busyByDate.set(block.date, [...(busyByDate.get(block.date) ?? []), block]);
+}
+
+function expandAllDayBusyBlocks(
+  busyByDate: Map<string, CalendarBusyBlock[]>,
+  startDate: string,
+  exclusiveEndDate: string,
+) {
+  for (let date = startDate; date < exclusiveEndDate; date = addDaysIso(date, 1)) {
+    addBusyBlock(busyByDate, { date, startMinute: 0, endMinute: 24 * 60 });
+  }
+}
+
+function addTimedBusyBlocks(
+  busyByDate: Map<string, CalendarBusyBlock[]>,
+  startAt: string,
+  endAt: string,
+  timeZone: string,
+) {
+  const start = getZonedParts(startAt, timeZone);
+  const end = getZonedParts(endAt, timeZone);
+  if (start.date === end.date) {
+    addBusyBlock(busyByDate, { date: start.date, startMinute: start.minute, endMinute: end.minute });
+    return;
+  }
+  addBusyBlock(busyByDate, { date: start.date, startMinute: start.minute, endMinute: 24 * 60 });
+  for (let date = addDaysIso(start.date, 1); date < end.date; date = addDaysIso(date, 1)) {
+    addBusyBlock(busyByDate, { date, startMinute: 0, endMinute: 24 * 60 });
+  }
+  addBusyBlock(busyByDate, { date: end.date, startMinute: 0, endMinute: end.minute });
+}
+
+async function fetchGoogleCalendarContext(accessToken: string): Promise<GoogleCalendarContext> {
+  let timeZone = DEFAULT_CALENDAR_TIME_ZONE;
+  try {
+    const calendarRes = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary", {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (calendarRes.ok) {
+      const calendar = (await calendarRes.json()) as { timeZone?: string };
+      if (calendar.timeZone) timeZone = calendar.timeZone;
+    }
+  } catch {
+    // Keep the default timezone and continue with event fetch.
+  }
+
+  const today = getZonedParts(new Date(), timeZone).date;
+  const timeMin = new Date(`${today}T00:00:00.000Z`).toISOString();
+  const timeMax = new Date(`${addDaysIso(today, SCHEDULE_HORIZON_DAYS + 1)}T00:00:00.000Z`).toISOString();
+  const params = new URLSearchParams({
+    timeMin,
+    timeMax,
+    singleEvents: "true",
+    orderBy: "startTime",
+    timeZone,
+    maxResults: "250",
+  });
+  const eventsRes = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
+    { headers: { authorization: `Bearer ${accessToken}` } },
+  );
+  if (!eventsRes.ok) {
+    throw new Error(`Google Calendar events fetch failed (${eventsRes.status})`);
+  }
+
+  const payload = (await eventsRes.json()) as {
+    items?: Array<{
+      status?: string;
+      summary?: string;
+      start?: { date?: string; dateTime?: string };
+      end?: { date?: string; dateTime?: string };
+      extendedProperties?: { private?: Record<string, string | undefined> };
+    }>;
+  };
+  const busyByDate = new Map<string, CalendarBusyBlock[]>();
+  for (const event of payload.items ?? []) {
+    if (event.status === "cancelled") continue;
+    if (event.extendedProperties?.private?.donnitSource === "agenda") continue;
+    if (event.summary?.startsWith("Donnit:")) continue;
+    if (event.start?.date && event.end?.date) {
+      expandAllDayBusyBlocks(busyByDate, event.start.date, event.end.date);
+      continue;
+    }
+    if (event.start?.dateTime && event.end?.dateTime) {
+      addTimedBusyBlocks(busyByDate, event.start.dateTime, event.end.dateTime, timeZone);
+    }
+  }
+
+  return { accessToken, timeZone, busyByDate };
+}
+
+async function tryBuildGoogleCalendarContext(store: DonnitStore): Promise<GoogleCalendarContext | null> {
+  try {
+    const access = await resolveGoogleCalendarAccess(store);
+    if (!access.ok) return null;
+    return await fetchGoogleCalendarContext(access.accessToken);
+  } catch (error) {
+    console.error(
+      "[donnit] calendar availability fetch failed:",
+      error instanceof Error ? error.message.slice(0, 200) : "unknown",
+    );
+    return null;
+  }
 }
 
 async function buildAuthenticatedBootstrap(req: Request) {
@@ -566,6 +841,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     canAssign: m.can_assign,
   }));
   const clientTasks = sortClientTasks(tasks.map(toClientTask));
+  const calendarContext = await tryBuildGoogleCalendarContext(store);
   return {
     authenticated: true,
     bootstrapped: true,
@@ -604,7 +880,11 @@ async function buildAuthenticatedBootstrap(req: Request) {
       assignedToId: s.assigned_to,
       createdAt: s.created_at,
     })),
-    agenda: buildClientAgenda(clientTasks),
+    agenda: buildClientAgenda(
+      clientTasks,
+      calendarContext?.busyByDate,
+      calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
+    ),
     integrations: getIntegrationStatus(),
   };
 }
@@ -1451,7 +1731,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const tasks = await store.listTasks(orgId);
-        res.json(buildClientAgenda(tasks.map(toClientTask)));
+        const calendarContext = await tryBuildGoogleCalendarContext(store);
+        res.json(
+          buildClientAgenda(
+            tasks.map(toClientTask),
+            calendarContext?.busyByDate,
+            calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
+          ),
+        );
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -1466,44 +1753,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const auth = req.donnitAuth!;
     try {
       const store = new DonnitStore(auth.client, auth.userId);
-      const account = await store.getGmailAccount();
-      if (!account || account.status !== "connected") {
-        res.status(412).json({
+      const access = await resolveGoogleCalendarAccess(store);
+      if (!access.ok) {
+        res.status(access.status).json({
           ok: false,
-          reason: "google_oauth_not_connected",
-          message: "Connect your Google account before exporting to Google Calendar.",
+          reason: access.reason,
+          message: access.message,
         });
         return;
-      }
-      if (!hasGoogleCalendarScope(account.scope)) {
-        res.status(412).json({
-          ok: false,
-          reason: "calendar_scope_missing",
-          message: "Reconnect Google so Donnit can add agenda blocks to Google Calendar.",
-        });
-        return;
-      }
-
-      let accessToken = account.access_token;
-      const expiresMs = new Date(account.expires_at).getTime();
-      if (!Number.isFinite(expiresMs) || expiresMs - Date.now() < 60_000) {
-        if (!account.refresh_token) {
-          await store.patchGmailAccount({ status: "error" });
-          res.status(401).json({
-            ok: false,
-            reason: "google_oauth_token_invalid",
-            message: "Google authorization expired. Reconnect Google and try again.",
-          });
-          return;
-        }
-        const refreshed = await refreshGmailAccessToken(account.refresh_token);
-        await store.patchGmailAccount({
-          access_token: refreshed.accessToken,
-          expires_at: new Date(refreshed.expiresAt).toISOString(),
-          scope: refreshed.scope || account.scope,
-          token_type: refreshed.tokenType || account.token_type,
-        });
-        accessToken = refreshed.accessToken;
       }
 
       const orgId = await store.getDefaultOrgId();
@@ -1513,13 +1770,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const tasks = await store.listTasks(orgId);
-      const agenda = buildClientAgenda(tasks.map(toClientTask));
-      const today = new Date().toISOString().slice(0, 10);
+      const calendarContext = await fetchGoogleCalendarContext(access.accessToken);
+      const agenda = buildClientAgenda(
+        tasks.map(toClientTask),
+        calendarContext.busyByDate,
+        calendarContext.timeZone,
+      );
       let exported = 0;
+      let skipped = 0;
       let updated = 0;
 
       for (const item of agenda) {
-        const date = item.dueDate ?? today;
+        if (!item.startAt || !item.endAt || item.scheduleStatus !== "scheduled") {
+          skipped += 1;
+          continue;
+        }
         const event = {
           id: calendarEventIdForAgendaItem(item),
           summary: `Donnit: ${item.title}`,
@@ -1528,8 +1793,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             `Urgency: ${item.urgency}`,
             `Donnit task: ${item.taskId}`,
           ].join("\n"),
-          start: { date },
-          end: { date: addOneDayIso(date) },
+          start: { dateTime: item.startAt, timeZone: item.timeZone },
+          end: { dateTime: item.endAt, timeZone: item.timeZone },
           extendedProperties: {
             private: {
               donnitTaskId: String(item.taskId),
@@ -1541,7 +1806,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const insert = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
           method: "POST",
           headers: {
-            authorization: `Bearer ${accessToken}`,
+            authorization: `Bearer ${access.accessToken}`,
             "content-type": "application/json",
           },
           body: JSON.stringify(event),
@@ -1549,6 +1814,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         if (insert.ok) {
           exported += 1;
+          const legacyId = legacyCalendarEventIdForAgendaItem(item);
+          if (legacyId !== event.id) {
+            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${legacyId}`, {
+              method: "DELETE",
+              headers: { authorization: `Bearer ${access.accessToken}` },
+            }).catch(() => undefined);
+          }
           continue;
         }
 
@@ -1559,7 +1831,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             {
               method: "PATCH",
               headers: {
-                authorization: `Bearer ${accessToken}`,
+                authorization: `Bearer ${access.accessToken}`,
                 "content-type": "application/json",
               },
               body: JSON.stringify(patchEvent),
@@ -1567,6 +1839,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           );
           if (patch.ok) {
             updated += 1;
+            const legacyId = legacyCalendarEventIdForAgendaItem(item);
+            if (legacyId !== event.id) {
+              await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${legacyId}`, {
+                method: "DELETE",
+                headers: { authorization: `Bearer ${access.accessToken}` },
+              }).catch(() => undefined);
+            }
             continue;
           }
         }
@@ -1584,7 +1863,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
 
-      res.json({ ok: true, exported, updated, total: agenda.length });
+      res.json({ ok: true, exported, updated, skipped, total: agenda.length });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }
