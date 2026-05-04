@@ -809,25 +809,121 @@ function TaskDetailDialog({
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
   const delegate = users.find((user) => String(user.id) === delegatedToId);
-  const availableCollaborators = users.filter((user) => String(user.id) !== assignedToId);
+  const selectedCollaborators = users.filter((user) => collaboratorIds.includes(String(user.id)));
+  const collaboratorOptions = users.filter(
+    (user) => String(user.id) !== assignedToId && !collaboratorIds.includes(String(user.id)),
+  );
   const ready = title.trim().length >= 2;
-  const toggleCollaborator = (userId: string) => {
-    setCollaboratorIds((current) =>
-      current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId],
-    );
+  const addCollaborator = (userId: string) => {
+    if (!userId) return;
+    setCollaboratorIds((current) => (current.includes(userId) ? current : [...current, userId]));
+  };
+  const removeCollaborator = (userId: string) => {
+    setCollaboratorIds((current) => current.filter((id) => id !== userId));
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>Task details</DialogTitle>
           <DialogDescription>
             Owned by {assignee?.name ?? "Unknown"} - assigned by {assigner?.name ?? "Unknown"}
             {delegate ? `, delegated to ${delegate.name}` : ""}.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="grid gap-4">
+          <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">People</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Reassign ownership, delegate completion, or add collaborators.
+              </p>
+            </div>
+            <div className="grid gap-3 px-3 py-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-detail-assignee">Reassign owner</Label>
+                  <select
+                    id="task-detail-assignee"
+                    value={assignedToId}
+                    onChange={(event) => {
+                      const nextOwner = event.target.value;
+                      setAssignedToId(nextOwner);
+                      setDelegatedToId((current) => (current === nextOwner ? "" : current));
+                      setCollaboratorIds((current) => current.filter((id) => id !== nextOwner));
+                    }}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid="select-task-detail-assignee"
+                  >
+                    {users.map((user) => (
+                      <option key={String(user.id)} value={String(user.id)}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-detail-delegate">Delegate task</Label>
+                  <select
+                    id="task-detail-delegate"
+                    value={delegatedToId}
+                    onChange={(event) => setDelegatedToId(event.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid="select-task-detail-delegate"
+                  >
+                    <option value="">No delegate</option>
+                    {users
+                      .filter((user) => String(user.id) !== assignedToId)
+                      .map((user) => (
+                        <option key={String(user.id)} value={String(user.id)}>
+                          {user.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="task-detail-collaborator-add">Add collaborator</Label>
+                <select
+                  id="task-detail-collaborator-add"
+                  value=""
+                  onChange={(event) => addCollaborator(event.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid="select-task-detail-add-collaborator"
+                >
+                  <option value="">Choose a collaborator...</option>
+                  {collaboratorOptions.map((user) => (
+                    <option key={String(user.id)} value={String(user.id)}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+                {selectedCollaborators.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-1" data-testid="list-task-detail-collaborators">
+                    {selectedCollaborators.map((user) => (
+                      <span
+                        key={String(user.id)}
+                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-foreground"
+                      >
+                        {user.name}
+                        <button
+                          type="button"
+                          onClick={() => removeCollaborator(String(user.id))}
+                          className="rounded-sm text-muted-foreground hover:text-foreground"
+                          aria-label={`Remove ${user.name}`}
+                          data-testid={`button-remove-collaborator-${user.id}`}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-title">Title</Label>
             <Input
@@ -894,76 +990,6 @@ function TaskDetailDialog({
               />
             </div>
           </div>
-          <div className="rounded-md border border-border">
-            <div className="border-b border-border px-3 py-2">
-              <p className="text-sm font-medium text-foreground">People</p>
-            </div>
-            <div className="grid gap-3 px-3 py-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="task-detail-assignee">Owner / reassign</Label>
-                  <select
-                    id="task-detail-assignee"
-                    value={assignedToId}
-                    onChange={(event) => {
-                      const nextOwner = event.target.value;
-                      setAssignedToId(nextOwner);
-                      setDelegatedToId((current) => (current === nextOwner ? "" : current));
-                      setCollaboratorIds((current) => current.filter((id) => id !== nextOwner));
-                    }}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    data-testid="select-task-detail-assignee"
-                  >
-                    {users.map((user) => (
-                      <option key={String(user.id)} value={String(user.id)}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="task-detail-delegate">Delegate</Label>
-                  <select
-                    id="task-detail-delegate"
-                    value={delegatedToId}
-                    onChange={(event) => setDelegatedToId(event.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    data-testid="select-task-detail-delegate"
-                  >
-                    <option value="">No delegate</option>
-                    {users
-                      .filter((user) => String(user.id) !== assignedToId)
-                      .map((user) => (
-                        <option key={String(user.id)} value={String(user.id)}>
-                          {user.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Collaborators</Label>
-                <div className="grid gap-2 sm:grid-cols-2" data-testid="group-task-detail-collaborators">
-                  {availableCollaborators.map((user) => {
-                    const value = String(user.id);
-                    const checked = collaboratorIds.includes(value);
-                    return (
-                      <label key={value} className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2 text-sm">
-                        <span className="min-w-0 truncate">{user.name}</span>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleCollaborator(value)}
-                          className="size-4"
-                          data-testid={`checkbox-task-collaborator-${value}`}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-description">Description</Label>
             <Textarea
@@ -987,8 +1013,9 @@ function TaskDetailDialog({
               data-testid="input-task-detail-note"
             />
           </div>
+          </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border px-5 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-detail-cancel">
             Cancel
           </Button>
