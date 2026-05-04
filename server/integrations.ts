@@ -14,8 +14,13 @@ export const APPROVED_REMINDER_ORDER = ["due_date", "urgency", "assignment_accep
 // possible without depending on the hosted preview's runtime token, we also
 // expose a first-party Gmail OAuth path the operator can configure with
 // their own Google Cloud credentials. See docs/GMAIL_OAUTH.md.
-export const GMAIL_OAUTH_SCOPE =
-  "https://www.googleapis.com/auth/gmail.readonly";
+export const GMAIL_OAUTH_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+export const GOOGLE_CALENDAR_OAUTH_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const GOOGLE_OAUTH_SCOPES = [GMAIL_OAUTH_SCOPE, GOOGLE_CALENDAR_OAUTH_SCOPE] as const;
+
+export function hasGoogleCalendarScope(scope: string | null | undefined) {
+  return Boolean(scope?.split(/\s+/).includes(GOOGLE_CALENDAR_OAUTH_SCOPE));
+}
 
 export function getIntegrationStatus() {
   const oauth = getGmailOAuthConfig();
@@ -190,7 +195,7 @@ export function buildGmailAuthUrl(state: string): string {
     client_id: cfg.clientId,
     redirect_uri: cfg.redirectUri,
     response_type: "code",
-    scope: GMAIL_OAUTH_SCOPE,
+    scope: GOOGLE_OAUTH_SCOPES.join(" "),
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "true",

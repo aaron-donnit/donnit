@@ -5,10 +5,13 @@ import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-quer
 import {
   Archive,
   CalendarClock,
+  CalendarCheck,
   CalendarPlus,
   Check,
   CheckCircle2,
   Clock3,
+  ExternalLink,
+  Eye,
   History,
   Inbox,
   ListChecks,
@@ -430,8 +433,20 @@ function TaskRow({
 
   return (
     <div
-      className={`task-row ${urgencyClass(task.urgency)} ${isDone ? "is-done" : ""}`}
+      className={`task-row task-row-openable ${urgencyClass(task.urgency)} ${isDone ? "is-done" : ""}`}
       data-testid={`row-task-${task.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        onOpen();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
     >
       <button
         type="button"
@@ -485,9 +500,10 @@ function TaskRow({
           <button
             type="button"
             onClick={onOpen}
-            className="text-xs font-medium text-brand-green underline-offset-2 hover:underline"
+            className="inline-flex items-center gap-1 text-xs font-medium text-brand-green underline-offset-2 hover:underline"
             data-testid={`button-open-task-${task.id}`}
           >
+            <Eye className="size-3.5" />
             Open
           </button>
         </div>
@@ -498,8 +514,8 @@ function TaskRow({
 
 function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<Id | null>(null);
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
 
   const complete = useMutation({
     mutationFn: async (id: Id) =>
@@ -563,7 +579,7 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
               users={users}
               isCompleting={completingId === task.id && complete.isPending}
               onComplete={() => complete.mutate(task.id)}
-              onOpen={() => setSelectedTaskId(task.id)}
+              onOpen={() => setSelectedTaskId(String(task.id))}
             />
           ))
         )}
@@ -581,7 +597,7 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
                 users={users}
                 isCompleting={false}
                 onComplete={() => undefined}
-                onOpen={() => setSelectedTaskId(task.id)}
+                onOpen={() => setSelectedTaskId(String(task.id))}
               />
             ))}
           </>
@@ -826,6 +842,79 @@ function DueTodayPanel({ tasks }: { tasks: Task[] }) {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgendaPanel({
+  agenda,
+  onBuild,
+  onExport,
+  isBuilding,
+}: {
+  agenda: AgendaItem[];
+  onBuild: () => void;
+  onExport: () => void;
+  isBuilding: boolean;
+}) {
+  const totalMinutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+  return (
+    <div className="panel" data-testid="panel-agenda" id="panel-agenda">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h3 className="display-font text-sm font-bold">Agenda</h3>
+          <p className="ui-label mt-1">
+            {agenda.length > 0 ? `${agenda.length} blocks / ${totalMinutes} min` : "No blocks yet"}
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBuild}
+            disabled={isBuilding}
+            data-testid="button-panel-build-agenda"
+          >
+            {isBuilding ? <Loader2 className="size-4 animate-spin" /> : <Workflow className="size-4" />}
+            Build
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onExport}
+            disabled={agenda.length === 0}
+            data-testid="button-panel-export-agenda"
+          >
+            <CalendarPlus className="size-4" />
+            Export
+          </Button>
+        </div>
+      </div>
+      <div className="px-4 py-3">
+        {agenda.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Build an agenda after tasks are added.</p>
+        ) : (
+          <ol className="space-y-2">
+            {agenda.map((item) => (
+              <li
+                key={`${item.taskId}-${item.order}`}
+                className={`task-row ${urgencyClass(item.urgency)}`}
+                data-testid={`row-agenda-${item.taskId}`}
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
+                  {item.order}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {item.dueDate ?? "No due date"} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
         )}
       </div>
     </div>
@@ -1495,10 +1584,127 @@ function ManualEmailImportDialog({
   );
 }
 
+function CalendarExportDialog({
+  open,
+  onOpenChange,
+  agenda,
+  oauthStatus,
+  onDownload,
+  onExportGoogle,
+  onReconnectGoogle,
+  isExportingGoogle,
+  isReconnectingGoogle,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  agenda: AgendaItem[];
+  oauthStatus?: GmailOAuthStatus;
+  onDownload: () => void;
+  onExportGoogle: () => void;
+  onReconnectGoogle: () => void;
+  isExportingGoogle: boolean;
+  isReconnectingGoogle: boolean;
+}) {
+  const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
+  const needsCalendarReconnect = Boolean(oauthStatus?.connected && oauthStatus.calendarRequiresReconnect);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Calendar export</DialogTitle>
+          <DialogDescription>
+            {agenda.length > 0
+              ? `${agenda.length} agenda block${agenda.length === 1 ? "" : "s"} ready.`
+              : "Build an agenda before exporting."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-md border border-border px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">Google Calendar</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {calendarReady
+                    ? oauthStatus?.email ?? "Connected"
+                    : needsCalendarReconnect
+                      ? "Reconnect Google to enable direct calendar sync."
+                      : "Connect Google before direct calendar sync."}
+                </p>
+              </div>
+              <span className="ui-label">
+                {calendarReady ? "Ready" : needsCalendarReconnect ? "Reconnect" : "Not connected"}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={onExportGoogle}
+                disabled={!calendarReady || agenda.length === 0 || isExportingGoogle}
+                data-testid="button-google-calendar-export"
+              >
+                {isExportingGoogle ? <Loader2 className="size-4 animate-spin" /> : <CalendarCheck className="size-4" />}
+                Add to Google Calendar
+              </Button>
+              {!calendarReady && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onReconnectGoogle}
+                  disabled={isReconnectingGoogle}
+                  data-testid="button-google-calendar-reconnect"
+                >
+                  {isReconnectingGoogle ? <Loader2 className="size-4 animate-spin" /> : <MailPlus className="size-4" />}
+                  {needsCalendarReconnect ? "Reconnect Google" : "Connect Google"}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md border border-border px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">Calendar file</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Downloads an .ics file; your computer chooses which calendar app opens it.
+                </p>
+              </div>
+              <CalendarPlus className="size-4 text-muted-foreground" />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onDownload}
+                disabled={agenda.length === 0}
+                data-testid="button-download-calendar-file"
+              >
+                <CalendarPlus className="size-4" />
+                Download .ics
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <a
+                  href="https://calendar.google.com/calendar/u/0/r/settings/export"
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid="link-google-calendar-import"
+                >
+                  <ExternalLink className="size-4" />
+                  Open Google Calendar
+                </a>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 type GmailOAuthStatus = {
   configured: boolean;
   authenticated: boolean;
   connected: boolean;
+  calendarConnected?: boolean;
+  calendarRequiresReconnect?: boolean;
   requiresReconnect?: boolean;
   email?: string | null;
   lastScannedAt?: string | null;
@@ -1516,6 +1722,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
+  const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
   const showDebugTools = import.meta.env.DEV;
 
@@ -1873,6 +2080,37 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             ? `${agenda.length} task${agenda.length === 1 ? "" : "s"} prioritized for about ${minutes} minutes.`
             : "No open tasks are ready for today's agenda.",
       });
+      window.setTimeout(() => {
+        document.getElementById("panel-agenda")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 50);
+    },
+  });
+
+  const exportGoogleCalendar = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/google/calendar/export", {});
+      return (await res.json()) as { ok: boolean; exported: number; updated: number; total: number };
+    },
+    onSuccess: (result) => {
+      toast({
+        title: "Google Calendar updated",
+        description: `${result.exported + result.updated} agenda block${result.total === 1 ? "" : "s"} synced.`,
+      });
+      setCalendarExportOpen(false);
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : "";
+      const needsReconnect =
+        message.includes("calendar_scope_missing") ||
+        message.includes("google_oauth_token_invalid") ||
+        message.includes("google_oauth_not_connected");
+      toast({
+        title: needsReconnect ? "Reconnect Google" : "Calendar export failed",
+        description: needsReconnect
+          ? "Authorize Google Calendar access, then export the agenda again."
+          : "Donnit could not add the agenda to Google Calendar. The .ics file export is still available.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -1984,8 +2222,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       id: "export-calendar",
       label: "Export calendar",
       icon: CalendarPlus,
-      onClick: () => downloadAgendaCalendar(data.agenda),
-      hint: "Download today's Donnit agenda as an .ics file",
+      onClick: () => setCalendarExportOpen(true),
+      hint: "Add the agenda to Google Calendar or download an .ics file",
     },
     {
       id: "assign-task",
@@ -2077,6 +2315,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               {/* Narrower supporting column stack */}
               <div className="flex flex-col gap-4 xl:col-span-4">
                 <DueTodayPanel tasks={data.tasks} />
+                <AgendaPanel
+                  agenda={data.agenda}
+                  onBuild={() => buildAgenda.mutate()}
+                  onExport={() => setCalendarExportOpen(true)}
+                  isBuilding={buildAgenda.isPending}
+                />
                 <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} />
                 <ReportingPanel tasks={data.tasks} currentUserId={data.currentUserId} />
                 <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
@@ -2087,6 +2331,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
+      <CalendarExportDialog
+        open={calendarExportOpen}
+        onOpenChange={setCalendarExportOpen}
+        agenda={data.agenda}
+        oauthStatus={oauthData}
+        onDownload={() => downloadAgendaCalendar(data.agenda)}
+        onExportGoogle={() => exportGoogleCalendar.mutate()}
+        onReconnectGoogle={() => connectGmail.mutate()}
+        isExportingGoogle={exportGoogleCalendar.isPending}
+        isReconnectingGoogle={connectGmail.isPending}
+      />
       <AssignTaskDialog
         open={assignTaskOpen}
         onOpenChange={setAssignTaskOpen}

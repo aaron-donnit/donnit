@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import type { Server } from "node:http";
+import crypto from "node:crypto";
 import {
   chatRequestSchema,
   noteRequestSchema,
@@ -14,6 +15,7 @@ import {
   GmailTokenExchangeError,
   getGmailOAuthConfig,
   getIntegrationStatus,
+  hasGoogleCalendarScope,
   refreshGmailAccessToken,
   scanGmailForTaskCandidates,
   signGmailOAuthState,
@@ -439,6 +441,18 @@ type AgendaItem = {
   dueDate: string | null;
   urgency: string;
 };
+
+function addOneDayIso(date: string) {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setDate(parsed.getDate() + 1);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function calendarEventIdForAgendaItem(item: AgendaItem) {
+  const input = `${item.taskId}:${item.dueDate ?? "today"}`;
+  return `donnit${crypto.createHash("sha1").update(input).digest("hex").slice(0, 24)}`;
+}
 
 function buildAgenda(tasks: Task[]): AgendaItem[] {
   const availableMinutes = 6 * 60;
@@ -1448,6 +1462,134 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(buildAgenda(tasks));
   });
 
+  app.post("/api/integrations/google/calendar/export", requireDonnitAuth, async (req: Request, res: Response) => {
+    const auth = req.donnitAuth!;
+    try {
+      const store = new DonnitStore(auth.client, auth.userId);
+      const account = await store.getGmailAccount();
+      if (!account || account.status !== "connected") {
+        res.status(412).json({
+          ok: false,
+          reason: "google_oauth_not_connected",
+          message: "Connect your Google account before exporting to Google Calendar.",
+        });
+        return;
+      }
+      if (!hasGoogleCalendarScope(account.scope)) {
+        res.status(412).json({
+          ok: false,
+          reason: "calendar_scope_missing",
+          message: "Reconnect Google so Donnit can add agenda blocks to Google Calendar.",
+        });
+        return;
+      }
+
+      let accessToken = account.access_token;
+      const expiresMs = new Date(account.expires_at).getTime();
+      if (!Number.isFinite(expiresMs) || expiresMs - Date.now() < 60_000) {
+        if (!account.refresh_token) {
+          await store.patchGmailAccount({ status: "error" });
+          res.status(401).json({
+            ok: false,
+            reason: "google_oauth_token_invalid",
+            message: "Google authorization expired. Reconnect Google and try again.",
+          });
+          return;
+        }
+        const refreshed = await refreshGmailAccessToken(account.refresh_token);
+        await store.patchGmailAccount({
+          access_token: refreshed.accessToken,
+          expires_at: new Date(refreshed.expiresAt).toISOString(),
+          scope: refreshed.scope || account.scope,
+          token_type: refreshed.tokenType || account.token_type,
+        });
+        accessToken = refreshed.accessToken;
+      }
+
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+
+      const tasks = await store.listTasks(orgId);
+      const agenda = buildClientAgenda(tasks.map(toClientTask));
+      const today = new Date().toISOString().slice(0, 10);
+      let exported = 0;
+      let updated = 0;
+
+      for (const item of agenda) {
+        const date = item.dueDate ?? today;
+        const event = {
+          id: calendarEventIdForAgendaItem(item),
+          summary: `Donnit: ${item.title}`,
+          description: [
+            `Estimated time: ${item.estimatedMinutes} minutes`,
+            `Urgency: ${item.urgency}`,
+            `Donnit task: ${item.taskId}`,
+          ].join("\n"),
+          start: { date },
+          end: { date: addOneDayIso(date) },
+          extendedProperties: {
+            private: {
+              donnitTaskId: String(item.taskId),
+              donnitSource: "agenda",
+            },
+          },
+        };
+
+        const insert = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(event),
+        });
+
+        if (insert.ok) {
+          exported += 1;
+          continue;
+        }
+
+        if (insert.status === 409) {
+          const { id: _id, ...patchEvent } = event;
+          const patch = await fetch(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events/${event.id}`,
+            {
+              method: "PATCH",
+              headers: {
+                authorization: `Bearer ${accessToken}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(patchEvent),
+            },
+          );
+          if (patch.ok) {
+            updated += 1;
+            continue;
+          }
+        }
+
+        const body = await insert.text().catch(() => "");
+        res.status(insert.status === 401 ? 401 : 424).json({
+          ok: false,
+          reason: insert.status === 401 ? "google_oauth_token_invalid" : "calendar_api_failed",
+          message:
+            insert.status === 401
+              ? "Google authorization expired. Reconnect Google and try again."
+              : "Google Calendar rejected the agenda export.",
+          detail: body.slice(0, 300),
+        });
+        return;
+      }
+
+      res.json({ ok: true, exported, updated, total: agenda.length });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.get("/api/integrations", async (_req: Request, res: Response) => {
     res.json(getIntegrationStatus());
   });
@@ -1735,11 +1877,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
       const account = await store.getGmailAccount();
       const connected = Boolean(account && account.status === "connected");
+      const calendarConnected = Boolean(connected && hasGoogleCalendarScope(account?.scope));
       const requiresReconnect = Boolean(account && account.status === "error");
       res.json({
         configured: cfg.configured,
         authenticated: true,
         connected,
+        calendarConnected,
+        calendarRequiresReconnect: connected && !calendarConnected,
         requiresReconnect,
         email: account?.email ?? null,
         lastScannedAt: account?.last_scanned_at ?? null,
