@@ -630,6 +630,48 @@ function toClientTask(task: DonnitTask) {
   };
 }
 
+function estimateEmailTaskMinutes(input: {
+  title: string;
+  preview?: string | null;
+  actionItems?: string[] | null;
+  urgency?: string | null;
+}) {
+  const text = `${input.title} ${input.preview ?? ""} ${(input.actionItems ?? []).join(" ")}`.toLowerCase();
+  if (/reconcile|receipt|expense|charge|transaction/.test(text)) return 15;
+  if (/invoice|payment|bill|pay /.test(text)) return 20;
+  if (/contract|agreement|proposal|sow|legal/.test(text)) return 45;
+  if (/document|feedback|review comments|redline/.test(text)) return 45;
+  if (/approve|approval|sign off/.test(text)) return 30;
+  if (/meeting|schedule|reschedule|calendar/.test(text)) return 15;
+  if (/reply|respond|follow up|following up/.test(text)) return 15;
+  if (input.urgency === "high" || input.urgency === "critical") return 45;
+  return 30;
+}
+
+function buildEmailTaskDescription(input: {
+  subject: string;
+  fromEmail: string;
+  preview: string;
+  actionItems?: string[] | null;
+  body?: string | null;
+}) {
+  const lines = [
+    `Donnit interpretation: ${input.preview}`,
+    `Source email: ${input.subject}`,
+    `From: ${input.fromEmail}`,
+  ];
+  const actionItems = (input.actionItems ?? []).filter(Boolean);
+  if (actionItems.length > 0) {
+    lines.push("", "Suggested next steps:");
+    for (const item of actionItems.slice(0, 4)) lines.push(`- ${item}`);
+  }
+  const excerpt = (input.body ?? "").trim();
+  if (excerpt) {
+    lines.push("", "Email excerpt:", excerpt.slice(0, 700));
+  }
+  return lines.join("\n");
+}
+
 function sortClientTasks<T extends { dueDate: string | null; urgency: string; status: string }>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => {
     const aDone = a.status === "completed" ? 1 : 0;
@@ -1660,11 +1702,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const assignedTo = suggestion.assigned_to ?? auth.userId;
         const task = await store.createTask(suggestion.org_id, {
           title: suggestion.suggested_title,
-          description: `${suggestion.subject}\n\n${suggestion.preview}`,
+          description: buildEmailTaskDescription({
+            subject: suggestion.subject,
+            fromEmail: suggestion.from_email,
+            preview: suggestion.preview,
+            actionItems: suggestion.action_items,
+            body: suggestion.body,
+          }),
           status: assignedTo === auth.userId ? "open" : "pending_acceptance",
           urgency: suggestion.urgency,
           due_date: suggestion.suggested_due_date,
-          estimated_minutes: suggestion.urgency === "high" ? 45 : 30,
+          estimated_minutes: estimateEmailTaskMinutes({
+            title: suggestion.suggested_title,
+            preview: suggestion.preview,
+            actionItems: suggestion.action_items,
+            urgency: suggestion.urgency,
+          }),
           assigned_to: assignedTo,
           assigned_by: auth.userId,
           source: "email",

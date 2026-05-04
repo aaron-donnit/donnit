@@ -1179,7 +1179,7 @@ function SuggestionCard({
             From {suggestion.fromEmail} · {formatReceivedAt(suggestion.receivedAt ?? null)}
           </p>
           <p className="mt-0.5 text-xs italic text-muted-foreground break-words">
-            {suggestion.subject}
+            Source: {suggestion.subject}
           </p>
         </div>
         {suggestion.suggestedDueDate && (
@@ -1200,13 +1200,23 @@ function SuggestionCard({
       {(preview || body) && (
         <div className="mt-2 rounded-sm bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
           {expanded && body ? (
-            <pre className="whitespace-pre-wrap break-words font-sans" data-testid={`text-suggestion-body-${suggestion.id}`}>
-              {body}
-            </pre>
+            <div className="space-y-2">
+              <p className="font-medium text-foreground">Donnit interpretation</p>
+              <p className="break-words" data-testid={`text-suggestion-preview-${suggestion.id}`}>
+                {preview}
+              </p>
+              <p className="font-medium text-foreground">Original email excerpt</p>
+              <pre className="whitespace-pre-wrap break-words font-sans" data-testid={`text-suggestion-body-${suggestion.id}`}>
+                {body}
+              </pre>
+            </div>
           ) : (
-            <p className="line-clamp-3 break-words" data-testid={`text-suggestion-preview-${suggestion.id}`}>
-              {preview || body.slice(0, 240)}
-            </p>
+            <div>
+              <p className="font-medium text-foreground">Donnit interpretation</p>
+              <p className="line-clamp-3 break-words" data-testid={`text-suggestion-preview-${suggestion.id}`}>
+                {preview || body.slice(0, 240)}
+              </p>
+            </div>
           )}
           {body && body.length > preview.length && (
             <button

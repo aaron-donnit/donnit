@@ -398,6 +398,245 @@ function inferUrgency(email: GmailEmail) {
   return "normal";
 }
 
+function titleCaseWords(value: string) {
+  const cleaned = value
+    .replace(/["'<>]/g, " ")
+    .replace(/\b(no-?reply|noreply|support|help|billing|receipts?|notifications?|team|mail)\b/gi, " ")
+    .replace(/[_+.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+  return cleaned
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function inferSenderName(from: string | undefined) {
+  const raw = (from ?? "").trim();
+  if (!raw) return "";
+  const display = raw.match(/^"?([^"<]+?)"?\s*</)?.[1]?.trim();
+  if (display) return titleCaseWords(display);
+  const domain = raw.match(/@([^>\s]+)/)?.[1] ?? raw;
+  const root = domain.replace(/^mail\./i, "").split(".")[0] ?? "";
+  return titleCaseWords(root);
+}
+
+function extractMoney(text: string) {
+  const match =
+    text.match(/\b(?:USD|US\$)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\b/i) ??
+    text.match(/\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\b/);
+  return match ? `$${match[1]}` : null;
+}
+
+function inferMerchant(email: GmailEmail, text: string) {
+  const subject = email.subject ?? "";
+  const explicit =
+    subject.match(/\b(?:receipt|invoice|payment|order|purchase)\s+(?:from|for)\s+([^|-]{2,60})/i)?.[1] ??
+    text.match(/\bmerchant\s*[:#-]\s*([^\n|]{2,60})/i)?.[1] ??
+    text.match(/\b(?:paid to|seller|vendor)\s*[:#-]?\s*([^\n|]{2,60})/i)?.[1];
+  const named = explicit ? titleCaseWords(explicit) : "";
+  if (named) return named;
+  const sender = inferSenderName(email.from_);
+  if (/openai|chatgpt/i.test(`${subject} ${email.from_ ?? ""} ${text}`)) return "ChatGPT";
+  return sender || "this vendor";
+}
+
+function clampSentence(value: string, max = 180) {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= max) return cleaned;
+  return cleaned.slice(0, max - 3).trim() + "...";
+}
+
+function dedupeStrings(values: string[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = clampSentence(value, 220);
+    const key = cleaned.toLowerCase();
+    if (!cleaned || seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+type EmailIntent =
+  | "expense_reconciliation"
+  | "invoice_payment"
+  | "approval"
+  | "contract"
+  | "meeting"
+  | "support"
+  | "reply"
+  | "document_review"
+  | "follow_up"
+  | "account_access"
+  | "shipping"
+  | "general_task";
+
+type EmailInterpretation = {
+  intent: EmailIntent;
+  confidence: "high" | "medium" | "low";
+  shouldSuggest: boolean;
+  suggestedTitle: string;
+  rationale: string;
+  actionItems: string[];
+  estimatedMinutes: number;
+};
+
+function interpretEmail(email: GmailEmail, sanitizedBody: string, baseActionItems: string[]): EmailInterpretation {
+  const subject = (email.subject ?? "").replace(/^(re|fw|fwd):\s*/i, "").trim();
+  const text = `${subject}\n${email.snippet ?? ""}\n${sanitizedBody}`.replace(/\s+/g, " ").trim();
+  const lower = text.toLowerCase();
+  const amount = extractMoney(text);
+  const merchant = inferMerchant(email, text);
+
+  const isReceipt = /\b(receipt|purchase|paid|payment received|transaction|charge|order confirmation|your order|subscription renewed|renewal receipt)\b/i.test(text);
+  if (isReceipt && (amount || /\b(receipt|charge|transaction|purchase)\b/i.test(text))) {
+    const suggestedTitle = `Reconcile ${merchant} expense${amount ? ` (${amount})` : ""}`;
+    return {
+      intent: "expense_reconciliation",
+      confidence: "high",
+      shouldSuggest: true,
+      suggestedTitle,
+      rationale: `You received a receipt for ${merchant}${amount ? ` at ${amount}` : ""}. Donnit can add a task to reconcile this expense.`,
+      actionItems: dedupeStrings([
+        `Confirm whether to reconcile the ${merchant} expense${amount ? ` for ${amount}` : ""}.`,
+        ...baseActionItems,
+      ]).slice(0, 4),
+      estimatedMinutes: 15,
+    };
+  }
+
+  if (/\b(invoice|bill|balance due|amount due|payment due|past due)\b/i.test(text)) {
+    const suggestedTitle = `Review ${merchant} invoice${amount ? ` (${amount})` : ""}`;
+    return {
+      intent: "invoice_payment",
+      confidence: "high",
+      shouldSuggest: true,
+      suggestedTitle,
+      rationale: `${merchant} sent an invoice or payment notice${amount ? ` for ${amount}` : ""}. Donnit can add a task to review or pay it.`,
+      actionItems: dedupeStrings([
+        `Review the ${merchant} invoice${amount ? ` for ${amount}` : ""}.`,
+        ...baseActionItems,
+      ]).slice(0, 4),
+      estimatedMinutes: 20,
+    };
+  }
+
+  if (/\b(approve|approval|sign off|authorize|permission requested)\b/i.test(text)) {
+    return {
+      intent: "approval",
+      confidence: "high",
+      shouldSuggest: true,
+      suggestedTitle: `Review approval request: ${subject || merchant}`,
+      rationale: "This email appears to need approval or sign-off before work can continue.",
+      actionItems: dedupeStrings([`Review and approve or decline: ${subject || "the request"}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 30,
+    };
+  }
+
+  if (/\b(contract|agreement|proposal|statement of work|sow|terms)\b/i.test(text)) {
+    return {
+      intent: "contract",
+      confidence: "medium",
+      shouldSuggest: true,
+      suggestedTitle: `Review contract or agreement: ${subject || merchant}`,
+      rationale: "This email references a contract, agreement, proposal, or terms that may require review.",
+      actionItems: dedupeStrings([`Review the contract details from ${merchant}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 45,
+    };
+  }
+
+  if (/\b(reschedule|schedule|calendar invite|meeting|appointment|demo|call)\b/i.test(text)) {
+    return {
+      intent: "meeting",
+      confidence: "medium",
+      shouldSuggest: true,
+      suggestedTitle: `Follow up on scheduling: ${subject || merchant}`,
+      rationale: "This email appears to involve a meeting, call, or scheduling decision.",
+      actionItems: dedupeStrings([`Confirm the scheduling next step for ${subject || merchant}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 15,
+    };
+  }
+
+  if (/\b(ticket|case|support request|bug|issue|incident)\b/i.test(text)) {
+    return {
+      intent: "support",
+      confidence: "high",
+      shouldSuggest: true,
+      suggestedTitle: subject || "Review support request",
+      rationale: "This email appears to be a support issue or customer request that needs ownership.",
+      actionItems: dedupeStrings([`Review and assign the support request.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 30,
+    };
+  }
+
+  if (/\b(reset|login|password|security alert|verify your account|access request)\b/i.test(text)) {
+    return {
+      intent: "account_access",
+      confidence: "medium",
+      shouldSuggest: true,
+      suggestedTitle: `Review account access notice: ${subject || merchant}`,
+      rationale: "This email appears to involve account access, authentication, or a security notice.",
+      actionItems: dedupeStrings([`Review the account access notice from ${merchant}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 10,
+    };
+  }
+
+  if (/\b(document|deck|spreadsheet|file|attachment|review comments|redline)\b/i.test(text) && /\b(review|comment|edit|feedback)\b/i.test(text)) {
+    return {
+      intent: "document_review",
+      confidence: "medium",
+      shouldSuggest: true,
+      suggestedTitle: `Review document feedback: ${subject || merchant}`,
+      rationale: "This email appears to request review, feedback, or edits on a document.",
+      actionItems: dedupeStrings([`Review the document feedback from ${merchant}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 45,
+    };
+  }
+
+  if (/\b(reply|respond|following up|follow up|checking in|circle back)\b/i.test(text)) {
+    return {
+      intent: "reply",
+      confidence: "medium",
+      shouldSuggest: true,
+      suggestedTitle: `Respond to ${merchant}: ${subject || "follow-up"}`,
+      rationale: "This email appears to need a response or follow-up.",
+      actionItems: dedupeStrings([`Respond to ${merchant} about ${subject || "the email"}.`, ...baseActionItems]).slice(0, 4),
+      estimatedMinutes: 15,
+    };
+  }
+
+  if (/\b(shipped|delivery|tracking|delivered|package|order is on the way)\b/i.test(text)) {
+    return {
+      intent: "shipping",
+      confidence: "low",
+      shouldSuggest: false,
+      suggestedTitle: `Track shipment from ${merchant}`,
+      rationale: "This looks like a shipping update. Donnit will avoid creating a task unless there is a clear action.",
+      actionItems: baseActionItems.slice(0, 3),
+      estimatedMinutes: 10,
+    };
+  }
+
+  const hasActionItems = baseActionItems.length > 0;
+  return {
+    intent: hasActionItems ? "general_task" : "follow_up",
+    confidence: hasActionItems ? "medium" : "low",
+    shouldSuggest: hasActionItems,
+    suggestedTitle: inferTitle(email),
+    rationale: hasActionItems
+      ? "Donnit found language that appears to request action or follow-up."
+      : "No clear task was detected in this email.",
+    actionItems: baseActionItems.slice(0, 4),
+    estimatedMinutes: hasActionItems ? 30 : 10,
+  };
+}
+
 function inferTitle(email: GmailEmail) {
   const subject = (email.subject ?? "Review email request").replace(/^(re|fw|fwd):\s*/i, "").trim();
   if (/ticket/i.test(subject)) return subject;
@@ -565,19 +804,21 @@ const RUNTIME_UNAVAILABLE_MESSAGE =
 
 function toCandidate(email: GmailEmail) {
   const sanitizedBody = sanitizeEmailBody(email.body ?? email.snippet ?? "");
-  const actionItems = extractActionItems(sanitizedBody, email.subject ?? "");
+  const extractedActionItems = extractActionItems(sanitizedBody, email.subject ?? "");
+  const interpretation = interpretEmail(email, sanitizedBody, extractedActionItems);
   return {
     gmailMessageId: email.email_id ?? null,
     fromEmail: email.from_ ?? "Unknown sender",
     subject: email.subject ?? "No subject",
-    preview: (email.snippet ?? sanitizedBody.slice(0, 240) ?? "").slice(0, 240),
+    preview: interpretation.rationale.slice(0, 240),
     body: sanitizedBody,
-    actionItems,
-    suggestedTitle: inferTitle(email),
+    actionItems: interpretation.actionItems,
+    suggestedTitle: interpretation.suggestedTitle,
     suggestedDueDate: inferDueDate(email),
     urgency: inferUrgency(email),
     assignedToId: 1,
     receivedAt: email.date ?? null,
+    interpretation,
   };
 }
 
@@ -690,7 +931,8 @@ export async function scanGmailViaConnector(): Promise<GmailScanResult> {
       return true;
     })
     .slice(0, 10)
-    .map(toCandidate);
+    .map(toCandidate)
+    .filter((candidate) => candidate.interpretation.shouldSuggest);
   return { ok: true, source: "connector", candidates };
 }
 
@@ -1055,16 +1297,17 @@ export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanR
       ? new Date(Number(msg.internalDate)).toISOString()
       : null;
     const body = extractMessageBody(msg.payload);
-    candidates.push(
-      toCandidate({
+    const candidate = toCandidate({
         email_id: msg.id,
         from_: from,
         subject,
         snippet: msg.snippet ?? "",
         body,
         date: dateHeader ?? internalIso ?? undefined,
-      }),
-    );
+      });
+    if (candidate.interpretation.shouldSuggest) {
+      candidates.push(candidate);
+    }
   }
   return { ok: true, source: "oauth", candidates };
 }
