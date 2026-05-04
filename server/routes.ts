@@ -598,7 +598,14 @@ function scheduleTasks<T extends {
   });
 }
 
-function buildAgenda(tasks: Task[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE): AgendaItem[] {
+function buildAgenda<T extends {
+  id: string | number;
+  title: string;
+  estimatedMinutes: number;
+  dueDate: string | null;
+  urgency: string;
+  status: string;
+}>(tasks: T[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE): AgendaItem[] {
   return scheduleTasks(tasks, busyByDate, { timeZone });
 }
 
@@ -619,6 +626,8 @@ function toClientTask(task: DonnitTask) {
     estimatedMinutes: task.estimated_minutes,
     assignedToId: task.assigned_to,
     assignedById: task.assigned_by,
+    delegatedToId: task.delegated_to,
+    collaboratorIds: task.collaborator_ids ?? [],
     source: task.source,
     recurrence: task.recurrence,
     reminderDaysBefore: task.reminder_days_before,
@@ -628,6 +637,85 @@ function toClientTask(task: DonnitTask) {
     completionNotes: task.completion_notes,
     createdAt: task.created_at,
   };
+}
+
+type ClientTaskShape = ReturnType<typeof toClientTask>;
+
+function hasTaskRelationshipColumns(task: DonnitTask) {
+  return Object.prototype.hasOwnProperty.call(task, "delegated_to")
+    && Object.prototype.hasOwnProperty.call(task, "collaborator_ids");
+}
+
+function relationshipEventNote(input: {
+  assignedToId: string | number;
+  delegatedToId: string | number | null;
+  collaboratorIds: Array<string | number>;
+}) {
+  return JSON.stringify({
+    assignedToId: String(input.assignedToId),
+    delegatedToId: input.delegatedToId === null ? null : String(input.delegatedToId),
+    collaboratorIds: input.collaboratorIds.map(String),
+  });
+}
+
+function applyRelationshipEvents<T extends {
+  id: string | number;
+  assignedToId: string | number;
+  delegatedToId?: string | number | null;
+  collaboratorIds?: Array<string | number>;
+}>(tasks: T[], events: Array<{ task_id?: string | number; taskId?: string | number; type: string; note: string }>): T[] {
+  const byTaskId = new Map<string, { delegatedToId: string | null; collaboratorIds: string[] }>();
+  for (const event of events) {
+    if (event.type !== "relationships_updated") continue;
+    const taskId = String(event.task_id ?? event.taskId ?? "");
+    if (!taskId || byTaskId.has(taskId)) continue;
+    try {
+      const parsed = JSON.parse(event.note) as { delegatedToId?: string | null; collaboratorIds?: string[] };
+      byTaskId.set(taskId, {
+        delegatedToId: parsed.delegatedToId ?? null,
+        collaboratorIds: Array.isArray(parsed.collaboratorIds) ? parsed.collaboratorIds : [],
+      });
+    } catch {
+      // Ignore older free-text events.
+    }
+  }
+  return tasks.map((task) => {
+    const snapshot = byTaskId.get(String(task.id));
+    if (!snapshot) return task;
+    return {
+      ...task,
+      delegatedToId: task.delegatedToId ?? snapshot.delegatedToId,
+      collaboratorIds: task.collaboratorIds && task.collaboratorIds.length > 0
+        ? task.collaboratorIds
+        : snapshot.collaboratorIds,
+    };
+  });
+}
+
+function parseDemoCollaboratorIds(value: unknown): number[] {
+  if (Array.isArray(value)) return value.filter((id): id is number => typeof id === "number");
+  if (typeof value !== "string" || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((id): id is number => typeof id === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+type ClientDemoTask = Omit<Task, "collaboratorIds"> & { collaboratorIds: number[] };
+
+function toClientDemoTask(task: Task): ClientDemoTask {
+  return {
+    ...task,
+    collaboratorIds: parseDemoCollaboratorIds(task.collaboratorIds),
+  };
+}
+
+function parseDemoUserId(value: string | number): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return null;
 }
 
 function estimateEmailTaskMinutes(input: {
@@ -882,7 +970,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     managerId: m.manager_id,
     canAssign: m.can_assign,
   }));
-  const clientTasks = sortClientTasks(tasks.map(toClientTask));
+  const clientTasks = sortClientTasks(applyRelationshipEvents(tasks.map(toClientTask), events));
   const calendarContext = await tryBuildGoogleCalendarContext(store);
   return {
     authenticated: true,
@@ -964,7 +1052,7 @@ async function buildDemoBootstrap() {
       suggestedTitle: "Review contract renewal terms",
     },
   ];
-  const demoTasks = sortTasks(tasks).map((task, index) => ({
+  const demoTasks = sortTasks(applyRelationshipEvents(tasks.map(toClientDemoTask), events)).map((task, index) => ({
     ...task,
     title: demoTaskTitles[index] ?? task.title,
     description: demoTaskDescriptions[index] ?? "Demo task for the public preview workspace.",
@@ -1471,7 +1559,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       assignedToId: data.assignedToId,
       assignedById: data.assignedById,
     });
-    res.status(201).json(task);
+    res.status(201).json(toClientDemoTask(task));
   });
 
   app.patch("/api/tasks/:id", async (req: Request, res: Response) => {
@@ -1505,6 +1593,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (data.dueDate !== undefined) patch.due_date = data.dueDate;
         if (data.estimatedMinutes !== undefined) patch.estimated_minutes = data.estimatedMinutes;
         if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
+        const supportsRelationshipColumns = hasTaskRelationshipColumns(existing);
+        const nextDelegatedToId = data.delegatedToId === undefined
+          ? existing.delegated_to ?? null
+          : data.delegatedToId === null
+            ? null
+            : String(data.delegatedToId);
+        const nextCollaboratorIds = data.collaboratorIds === undefined
+          ? existing.collaborator_ids ?? []
+          : Array.from(
+              new Set(data.collaboratorIds.map((id) => String(id)).filter((id) => id !== (patch.assigned_to ?? existing.assigned_to))),
+            );
+        if (supportsRelationshipColumns && data.delegatedToId !== undefined) {
+          patch.delegated_to = nextDelegatedToId;
+        }
+        if (supportsRelationshipColumns && data.collaboratorIds !== undefined) {
+          const collaborators = Array.from(
+            new Set(data.collaboratorIds.map((id) => String(id)).filter((id) => id !== (patch.assigned_to ?? existing.assigned_to))),
+          );
+          patch.collaborator_ids = collaborators;
+        }
         if (data.note !== undefined) patch.completion_notes = data.note;
 
         const updated = await store.updateTask(taskId, patch);
@@ -1515,8 +1623,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await store.addEvent(updated.org_id, {
           task_id: updated.id,
           actor_id: auth.userId,
-          type: "updated",
-          note: data.note || "Task details updated.",
+          type: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
+            ? "relationships_updated"
+            : "updated",
+          note: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
+            ? relationshipEventNote({
+                assignedToId: updated.assigned_to,
+                delegatedToId: nextDelegatedToId,
+                collaboratorIds: nextCollaboratorIds,
+              })
+            : data.note || "Task details updated.",
         });
         res.json(toClientTask(updated));
         return;
@@ -1527,6 +1643,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const id = Number(req.params.id);
+    const existingTask = (await storage.listTasks()).find((candidate) => candidate.id === id);
     const patch: Partial<Task> = {};
     if (data.title !== undefined) patch.title = data.title;
     if (data.description !== undefined) patch.description = data.description;
@@ -1538,11 +1655,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (data.dueDate !== undefined) patch.dueDate = data.dueDate;
     if (data.estimatedMinutes !== undefined) patch.estimatedMinutes = data.estimatedMinutes;
     if (data.assignedToId !== undefined) {
-      if (typeof data.assignedToId !== "number") {
+      const assignedToId = parseDemoUserId(data.assignedToId);
+      if (assignedToId === null) {
         res.status(400).json({ message: "Demo task assignments require numeric user ids." });
         return;
       }
-      patch.assignedToId = data.assignedToId;
+      patch.assignedToId = assignedToId;
+    }
+    if (data.delegatedToId !== undefined) {
+      const delegatedToId = data.delegatedToId === null ? null : parseDemoUserId(data.delegatedToId);
+      if (delegatedToId === null && data.delegatedToId !== null) {
+        res.status(400).json({ message: "Demo task delegation requires numeric user ids." });
+        return;
+      }
+      patch.delegatedToId = delegatedToId;
+    }
+    if (data.collaboratorIds !== undefined) {
+      const parsedCollaborators = data.collaboratorIds.map(parseDemoUserId);
+      if (parsedCollaborators.some((id) => id === null)) {
+        res.status(400).json({ message: "Demo task collaborators require numeric user ids." });
+        return;
+      }
+      const ownerId = patch.assignedToId ?? existingTask?.assignedToId;
+      patch.collaboratorIds = JSON.stringify(
+        Array.from(new Set(parsedCollaborators.filter((id): id is number => id !== null && id !== ownerId))),
+      );
     }
     if (data.note !== undefined) patch.completionNotes = data.note;
 
@@ -1554,10 +1691,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await storage.addEvent({
       taskId: id,
       actorId: DEMO_USER_ID,
-      type: "updated",
-      note: data.note || "Task details updated.",
+      type: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
+        ? "relationships_updated"
+        : "updated",
+      note: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
+        ? relationshipEventNote({
+            assignedToId: task.assignedToId,
+            delegatedToId: task.delegatedToId,
+            collaboratorIds: parseDemoCollaboratorIds(task.collaboratorIds),
+          })
+        : data.note || "Task details updated.",
     });
-    res.json(task);
+    res.json(toClientDemoTask(task));
   });
 
   async function handleTaskAction(
@@ -1677,7 +1822,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return;
     }
     await storage.addEvent({ taskId: id, actorId: DEMO_USER_ID, type: eventType, note: eventNote });
-    res.json(task);
+    res.json(toClientDemoTask(task));
   }
 
   app.post("/api/tasks/:id/complete", (req, res) => handleTaskAction(req, res, "complete"));

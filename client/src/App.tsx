@@ -101,6 +101,8 @@ type Task = {
   estimatedMinutes: number;
   assignedToId: Id;
   assignedById: Id;
+  delegatedToId: Id | null;
+  collaboratorIds: Id[];
   source: string;
   recurrence: string;
   reminderDaysBefore: number;
@@ -536,6 +538,8 @@ function TaskRow({
   isCompleting: boolean;
 }) {
   const assignee = users.find((user) => user.id === task.assignedToId);
+  const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
+  const collaboratorCount = task.collaboratorIds?.length ?? 0;
   const isDone = task.status === "completed";
 
   return (
@@ -601,6 +605,18 @@ function TaskRow({
             <UserRoundCheck className="size-3.5" />
             {assignee?.name ?? "Unassigned"}
           </span>
+          {delegate && (
+            <span className="inline-flex items-center gap-1">
+              <UserPlus className="size-3.5" />
+              Delegated to {delegate.name}
+            </span>
+          )}
+          {collaboratorCount > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Users className="size-3.5" />
+              {collaboratorCount} collaborator{collaboratorCount === 1 ? "" : "s"}
+            </span>
+          )}
           {task.status !== "open" && task.status !== "completed" && (
             <span className="ui-label">{statusLabels[task.status] ?? task.status}</span>
           )}
@@ -740,6 +756,8 @@ function TaskDetailDialog({
   const [dueDate, setDueDate] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [assignedToId, setAssignedToId] = useState("");
+  const [delegatedToId, setDelegatedToId] = useState("");
+  const [collaboratorIds, setCollaboratorIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
 
   useEffect(() => {
@@ -751,6 +769,8 @@ function TaskDetailDialog({
     setDueDate(task.dueDate ?? "");
     setEstimatedMinutes(task.estimatedMinutes);
     setAssignedToId(String(task.assignedToId));
+    setDelegatedToId(task.delegatedToId ? String(task.delegatedToId) : "");
+    setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
   }, [task]);
 
@@ -765,6 +785,8 @@ function TaskDetailDialog({
         dueDate: dueDate || null,
         estimatedMinutes,
         assignedToId,
+        delegatedToId: delegatedToId || null,
+        collaboratorIds,
         note: note.trim() || undefined,
       });
       return (await res.json()) as Task;
@@ -786,7 +808,14 @@ function TaskDetailDialog({
   if (!task) return null;
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
+  const delegate = users.find((user) => String(user.id) === delegatedToId);
+  const availableCollaborators = users.filter((user) => String(user.id) !== assignedToId);
   const ready = title.trim().length >= 2;
+  const toggleCollaborator = (userId: string) => {
+    setCollaboratorIds((current) =>
+      current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId],
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -794,7 +823,8 @@ function TaskDetailDialog({
         <DialogHeader>
           <DialogTitle>Task details</DialogTitle>
           <DialogDescription>
-            Assigned to {assignee?.name ?? "Unknown"} by {assigner?.name ?? "Unknown"}.
+            Owned by {assignee?.name ?? "Unknown"} - assigned by {assigner?.name ?? "Unknown"}
+            {delegate ? `, delegated to ${delegate.name}` : ""}.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
@@ -864,21 +894,75 @@ function TaskDetailDialog({
               />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="task-detail-assignee">Assignee</Label>
-            <select
-              id="task-detail-assignee"
-              value={assignedToId}
-              onChange={(event) => setAssignedToId(event.target.value)}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              data-testid="select-task-detail-assignee"
-            >
-              {users.map((user) => (
-                <option key={String(user.id)} value={String(user.id)}>
-                  {user.name}
-                </option>
-              ))}
-            </select>
+          <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">People</p>
+            </div>
+            <div className="grid gap-3 px-3 py-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-detail-assignee">Owner / reassign</Label>
+                  <select
+                    id="task-detail-assignee"
+                    value={assignedToId}
+                    onChange={(event) => {
+                      const nextOwner = event.target.value;
+                      setAssignedToId(nextOwner);
+                      setDelegatedToId((current) => (current === nextOwner ? "" : current));
+                      setCollaboratorIds((current) => current.filter((id) => id !== nextOwner));
+                    }}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid="select-task-detail-assignee"
+                  >
+                    {users.map((user) => (
+                      <option key={String(user.id)} value={String(user.id)}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-detail-delegate">Delegate</Label>
+                  <select
+                    id="task-detail-delegate"
+                    value={delegatedToId}
+                    onChange={(event) => setDelegatedToId(event.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid="select-task-detail-delegate"
+                  >
+                    <option value="">No delegate</option>
+                    {users
+                      .filter((user) => String(user.id) !== assignedToId)
+                      .map((user) => (
+                        <option key={String(user.id)} value={String(user.id)}>
+                          {user.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Collaborators</Label>
+                <div className="grid gap-2 sm:grid-cols-2" data-testid="group-task-detail-collaborators">
+                  {availableCollaborators.map((user) => {
+                    const value = String(user.id);
+                    const checked = collaboratorIds.includes(value);
+                    return (
+                      <label key={value} className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2 text-sm">
+                        <span className="min-w-0 truncate">{user.name}</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleCollaborator(value)}
+                          className="size-4"
+                          data-testid={`checkbox-task-collaborator-${value}`}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-description">Description</Label>

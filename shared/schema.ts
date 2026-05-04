@@ -22,6 +22,8 @@ export const tasks = sqliteTable("tasks", {
   estimatedMinutes: integer("estimated_minutes").notNull().default(30),
   assignedToId: integer("assigned_to_id").notNull(),
   assignedById: integer("assigned_by_id").notNull(),
+  delegatedToId: integer("delegated_to_id"),
+  collaboratorIds: text("collaborator_ids").notNull().default("[]"),
   source: text("source").notNull().default("chat"),
   recurrence: text("recurrence").notNull().default("none"),
   reminderDaysBefore: integer("reminder_days_before").notNull().default(0),
@@ -115,6 +117,8 @@ export const taskUpdateRequestSchema = z.object({
   dueDate: z.string().nullable().optional(),
   estimatedMinutes: z.number().int().min(5).max(480).optional(),
   assignedToId: z.union([z.string().min(1), z.number()]).optional(),
+  delegatedToId: z.union([z.string().min(1), z.number()]).nullable().optional(),
+  collaboratorIds: z.array(z.union([z.string().min(1), z.number()])).optional(),
   note: z.string().trim().max(1000).optional(),
 });
 

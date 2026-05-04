@@ -60,6 +60,8 @@ function getDb(): BetterSQLite3Database {
       estimated_minutes INTEGER NOT NULL DEFAULT 30,
       assigned_to_id INTEGER NOT NULL,
       assigned_by_id INTEGER NOT NULL,
+      delegated_to_id INTEGER,
+      collaborator_ids TEXT NOT NULL DEFAULT '[]',
       source TEXT NOT NULL DEFAULT 'chat',
       recurrence TEXT NOT NULL DEFAULT 'none',
       reminder_days_before INTEGER NOT NULL DEFAULT 0,
@@ -100,6 +102,13 @@ function getDb(): BetterSQLite3Database {
       created_at TEXT NOT NULL
     );
   `);
+  const taskColumns = new Set((sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (!taskColumns.has("delegated_to_id")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN delegated_to_id INTEGER");
+  }
+  if (!taskColumns.has("collaborator_ids")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN collaborator_ids TEXT NOT NULL DEFAULT '[]'");
+  }
   cachedDb = drizzle(sqlite);
   seedIfEmpty(cachedDb);
   return cachedDb;

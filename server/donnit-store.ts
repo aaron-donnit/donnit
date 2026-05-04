@@ -53,6 +53,8 @@ export type DonnitTask = {
   estimated_minutes: number;
   assigned_to: string;
   assigned_by: string;
+  delegated_to: string | null;
+  collaborator_ids: string[];
   source: "chat" | "manual" | "email" | "automation" | "annual";
   recurrence: "none" | "annual";
   reminder_days_before: number;
@@ -172,7 +174,22 @@ export class DonnitStore {
     return (data ?? []) as DonnitTask[];
   }
 
-  async createTask(orgId: string, input: Omit<DonnitTask, "id" | "org_id" | "created_at" | "accepted_at" | "denied_at" | "completed_at" | "completion_notes">): Promise<DonnitTask> {
+  async createTask(
+    orgId: string,
+    input: Omit<
+      DonnitTask,
+      | "id"
+      | "org_id"
+      | "created_at"
+      | "accepted_at"
+      | "denied_at"
+      | "completed_at"
+      | "completion_notes"
+      | "delegated_to"
+      | "collaborator_ids"
+    > &
+      Partial<Pick<DonnitTask, "delegated_to" | "collaborator_ids">>,
+  ): Promise<DonnitTask> {
     const { data, error } = await this.client
       .from(DONNIT_TABLES.tasks)
       .insert({ ...input, org_id: orgId })
