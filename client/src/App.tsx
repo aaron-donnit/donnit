@@ -805,6 +805,53 @@ function TaskDetailDialog({
     },
   });
 
+  const updateRelationships = useMutation({
+    mutationFn: async (next: {
+      assignedToId: string;
+      delegatedToId: string;
+      collaboratorIds: string[];
+    }) => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
+        assignedToId: next.assignedToId,
+        delegatedToId: next.delegatedToId || null,
+        collaboratorIds: next.collaboratorIds,
+      });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Task routing updated", description: "People changes were saved." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update people",
+        description: error instanceof Error ? error.message : "Try that routing change again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const donnit = useMutation({
+    mutationFn: async () => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: note.trim() || "Donnit." });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Donnit", description: "Task completed." });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not complete task",
+        description: error instanceof Error ? error.message : "Try completing it again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   if (!task) return null;
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
@@ -816,10 +863,26 @@ function TaskDetailDialog({
   const ready = title.trim().length >= 2;
   const addCollaborator = (userId: string) => {
     if (!userId) return;
-    setCollaboratorIds((current) => (current.includes(userId) ? current : [...current, userId]));
+    const nextCollaborators = collaboratorIds.includes(userId) ? collaboratorIds : [...collaboratorIds, userId];
+    setCollaboratorIds(nextCollaborators);
+    updateRelationships.mutate({ assignedToId, delegatedToId, collaboratorIds: nextCollaborators });
   };
   const removeCollaborator = (userId: string) => {
-    setCollaboratorIds((current) => current.filter((id) => id !== userId));
+    const nextCollaborators = collaboratorIds.filter((id) => id !== userId);
+    setCollaboratorIds(nextCollaborators);
+    updateRelationships.mutate({ assignedToId, delegatedToId, collaboratorIds: nextCollaborators });
+  };
+  const reassignOwner = (userId: string) => {
+    const nextDelegate = delegatedToId === userId ? "" : delegatedToId;
+    const nextCollaborators = collaboratorIds.filter((id) => id !== userId);
+    setAssignedToId(userId);
+    setDelegatedToId(nextDelegate);
+    setCollaboratorIds(nextCollaborators);
+    updateRelationships.mutate({ assignedToId: userId, delegatedToId: nextDelegate, collaboratorIds: nextCollaborators });
+  };
+  const delegateTask = (userId: string) => {
+    setDelegatedToId(userId);
+    updateRelationships.mutate({ assignedToId, delegatedToId: userId, collaboratorIds });
   };
 
   return (
@@ -834,96 +897,6 @@ function TaskDetailDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="grid gap-4">
-          <div className="rounded-md border border-border">
-            <div className="border-b border-border px-3 py-2">
-              <p className="text-sm font-medium text-foreground">People</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Reassign ownership, delegate completion, or add collaborators.
-              </p>
-            </div>
-            <div className="grid gap-3 px-3 py-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="task-detail-assignee">Reassign owner</Label>
-                  <select
-                    id="task-detail-assignee"
-                    value={assignedToId}
-                    onChange={(event) => {
-                      const nextOwner = event.target.value;
-                      setAssignedToId(nextOwner);
-                      setDelegatedToId((current) => (current === nextOwner ? "" : current));
-                      setCollaboratorIds((current) => current.filter((id) => id !== nextOwner));
-                    }}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    data-testid="select-task-detail-assignee"
-                  >
-                    {users.map((user) => (
-                      <option key={String(user.id)} value={String(user.id)}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="task-detail-delegate">Delegate task</Label>
-                  <select
-                    id="task-detail-delegate"
-                    value={delegatedToId}
-                    onChange={(event) => setDelegatedToId(event.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    data-testid="select-task-detail-delegate"
-                  >
-                    <option value="">No delegate</option>
-                    {users
-                      .filter((user) => String(user.id) !== assignedToId)
-                      .map((user) => (
-                        <option key={String(user.id)} value={String(user.id)}>
-                          {user.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="task-detail-collaborator-add">Add collaborator</Label>
-                <select
-                  id="task-detail-collaborator-add"
-                  value=""
-                  onChange={(event) => addCollaborator(event.target.value)}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  data-testid="select-task-detail-add-collaborator"
-                >
-                  <option value="">Choose a collaborator...</option>
-                  {collaboratorOptions.map((user) => (
-                    <option key={String(user.id)} value={String(user.id)}>
-                      {user.name}
-                    </option>
-                  ))}
-                </select>
-                {selectedCollaborators.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pt-1" data-testid="list-task-detail-collaborators">
-                    {selectedCollaborators.map((user) => (
-                      <span
-                        key={String(user.id)}
-                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-foreground"
-                      >
-                        {user.name}
-                        <button
-                          type="button"
-                          onClick={() => removeCollaborator(String(user.id))}
-                          className="rounded-sm text-muted-foreground hover:text-foreground"
-                          aria-label={`Remove ${user.name}`}
-                          data-testid={`button-remove-collaborator-${user.id}`}
-                        >
-                          <X className="size-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-title">Title</Label>
             <Input
@@ -1015,13 +988,107 @@ function TaskDetailDialog({
           </div>
           </div>
         </div>
-        <DialogFooter className="shrink-0 border-t border-border px-5 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-detail-cancel">
-            Cancel
-          </Button>
-          <Button onClick={() => save.mutate()} disabled={!ready || save.isPending} data-testid="button-task-detail-save">
-            {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-            Save task
+        <DialogFooter className="flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" disabled={updateRelationships.isPending} data-testid="button-task-people-menu">
+                  {updateRelationships.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Users className="size-4" />
+                  )}
+                  Reassign / delegate / collaborate
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72">
+                <DropdownMenuLabel>Reassign owner</DropdownMenuLabel>
+                {users.map((user) => {
+                  const userId = String(user.id);
+                  return (
+                    <DropdownMenuItem
+                      key={`owner-${userId}`}
+                      onClick={() => reassignOwner(userId)}
+                      data-testid={`menu-reassign-${userId}`}
+                    >
+                      <UserRoundCheck className="size-4" />
+                      <span>{user.name}</span>
+                      {userId === assignedToId && <Check className="ml-auto size-4" />}
+                    </DropdownMenuItem>
+                  );
+                })}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Delegate task</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => delegateTask("")} data-testid="menu-delegate-none">
+                  <X className="size-4" />
+                  No delegate
+                  {!delegatedToId && <Check className="ml-auto size-4" />}
+                </DropdownMenuItem>
+                {users
+                  .filter((user) => String(user.id) !== assignedToId)
+                  .map((user) => {
+                    const userId = String(user.id);
+                    return (
+                      <DropdownMenuItem
+                        key={`delegate-${userId}`}
+                        onClick={() => delegateTask(userId)}
+                        data-testid={`menu-delegate-${userId}`}
+                      >
+                        <UserPlus className="size-4" />
+                        <span>{user.name}</span>
+                        {userId === delegatedToId && <Check className="ml-auto size-4" />}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Add collaborator</DropdownMenuLabel>
+                {collaboratorOptions.length === 0 ? (
+                  <DropdownMenuItem disabled>All available people added</DropdownMenuItem>
+                ) : (
+                  collaboratorOptions.map((user) => {
+                    const userId = String(user.id);
+                    return (
+                      <DropdownMenuItem
+                        key={`collaborator-${userId}`}
+                        onClick={() => addCollaborator(userId)}
+                        data-testid={`menu-add-collaborator-${userId}`}
+                      >
+                        <Users className="size-4" />
+                        {user.name}
+                      </DropdownMenuItem>
+                    );
+                  })
+                )}
+                {selectedCollaborators.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Current collaborators</DropdownMenuLabel>
+                    {selectedCollaborators.map((user) => (
+                      <DropdownMenuItem
+                        key={`remove-collaborator-${user.id}`}
+                        onClick={() => removeCollaborator(String(user.id))}
+                        data-testid={`menu-remove-collaborator-${user.id}`}
+                      >
+                        <X className="size-4" />
+                        Remove {user.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="outline" onClick={() => save.mutate()} disabled={!ready || save.isPending} data-testid="button-task-detail-save">
+              {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              Save changes
+            </Button>
+          </div>
+          <Button
+            onClick={() => donnit.mutate()}
+            disabled={donnit.isPending || task.status === "completed"}
+            data-testid="button-task-donnit"
+          >
+            {donnit.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+            Donnit
           </Button>
         </DialogFooter>
       </DialogContent>
