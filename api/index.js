@@ -91,17 +91,28 @@ function isHealthPath(req) {
   return false;
 }
 
+function hasDetailedHealthAccess(req) {
+  if (process.env.NODE_ENV !== "production") return true;
+  const expected = process.env.DONNIT_HEALTH_TOKEN;
+  const actual = req && req.headers && req.headers["x-donnit-health-token"];
+  return Boolean(expected && actual === expected);
+}
+
 // Direct health response. Does NOT load the bundle. Reports BOOLEAN env
 // presence only — never the values themselves. Useful for verifying that:
 //   1. The function entry is reachable at all (status 200).
 //   2. ENTRY_VERSION matches the deployed commit.
 //   3. The required env vars are wired up in Vercel project settings.
 //   4. If a previous request tripped bundle init, lastInitError is exposed.
-function respondHealth(res) {
+function respondHealth(req, res) {
   try {
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "no-store");
+    if (!hasDetailedHealthAccess(req)) {
+      res.end(JSON.stringify({ ok: true, status: "available" }));
+      return;
+    }
     res.setHeader("x-donnit-entry", ENTRY_VERSION);
     res.setHeader("x-donnit-commit", BUILD_MARKER);
     res.end(
@@ -144,8 +155,10 @@ function safeError(res, req, reason) {
     try {
       res.statusCode = 302;
       res.setHeader("Location", "/?gmail=" + encodeURIComponent(reason));
-      res.setHeader("x-donnit-entry", ENTRY_VERSION);
-      res.setHeader("x-donnit-commit", BUILD_MARKER);
+      if (hasDetailedHealthAccess(req)) {
+        res.setHeader("x-donnit-entry", ENTRY_VERSION);
+        res.setHeader("x-donnit-commit", BUILD_MARKER);
+      }
       res.end();
       return;
     } catch (_ignored) {
@@ -155,15 +168,17 @@ function safeError(res, req, reason) {
   try {
     res.statusCode = 500;
     res.setHeader("content-type", "application/json; charset=utf-8");
-    res.setHeader("x-donnit-entry", ENTRY_VERSION);
-    res.setHeader("x-donnit-commit", BUILD_MARKER);
+    if (hasDetailedHealthAccess(req)) {
+      res.setHeader("x-donnit-entry", ENTRY_VERSION);
+      res.setHeader("x-donnit-commit", BUILD_MARKER);
+    }
     res.end(
       JSON.stringify({
         ok: false,
         reason: reason,
-        entry: ENTRY_VERSION,
-        commit: BUILD_MARKER,
-        lastInitError: lastInitError,
+        ...(hasDetailedHealthAccess(req)
+          ? { entry: ENTRY_VERSION, commit: BUILD_MARKER, lastInitError: lastInitError }
+          : {}),
       }),
     );
   } catch (_ignored) {
@@ -177,8 +192,10 @@ function safeError(res, req, reason) {
 
 export default async function handler(req, res) {
   try {
-    res.setHeader("x-donnit-entry", ENTRY_VERSION);
-    res.setHeader("x-donnit-commit", BUILD_MARKER);
+    if (hasDetailedHealthAccess(req)) {
+      res.setHeader("x-donnit-entry", ENTRY_VERSION);
+      res.setHeader("x-donnit-commit", BUILD_MARKER);
+    }
   } catch (_ignored) {
     // headers already sent (very unlikely at this point)
   }
@@ -186,7 +203,7 @@ export default async function handler(req, res) {
   // Direct entry-level health response. MUST run before loadApp() so a
   // broken bundle cannot mask whether the function entry is reachable.
   if (isHealthPath(req)) {
-    return respondHealth(res);
+    return respondHealth(req, res);
   }
 
   let app;

@@ -981,6 +981,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
+  const showDebugTools = import.meta.env.DEV;
 
   // The Gmail OAuth callback redirects to "/?gmail=<reason>" after Google
   // sends the user back. Detect that on mount, surface a typed toast, and
@@ -1432,20 +1433,24 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       loading: buildAgenda.isPending,
       hint: "Sort by due date and urgency",
     },
-    {
-      id: "export-calendar",
-      label: "Export to calendar",
-      icon: CalendarPlus,
-      disabled: true,
-      hint: "Calendar export — coming soon",
-    },
-    {
-      id: "assign-task",
-      label: "Assign task",
-      icon: UserPlus,
-      disabled: true,
-      hint: "Assign through chat for now",
-    },
+    ...(showDebugTools
+      ? [
+          {
+            id: "export-calendar",
+            label: "Export to calendar",
+            icon: CalendarPlus,
+            disabled: true,
+            hint: "Calendar export — coming soon",
+          } satisfies FunctionAction,
+          {
+            id: "assign-task",
+            label: "Assign task",
+            icon: UserPlus,
+            disabled: true,
+            hint: "Assign through chat for now",
+          } satisfies FunctionAction,
+        ]
+      : []),
     {
       id: "view-log",
       label: "View log",
@@ -1558,15 +1563,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <span>
               Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
             </span>
-            <button
-              type="button"
-              onClick={() => setManualImportOpen(true)}
-              className="text-[11px] underline-offset-2 hover:underline"
-              data-testid="link-manual-email-debug"
-              title="Diagnostic only — Scan email is the primary email-to-task flow"
-            >
-              Manual import (debug)
-            </button>
+            {showDebugTools && (
+              <button
+                type="button"
+                onClick={() => setManualImportOpen(true)}
+                className="text-[11px] underline-offset-2 hover:underline"
+                data-testid="link-manual-email-debug"
+                title="Diagnostic only — Scan email is the primary email-to-task flow"
+              >
+                Manual import (debug)
+              </button>
+            )}
           </span>
         </div>
       </footer>

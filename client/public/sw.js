@@ -17,5 +17,10 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request).then((cached) => cached ?? caches.match("/"))));
+  const url = new URL(event.request.url);
+  const isApiRequest = url.origin === self.location.origin && url.pathname.startsWith("/api/");
+  if (isApiRequest) return;
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request).then((cached) => cached ?? caches.match("/"))),
+  );
 });

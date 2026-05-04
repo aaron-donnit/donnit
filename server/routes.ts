@@ -602,17 +602,64 @@ async function buildDemoBootstrap() {
     storage.listChatMessages(),
     storage.listEmailSuggestions(),
   ]);
+  const demoNames = ["Demo Owner", "Demo Manager", "Demo Member"];
+  const demoTaskTitles = [
+    "Confirm MVP scope",
+    "Review email-scan permission copy",
+    "Prepare recurring operations checklist",
+  ];
+  const demoTaskDescriptions = [
+    "Decide the first release boundary and what can wait until integrations.",
+    "Make the opt-in prompt clear before Donnit suggests a task from an email.",
+    "Document a repeatable weekly task so a replacement employee can ramp faster.",
+  ];
+  const demoSuggestions = [
+    {
+      fromEmail: "support@example.invalid",
+      subject: "New support request needs assignment",
+      preview: "A customer-facing support issue needs owner review before end of week.",
+      suggestedTitle: "Assign customer support follow-up",
+    },
+    {
+      fromEmail: "finance@example.invalid",
+      subject: "Contract renewal needs approval",
+      preview: "Please review the renewal terms and confirm the next step.",
+      suggestedTitle: "Review contract renewal terms",
+    },
+  ];
+  const demoTasks = sortTasks(tasks).map((task, index) => ({
+    ...task,
+    title: demoTaskTitles[index] ?? task.title,
+    description: demoTaskDescriptions[index] ?? "Demo task for the public preview workspace.",
+  }));
 
   return {
     authenticated: false,
     bootstrapped: true,
     currentUserId: DEMO_USER_ID,
-    users,
-    tasks: sortTasks(tasks),
-    events,
+    users: users.map((user, index) => ({
+      ...user,
+      name: demoNames[index] ?? `Demo User ${index + 1}`,
+      email: `demo-user-${index + 1}@example.invalid`,
+    })),
+    tasks: demoTasks,
+    events: events.map((event) => ({
+      ...event,
+      note: event.note ? "Demo activity event." : event.note,
+    })),
     messages,
-    suggestions,
-    agenda: buildAgenda(tasks),
+    suggestions: suggestions.map((suggestion, index) => {
+      const demo = demoSuggestions[index];
+      if (!demo) return suggestion;
+      return {
+        ...suggestion,
+        fromEmail: demo.fromEmail,
+        subject: demo.subject,
+        preview: demo.preview,
+        suggestedTitle: demo.suggestedTitle,
+      };
+    }),
+    agenda: buildAgenda(demoTasks),
     integrations: getIntegrationStatus(),
   };
 }
@@ -653,6 +700,14 @@ function parseChatTaskAuthenticated(
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use("/api", attachSupabaseAuth);
+  const detailedHealthAllowed = (req: Request) => {
+    if (process.env.NODE_ENV !== "production") return true;
+    const expected = process.env.DONNIT_HEALTH_TOKEN;
+    return Boolean(expected && req.get("x-donnit-health-token") === expected);
+  };
+  const sendHealthNotFound = (res: Response) => {
+    res.status(404).json({ ok: false, message: "Not Found" });
+  };
 
   // ------------------------------------------------------------------
   // Health probe — no auth required, no secrets exposed.
@@ -662,8 +717,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // 302s to /?gmail=server_misconfigured, hit /api/health to see which
   // env is missing.
   // ------------------------------------------------------------------
-  app.get("/api/health", (_req: Request, res: Response) => {
+  app.get("/api/health", (req: Request, res: Response) => {
     try {
+      if (!detailedHealthAllowed(req)) {
+        res.json({ ok: true, status: "available" });
+        return;
+      }
       res.json({
         ok: true,
         time: new Date().toISOString(),
@@ -705,7 +764,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   //   4. (always, when 3 fails) HEAD-select donnit.profiles for comparison
   //      so the operator can tell "schema works, this table is missing"
   //      apart from "schema not exposed at all".
-  app.get("/api/health/db", async (_req: Request, res: Response) => {
+  app.get("/api/health/db", async (req: Request, res: Response) => {
+    if (!detailedHealthAllowed(req)) {
+      sendHealthNotFound(res);
+      return;
+    }
     const supabaseUrl = process.env.SUPABASE_URL ?? "";
     const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
     const projectRef = parseSupabaseRef(supabaseUrl);

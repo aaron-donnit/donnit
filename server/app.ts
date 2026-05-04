@@ -26,6 +26,29 @@ export function log(message: string, source = "express") {
 // there is no persistent http.Server in that environment.
 export async function createApiApp(httpServer: Server | null): Promise<Express> {
   const app = express();
+  app.disable("x-powered-by");
+
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "connect-src 'self' https://*.supabase.co https://gmail.googleapis.com",
+        "form-action 'self'",
+      ].join("; "),
+    );
+    next();
+  });
 
   app.use(
     express.json({
