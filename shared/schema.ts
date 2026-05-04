@@ -95,6 +95,8 @@ export const chatRequestSchema = z.object({
 
 export const taskCreateRequestSchema = insertTaskSchema.extend({
   title: z.string().trim().min(2).max(160),
+  assignedToId: z.union([z.string().min(1), z.number()]),
+  assignedById: z.union([z.string().min(1), z.number()]),
   urgency: z.enum(["low", "normal", "high", "critical"]).default("normal"),
   status: z
     .enum(["open", "pending_acceptance", "accepted", "denied", "completed"])

@@ -170,6 +170,71 @@ function invalidateWorkspace() {
   return queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
 }
 
+function escapeIcsText(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function addOneDayIso(date: string) {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setDate(parsed.getDate() + 1);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function downloadAgendaCalendar(agenda: AgendaItem[]) {
+  if (agenda.length === 0) {
+    toast({
+      title: "No agenda to export",
+      description: "Add tasks with due dates, then build your agenda again.",
+    });
+    return;
+  }
+
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const events = agenda.map((item) => {
+    const dueDate = item.dueDate ?? new Date().toISOString().slice(0, 10);
+    const start = dueDate.replace(/-/g, "");
+    const end = addOneDayIso(dueDate).replace(/-/g, "");
+    return [
+      "BEGIN:VEVENT",
+      `UID:donnit-${item.taskId}-${stamp}@donnit`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${start}`,
+      `DTEND;VALUE=DATE:${end}`,
+      `SUMMARY:${escapeIcsText(item.title)}`,
+      `DESCRIPTION:${escapeIcsText(`${item.urgency} urgency · ${item.estimatedMinutes} minutes`)}`,
+      "END:VEVENT",
+    ].join("\r\n");
+  });
+
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Donnit//Agenda Export//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    ...events,
+    "END:VCALENDAR",
+  ].join("\r\n");
+  const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `donnit-agenda-${new Date().toISOString().slice(0, 10)}.ics`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast({
+    title: "Calendar file ready",
+    description: `Exported ${agenda.length} agenda item${agenda.length === 1 ? "" : "s"} as an .ics file.`,
+  });
+}
+
 function Wordmark() {
   return (
     <span className="brand-lockup" aria-label="Donnit">
@@ -845,6 +910,193 @@ function DoneLogPanel({
   );
 }
 
+function AssignTaskDialog({
+  open,
+  onOpenChange,
+  users,
+  currentUserId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  users: User[];
+  currentUserId: Id;
+}) {
+  const assignableUsers = useMemo(
+    () =>
+      users.length > 0
+        ? users
+        : [{ id: currentUserId, name: "You", email: "", role: "", persona: "", managerId: null, canAssign: true }],
+    [users, currentUserId],
+  );
+  const defaultAssigneeId = String(
+    assignableUsers.find((user) => String(user.id) === String(currentUserId))?.id ??
+      assignableUsers[0]?.id ??
+      currentUserId,
+  );
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [assignedToId, setAssignedToId] = useState(defaultAssigneeId);
+  const [dueDate, setDueDate] = useState("");
+  const [estimatedMinutes, setEstimatedMinutes] = useState(30);
+  const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
+
+  useEffect(() => {
+    if (!open) return;
+    setAssignedToId(defaultAssigneeId);
+  }, [open, defaultAssigneeId]);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const assignee = assignableUsers.find((user) => String(user.id) === assignedToId);
+      const assignedTo = assignee?.id ?? currentUserId;
+      const assignedBy = currentUserId;
+      const isSelfAssigned = String(assignedTo) === String(assignedBy);
+      const res = await apiRequest("POST", "/api/tasks", {
+        title: title.trim(),
+        description: description.trim(),
+        status: isSelfAssigned ? "open" : "pending_acceptance",
+        urgency,
+        dueDate: dueDate || null,
+        estimatedMinutes,
+        assignedToId: assignedTo,
+        assignedById: assignedBy,
+        source: "manual",
+        recurrence: "none",
+        reminderDaysBefore: 0,
+      });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async (task) => {
+      await invalidateWorkspace();
+      toast({
+        title: "Task assigned",
+        description:
+          task.status === "pending_acceptance"
+            ? "The assignee can accept or deny it from their workspace."
+            : "The task is now on the agenda.",
+      });
+      setTitle("");
+      setDescription("");
+      setDueDate("");
+      setEstimatedMinutes(30);
+      setUrgency("normal");
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not assign task",
+        description: error instanceof Error ? error.message : "Check the task details and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const ready = title.trim().length >= 2;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Assign task</DialogTitle>
+          <DialogDescription>
+            Create a task for yourself or another workspace member.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="assign-title">Title</Label>
+            <Input
+              id="assign-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Review payroll report"
+              maxLength={160}
+              data-testid="input-assign-title"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="assign-person">Assignee</Label>
+            <select
+              id="assign-person"
+              value={assignedToId}
+              onChange={(event) => setAssignedToId(event.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              data-testid="select-assign-user"
+            >
+              {assignableUsers.map((user) => (
+                <option key={String(user.id)} value={String(user.id)}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-due">Due date</Label>
+              <Input
+                id="assign-due"
+                type="date"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+                data-testid="input-assign-due"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-estimate">Minutes</Label>
+              <Input
+                id="assign-estimate"
+                type="number"
+                min={5}
+                max={480}
+                step={5}
+                value={estimatedMinutes}
+                onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
+                data-testid="input-assign-estimate"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-urgency">Urgency</Label>
+              <select
+                id="assign-urgency"
+                value={urgency}
+                onChange={(event) => setUrgency(event.target.value as "low" | "normal" | "high" | "critical")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-assign-urgency"
+              >
+                <option value="low">Low</option>
+                <option value="normal">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="assign-description">Notes</Label>
+            <Textarea
+              id="assign-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Add context, source, or acceptance criteria."
+              className="min-h-[90px]"
+              maxLength={1000}
+              data-testid="input-assign-description"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-assign-cancel">
+            Cancel
+          </Button>
+          <Button onClick={() => create.mutate()} disabled={!ready || create.isPending} data-testid="button-assign-submit">
+            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+            Assign task
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ManualEmailImportDialog({
   open,
   onOpenChange,
@@ -980,6 +1232,7 @@ function useGmailOAuthStatus(authenticated: boolean) {
 function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
   const [manualImportOpen, setManualImportOpen] = useState(false);
+  const [assignTaskOpen, setAssignTaskOpen] = useState(false);
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
   const showDebugTools = import.meta.env.DEV;
 
@@ -1323,9 +1576,20 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const buildAgenda = useMutation({
     mutationFn: async () => {
-      // Agenda is computed server-side on each bootstrap; refreshing pulls a fresh sort.
+      const res = await apiRequest("GET", "/api/agenda");
+      const agenda = (await res.json()) as AgendaItem[];
       await invalidateWorkspace();
-      return null;
+      return agenda;
+    },
+    onSuccess: (agenda) => {
+      const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+      toast({
+        title: "Agenda built",
+        description:
+          agenda.length > 0
+            ? `${agenda.length} task${agenda.length === 1 ? "" : "s"} prioritized for about ${minutes} minutes.`
+            : "No open tasks are ready for today's agenda.",
+      });
     },
   });
 
@@ -1431,26 +1695,22 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: Workflow,
       onClick: () => buildAgenda.mutate(),
       loading: buildAgenda.isPending,
-      hint: "Sort by due date and urgency",
+      hint: "Refresh and confirm today's priority order",
     },
-    ...(showDebugTools
-      ? [
-          {
-            id: "export-calendar",
-            label: "Export to calendar",
-            icon: CalendarPlus,
-            disabled: true,
-            hint: "Calendar export — coming soon",
-          } satisfies FunctionAction,
-          {
-            id: "assign-task",
-            label: "Assign task",
-            icon: UserPlus,
-            disabled: true,
-            hint: "Assign through chat for now",
-          } satisfies FunctionAction,
-        ]
-      : []),
+    {
+      id: "export-calendar",
+      label: "Export calendar",
+      icon: CalendarPlus,
+      onClick: () => downloadAgendaCalendar(data.agenda),
+      hint: "Download today's Donnit agenda as an .ics file",
+    },
+    {
+      id: "assign-task",
+      label: "Assign task",
+      icon: UserPlus,
+      onClick: () => setAssignTaskOpen(true),
+      hint: "Create and assign a task",
+    },
     {
       id: "view-log",
       label: "View log",
@@ -1543,6 +1803,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
+      <AssignTaskDialog
+        open={assignTaskOpen}
+        onOpenChange={setAssignTaskOpen}
+        users={data.users}
+        currentUserId={data.currentUserId}
+      />
 
       <footer className="border-t border-border bg-background/80">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">

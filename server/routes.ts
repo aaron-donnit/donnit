@@ -1124,7 +1124,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    const task = await storage.createTask(parsed.data);
+    const data = parsed.data;
+    if (typeof data.assignedToId !== "number" || typeof data.assignedById !== "number") {
+      res.status(400).json({ message: "Demo task assignments require numeric user ids." });
+      return;
+    }
+    const task = await storage.createTask({
+      ...data,
+      assignedToId: data.assignedToId,
+      assignedById: data.assignedById,
+    });
     res.status(201).json(task);
   });
 
