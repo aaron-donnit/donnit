@@ -12,18 +12,25 @@ import {
   Clock3,
   ExternalLink,
   Eye,
+  FileText,
   History,
   Inbox,
   ListChecks,
   ListPlus,
   Loader2,
   MailPlus,
+  Menu,
   Moon,
+  RefreshCcw,
   Send,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   UserPlus,
   UserRoundCheck,
+  Users,
   Workflow,
   X,
 } from "lucide-react";
@@ -46,6 +53,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import NotFound from "@/pages/not-found";
 
 type Id = string | number;
@@ -309,7 +327,32 @@ type FunctionAction = {
   hint?: string;
 };
 
-function FunctionBar({ actions }: { actions: FunctionAction[] }) {
+type MenuActionGroup = {
+  label: string;
+  actions: FunctionAction[];
+};
+
+function FunctionActionButton({ action }: { action: FunctionAction }) {
+  return (
+    <button
+      type="button"
+      onClick={action.onClick}
+      disabled={action.disabled || action.loading}
+      title={action.hint ?? action.label}
+      className={`fn-chip ${action.primary ? "fn-primary" : ""}`}
+      data-testid={`button-fn-${action.id}`}
+    >
+      {action.loading ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <action.icon className="size-4" />
+      )}
+      <span>{action.label}</span>
+    </button>
+  );
+}
+
+function FunctionBar({ primaryActions }: { primaryActions: FunctionAction[] }) {
   return (
     <div
       className="flex flex-wrap items-center gap-2"
@@ -317,23 +360,8 @@ function FunctionBar({ actions }: { actions: FunctionAction[] }) {
       role="toolbar"
       aria-label="Workspace functions"
     >
-      {actions.map((action) => (
-        <button
-          key={action.id}
-          type="button"
-          onClick={action.onClick}
-          disabled={action.disabled || action.loading}
-          title={action.hint ?? action.label}
-          className={`fn-chip ${action.primary ? "fn-primary" : ""}`}
-          data-testid={`button-fn-${action.id}`}
-        >
-          {action.loading ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <action.icon className="size-4" />
-          )}
-          <span>{action.label}</span>
-        </button>
+      {primaryActions.map((action) => (
+        <FunctionActionButton key={action.id} action={action} />
       ))}
     </div>
   );
@@ -349,23 +377,21 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
     },
   });
 
-  const recent = messages.slice(-12);
-
   return (
-    <div className="panel flex h-full min-h-[440px] flex-col" data-testid="panel-chat">
+    <div className="panel flex h-[520px] max-h-[calc(100vh-10.5rem)] min-h-[420px] flex-col lg:h-[calc(100vh-10.5rem)]" data-testid="panel-chat">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-brand-green" />
-          <h2 className="display-font text-base font-bold leading-none">Chat it in</h2>
+          <h2 className="display-font text-base font-bold leading-none">Quick add</h2>
         </div>
-        <span className="ui-label">Donnit parser</span>
+        <span className="ui-label">AI parser</span>
       </div>
 
       <div
-        className="flex-1 space-y-2 overflow-y-auto px-4 py-4"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4"
         data-testid="panel-chat-history"
       >
-        {recent.length === 0 ? (
+        {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
             <p className="display-font text-lg font-bold text-foreground">
               Tell Donnit what's on your plate.
@@ -378,7 +404,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
             </p>
           </div>
         ) : (
-          recent.map((item) => (
+          messages.map((item) => (
             <div
               key={item.id}
               className={`max-w-[88%] rounded-md px-3 py-2 text-sm leading-relaxed ${
@@ -394,7 +420,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
         )}
       </div>
 
-      <div className="border-t border-border px-4 py-3">
+      <div className="shrink-0 border-t border-border px-4 py-3">
         <Label htmlFor="chat-message" className="ui-label mb-1.5 block">
           New entry
         </Label>
@@ -404,7 +430,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           onChange={(event) => setMessage(event.target.value)}
           placeholder="Add spouse birthday for 2026-05-30, remind me 15 days before."
           rows={3}
-          className="h-24 max-h-24 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
+          className="h-20 max-h-20 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
               if (message.trim().length >= 2) chat.mutate();
@@ -413,7 +439,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           data-testid="input-chat-message"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">⌘/Ctrl + Enter to send</span>
+          <span className="text-xs text-muted-foreground">Ctrl + Enter to send</span>
           <Button
             onClick={() => chat.mutate()}
             disabled={message.trim().length < 2 || chat.isPending}
@@ -429,6 +455,70 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function WorkspaceMenu({
+  primaryActions,
+  menuGroups,
+}: {
+  primaryActions: FunctionAction[];
+  menuGroups: MenuActionGroup[];
+}) {
+  const renderItem = (action: FunctionAction) => (
+    <DropdownMenuItem
+      key={action.id}
+      disabled={action.disabled || action.loading}
+      onClick={action.onClick}
+      data-testid={`menu-action-${action.id}`}
+    >
+      {action.loading ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <action.icon className="size-4" />
+      )}
+      <span>{action.label}</span>
+    </DropdownMenuItem>
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon" aria-label="Open workspace menu" data-testid="button-workspace-menu">
+          <Menu className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>All options</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <ListChecks className="size-4" />
+            Daily actions
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-56">
+            {primaryActions.map(renderItem)}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        {menuGroups.map((group) => (
+          <DropdownMenuSub key={group.label}>
+            <DropdownMenuSubTrigger>
+              {group.label === "Tools sync" ? (
+                <RefreshCcw className="size-4" />
+              ) : group.label === "Admin" ? (
+                <ShieldCheck className="size-4" />
+              ) : (
+                <SlidersHorizontal className="size-4" />
+              )}
+              {group.label}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-56">
+              {group.actions.map(renderItem)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1728,6 +1818,116 @@ function CalendarExportDialog({
   );
 }
 
+function WorkspaceSettingsDialog({
+  open,
+  onOpenChange,
+  currentUser,
+  users,
+  integrations,
+  oauthStatus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  currentUser: User | null;
+  users: User[];
+  integrations: Bootstrap["integrations"];
+  oauthStatus?: GmailOAuthStatus;
+}) {
+  const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
+  const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Users className="size-5 text-brand-green" />
+            Workspace settings
+          </DialogTitle>
+          <DialogDescription>
+            {isAdmin
+              ? "Admin and manager controls for Donnit."
+              : "Your workspace controls. Admin-only options are locked."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md border border-border px-3 py-3">
+              <p className="ui-label">Your role</p>
+              <p className="mt-1 text-sm font-medium text-foreground">{currentUser?.role ?? "member"}</p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-3">
+              <p className="ui-label">Members</p>
+              <p className="mt-1 text-sm font-medium text-foreground">{users.length}</p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-3">
+              <p className="ui-label">Google</p>
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {oauthStatus?.connected ? "Connected" : "Not connected"}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">Task automation</p>
+            </div>
+            <div className="grid gap-2 px-3 py-3 text-sm">
+              {([
+                ["Email suggestions require approval", true],
+                ["Delegated tasks stay visible until complete", true],
+                ["Agenda schedules around Google Calendar", Boolean(oauthStatus?.calendarConnected)],
+                ["Reminder channels: " + integrations.reminders.channelOrder.join(" / "), true],
+              ] as Array<[string, boolean]>).map(([label, checked]) => (
+                <label key={String(label)} className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                  <span>{label}</span>
+                  <input type="checkbox" checked={Boolean(checked)} readOnly disabled={!isAdmin} className="size-4" />
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">People and roles</p>
+              <span className="ui-label">{managers.length} manager{managers.length === 1 ? "" : "s"}</span>
+            </div>
+            <div className="max-h-56 overflow-y-auto px-3 py-2">
+              {users.map((user) => (
+                <div key={String(user.id)} className="flex items-center justify-between gap-3 border-b border-border/60 py-2 last:border-b-0">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                  </div>
+                  <span className="ui-label whitespace-nowrap">{user.role}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+          <Button
+            disabled={!isAdmin}
+            onClick={() => {
+              toast({
+                title: "Settings noted",
+                description: "Persistent admin settings are queued for the next database slice.",
+              });
+              onOpenChange(false);
+            }}
+            data-testid="button-settings-save"
+          >
+            <Settings className="size-4" />
+            Save settings
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 type GmailOAuthStatus = {
   configured: boolean;
   authenticated: boolean;
@@ -1752,6 +1952,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
+  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
   const showDebugTools = import.meta.env.DEV;
 
@@ -2188,12 +2389,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   }
 
   const oauthData = oauthStatus.data;
+  const currentUser = data.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null;
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
-  const actions: FunctionAction[] = [
+  const dailyActions: FunctionAction[] = [
     {
       id: "create-todo",
-      label: "Create to-do list",
+      label: "Quick add",
       icon: ListPlus,
       primary: true,
       onClick: () => {
@@ -2212,17 +2414,41 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         ? `Scan unread Gmail for ${oauthData.email ?? "your inbox"}`
         : "Scan unread Gmail and queue suggested tasks",
     },
+    {
+      id: "build-agenda",
+      label: "Build agenda",
+      icon: Workflow,
+      onClick: () => buildAgenda.mutate(),
+      loading: buildAgenda.isPending,
+      hint: "Refresh and confirm today's priority order",
+    },
+    {
+      id: "assign-task",
+      label: "Assign task",
+      icon: UserPlus,
+      onClick: () => setAssignTaskOpen(true),
+      hint: "Create and assign a task",
+    },
+  ];
+  const toolsSyncActions: FunctionAction[] = [
+    {
+      id: "export-calendar",
+      label: "Export calendar",
+      icon: CalendarPlus,
+      onClick: () => setCalendarExportOpen(true),
+      hint: "Add the agenda to Google Calendar or download an .ics file",
+    },
     ...(showConnectGmail
       ? [
           {
             id: "connect-gmail",
             label: needsReconnect ? "Reconnect Gmail" : "Connect Gmail",
             icon: MailPlus,
-            primary: !needsReconnect ? false : true,
+            primary: needsReconnect,
             onClick: () => connectGmail.mutate(),
             loading: connectGmail.isPending,
             hint: needsReconnect
-              ? "Gmail authorization expired — re-authorize to resume scans"
+              ? "Gmail authorization expired - re-authorize to resume scans"
               : "Authorize Donnit to scan your unread Gmail",
           } satisfies FunctionAction,
         ]
@@ -2241,28 +2467,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           } satisfies FunctionAction,
         ]
       : []),
+  ];
+  const adminActions: FunctionAction[] = [
     {
-      id: "build-agenda",
-      label: "Build agenda",
-      icon: Workflow,
-      onClick: () => buildAgenda.mutate(),
-      loading: buildAgenda.isPending,
-      hint: "Refresh and confirm today's priority order",
+      id: "workspace-settings",
+      label: "Workspace settings",
+      icon: Settings,
+      onClick: () => setWorkspaceSettingsOpen(true),
+      hint: "Admin, manager, integration, and role settings",
     },
-    {
-      id: "export-calendar",
-      label: "Export calendar",
-      icon: CalendarPlus,
-      onClick: () => setCalendarExportOpen(true),
-      hint: "Add the agenda to Google Calendar or download an .ics file",
-    },
-    {
-      id: "assign-task",
-      label: "Assign task",
-      icon: UserPlus,
-      onClick: () => setAssignTaskOpen(true),
-      hint: "Create and assign a task",
-    },
+  ];
+  const workspaceActions: FunctionAction[] = [
     {
       id: "view-log",
       label: "View log",
@@ -2271,7 +2486,23 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         window.location.hash = "/log";
       },
     },
+    ...(showDebugTools
+      ? [
+          {
+            id: "manual-email-debug",
+            label: "Manual import",
+            icon: FileText,
+            onClick: () => setManualImportOpen(true),
+            hint: "Diagnostic manual email import",
+          } satisfies FunctionAction,
+        ]
+      : []),
   ];
+  const menuGroups: MenuActionGroup[] = [
+    { label: "Tools sync", actions: toolsSyncActions },
+    { label: "Admin", actions: adminActions },
+    { label: "Workspace", actions: workspaceActions },
+  ].filter((group) => group.actions.length > 0);
 
   return (
     <main
@@ -2298,6 +2529,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 ? "build preview"
                 : "demo (Supabase not configured)"}
             </span>
+            <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
             <ThemeToggle />
             {auth.authenticated && (
               <Button
@@ -2316,7 +2548,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       {/* Function bar */}
       <section className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
-          <FunctionBar actions={actions} />
+          <FunctionBar primaryActions={dailyActions} />
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="ui-label">Today · {todayLabel}</span>
             <Stat label="Open" value={metrics.open} />
@@ -2329,10 +2561,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
-      <section className="mx-auto max-w-[1600px] px-4 pt-5 pb-10 lg:px-6">
+      <section className="mx-auto max-w-[1600px] px-4 pt-4 pb-8 lg:px-6">
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
-          <div className="lg:col-span-4 xl:col-span-3">
+          <div className="lg:sticky lg:top-[8.25rem] lg:col-span-4 lg:self-start xl:col-span-3">
             <ChatPanel messages={data.messages} />
           </div>
 
@@ -2379,6 +2611,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         users={data.users}
         currentUserId={data.currentUserId}
       />
+      <WorkspaceSettingsDialog
+        open={workspaceSettingsOpen}
+        onOpenChange={setWorkspaceSettingsOpen}
+        currentUser={currentUser}
+        users={data.users}
+        integrations={data.integrations}
+        oauthStatus={oauthData}
+      />
 
       <footer className="border-t border-border bg-background/80">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
@@ -2399,17 +2639,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <span>
               Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
             </span>
-            {showDebugTools && (
-              <button
-                type="button"
-                onClick={() => setManualImportOpen(true)}
-                className="text-[11px] underline-offset-2 hover:underline"
-                data-testid="link-manual-email-debug"
-                title="Diagnostic only — Scan email is the primary email-to-task flow"
-              >
-                Manual import (debug)
-              </button>
-            )}
           </span>
         </div>
       </footer>
