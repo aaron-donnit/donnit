@@ -4,6 +4,7 @@ import {
   chatRequestSchema,
   noteRequestSchema,
   taskCreateRequestSchema,
+  taskUpdateRequestSchema,
 } from "@shared/schema";
 import type { InsertTask, Task, User } from "@shared/schema";
 import {
@@ -1135,6 +1136,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       assignedById: data.assignedById,
     });
     res.status(201).json(task);
+  });
+
+  app.patch("/api/tasks/:id", async (req: Request, res: Response) => {
+    const parsed = taskUpdateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Task update details are incomplete." });
+      return;
+    }
+    const data = parsed.data;
+
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const taskId = String(req.params.id);
+        const existing = await store.getTask(taskId);
+        if (!existing) {
+          res.status(404).json({ message: "Task not found." });
+          return;
+        }
+        const patch: Partial<DonnitTask> = {};
+        if (data.title !== undefined) patch.title = data.title;
+        if (data.description !== undefined) patch.description = data.description;
+        if (data.status !== undefined) {
+          patch.status = data.status;
+          if (data.status === "completed" && !existing.completed_at) {
+            patch.completed_at = new Date().toISOString();
+          }
+        }
+        if (data.urgency !== undefined) patch.urgency = data.urgency;
+        if (data.dueDate !== undefined) patch.due_date = data.dueDate;
+        if (data.estimatedMinutes !== undefined) patch.estimated_minutes = data.estimatedMinutes;
+        if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
+        if (data.note !== undefined) patch.completion_notes = data.note;
+
+        const updated = await store.updateTask(taskId, patch);
+        if (!updated) {
+          res.status(404).json({ message: "Task not found." });
+          return;
+        }
+        await store.addEvent(updated.org_id, {
+          task_id: updated.id,
+          actor_id: auth.userId,
+          type: "updated",
+          note: data.note || "Task details updated.",
+        });
+        res.json(toClientTask(updated));
+        return;
+      } catch (error) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    const id = Number(req.params.id);
+    const patch: Partial<Task> = {};
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.description !== undefined) patch.description = data.description;
+    if (data.status !== undefined) {
+      patch.status = data.status;
+      if (data.status === "completed") patch.completedAt = new Date().toISOString();
+    }
+    if (data.urgency !== undefined) patch.urgency = data.urgency;
+    if (data.dueDate !== undefined) patch.dueDate = data.dueDate;
+    if (data.estimatedMinutes !== undefined) patch.estimatedMinutes = data.estimatedMinutes;
+    if (data.assignedToId !== undefined) {
+      if (typeof data.assignedToId !== "number") {
+        res.status(400).json({ message: "Demo task assignments require numeric user ids." });
+        return;
+      }
+      patch.assignedToId = data.assignedToId;
+    }
+    if (data.note !== undefined) patch.completionNotes = data.note;
+
+    const task = await storage.updateTask(id, patch);
+    if (!task) {
+      res.status(404).json({ message: "Task not found." });
+      return;
+    }
+    await storage.addEvent({
+      taskId: id,
+      actorId: DEMO_USER_ID,
+      type: "updated",
+      note: data.note || "Task details updated.",
+    });
+    res.json(task);
   });
 
   async function handleTaskAction(

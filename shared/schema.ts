@@ -107,6 +107,17 @@ export const taskCreateRequestSchema = insertTaskSchema.extend({
   description: z.string().optional().default(""),
 });
 
+export const taskUpdateRequestSchema = z.object({
+  title: z.string().trim().min(2).max(160).optional(),
+  description: z.string().max(2000).optional(),
+  status: z.enum(["open", "pending_acceptance", "accepted", "denied", "completed"]).optional(),
+  urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
+  dueDate: z.string().nullable().optional(),
+  estimatedMinutes: z.number().int().min(5).max(480).optional(),
+  assignedToId: z.union([z.string().min(1), z.number()]).optional(),
+  note: z.string().trim().max(1000).optional(),
+});
+
 export const noteRequestSchema = z.object({
   note: z.string().trim().min(1).max(1000),
 });

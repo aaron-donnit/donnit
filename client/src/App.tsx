@@ -416,11 +416,13 @@ function TaskRow({
   task,
   users,
   onComplete,
+  onOpen,
   isCompleting,
 }: {
   task: Task;
   users: User[];
   onComplete: () => void;
+  onOpen: () => void;
   isCompleting: boolean;
 }) {
   const assignee = users.find((user) => user.id === task.assignedToId);
@@ -480,6 +482,14 @@ function TaskRow({
           {task.status !== "open" && task.status !== "completed" && (
             <span className="ui-label">{statusLabels[task.status] ?? task.status}</span>
           )}
+          <button
+            type="button"
+            onClick={onOpen}
+            className="text-xs font-medium text-brand-green underline-offset-2 hover:underline"
+            data-testid={`button-open-task-${task.id}`}
+          >
+            Open
+          </button>
         </div>
       </div>
     </div>
@@ -488,6 +498,8 @@ function TaskRow({
 
 function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<Id | null>(null);
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
 
   const complete = useMutation({
     mutationFn: async (id: Id) =>
@@ -551,6 +563,7 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
               users={users}
               isCompleting={completingId === task.id && complete.isPending}
               onComplete={() => complete.mutate(task.id)}
+              onOpen={() => setSelectedTaskId(task.id)}
             />
           ))
         )}
@@ -568,12 +581,217 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
                 users={users}
                 isCompleting={false}
                 onComplete={() => undefined}
+                onOpen={() => setSelectedTaskId(task.id)}
               />
             ))}
           </>
         )}
       </div>
+      <TaskDetailDialog
+        task={selectedTask}
+        users={users}
+        open={Boolean(selectedTask)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedTaskId(null);
+        }}
+      />
     </div>
+  );
+}
+
+function TaskDetailDialog({
+  task,
+  users,
+  open,
+  onOpenChange,
+}: {
+  task: Task | null;
+  users: User[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [status, setStatus] = useState("open");
+  const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
+  const [dueDate, setDueDate] = useState("");
+  const [estimatedMinutes, setEstimatedMinutes] = useState(30);
+  const [assignedToId, setAssignedToId] = useState("");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!task) return;
+    setTitle(task.title);
+    setDescription(task.description);
+    setStatus(task.status);
+    setUrgency(task.urgency as "low" | "normal" | "high" | "critical");
+    setDueDate(task.dueDate ?? "");
+    setEstimatedMinutes(task.estimatedMinutes);
+    setAssignedToId(String(task.assignedToId));
+    setNote(task.completionNotes ?? "");
+  }, [task]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
+        title: title.trim(),
+        description: description.trim(),
+        status,
+        urgency,
+        dueDate: dueDate || null,
+        estimatedMinutes,
+        assignedToId,
+        note: note.trim() || undefined,
+      });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Task updated", description: "The task details were saved." });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update task",
+        description: error instanceof Error ? error.message : "Check the task details and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  if (!task) return null;
+  const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
+  const assigner = users.find((user) => String(user.id) === String(task.assignedById));
+  const ready = title.trim().length >= 2;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Task details</DialogTitle>
+          <DialogDescription>
+            Assigned to {assignee?.name ?? "Unknown"} by {assigner?.name ?? "Unknown"}.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="task-detail-title">Title</Label>
+            <Input
+              id="task-detail-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              maxLength={160}
+              data-testid="input-task-detail-title"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-status">Status</Label>
+              <select
+                id="task-detail-status"
+                value={status}
+                onChange={(event) => setStatus(event.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-task-detail-status"
+              >
+                <option value="open">Open</option>
+                <option value="pending_acceptance">Needs acceptance</option>
+                <option value="accepted">Accepted</option>
+                <option value="denied">Denied</option>
+                <option value="completed">Done</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-urgency">Urgency</Label>
+              <select
+                id="task-detail-urgency"
+                value={urgency}
+                onChange={(event) => setUrgency(event.target.value as "low" | "normal" | "high" | "critical")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-task-detail-urgency"
+              >
+                <option value="low">Low</option>
+                <option value="normal">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-due">Due</Label>
+              <Input
+                id="task-detail-due"
+                type="date"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+                data-testid="input-task-detail-due"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-estimate">Minutes</Label>
+              <Input
+                id="task-detail-estimate"
+                type="number"
+                min={5}
+                max={480}
+                step={5}
+                value={estimatedMinutes}
+                onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
+                data-testid="input-task-detail-estimate"
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="task-detail-assignee">Assignee</Label>
+            <select
+              id="task-detail-assignee"
+              value={assignedToId}
+              onChange={(event) => setAssignedToId(event.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              data-testid="select-task-detail-assignee"
+            >
+              {users.map((user) => (
+                <option key={String(user.id)} value={String(user.id)}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="task-detail-description">Description</Label>
+            <Textarea
+              id="task-detail-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              className="min-h-[90px]"
+              maxLength={2000}
+              data-testid="input-task-detail-description"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="task-detail-note">Notes</Label>
+            <Textarea
+              id="task-detail-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Add an update, blocker, or completion note."
+              className="min-h-[80px]"
+              maxLength={1000}
+              data-testid="input-task-detail-note"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-detail-cancel">
+            Cancel
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={!ready || save.isPending} data-testid="button-task-detail-save">
+            {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            Save task
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -610,6 +828,71 @@ function DueTodayPanel({ tasks }: { tasks: Task[] }) {
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+function ReportingPanel({ tasks, currentUserId }: { tasks: Task[]; currentUserId: Id }) {
+  const now = new Date();
+  const total = tasks.length;
+  const completed = tasks.filter((task) => task.status === "completed");
+  const incomplete = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
+  const overdue = incomplete.filter((task) => task.dueDate && new Date(`${task.dueDate}T23:59:59`) < now);
+  const delegatedOutstanding = incomplete.filter(
+    (task) => String(task.assignedById) === String(currentUserId) && String(task.assignedToId) !== String(currentUserId),
+  );
+  const completionDurations = completed
+    .map((task) => {
+      if (!task.completedAt) return null;
+      const start = Date.parse(task.createdAt);
+      const end = Date.parse(task.completedAt);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+      return end - start;
+    })
+    .filter((value): value is number => value !== null);
+  const avgHours =
+    completionDurations.length > 0
+      ? completionDurations.reduce((sum, value) => sum + value, 0) / completionDurations.length / 36e5
+      : null;
+  const incompletePct = total > 0 ? Math.round((incomplete.length / total) * 100) : 0;
+  const bySource = tasks.reduce<Record<string, number>>((acc, task) => {
+    acc[task.source] = (acc[task.source] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div className="panel" data-testid="panel-reporting">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="display-font text-sm font-bold">Manager report</h3>
+        <p className="ui-label mt-1">Completion, overdue, delegated</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 px-4 py-3">
+        <ReportMetric label="Incomplete" value={`${incompletePct}%`} />
+        <ReportMetric label="Overdue" value={String(overdue.length)} />
+        <ReportMetric label="Delegated" value={String(delegatedOutstanding.length)} />
+        <ReportMetric label="Avg done" value={avgHours === null ? "N/A" : `${avgHours < 1 ? Math.round(avgHours * 60) + "m" : avgHours.toFixed(1) + "h"}`} />
+      </div>
+      {Object.keys(bySource).length > 0 && (
+        <div className="border-t border-border px-4 py-3">
+          <p className="ui-label mb-2">Source mix</p>
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(bySource).map(([source, count]) => (
+              <span key={source} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                {source}: {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReportMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background px-3 py-2">
+      <p className="ui-label">{label}</p>
+      <p className="display-font mt-1 text-lg font-bold text-foreground">{value}</p>
     </div>
   );
 }
@@ -1795,6 +2078,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               <div className="flex flex-col gap-4 xl:col-span-4">
                 <DueTodayPanel tasks={data.tasks} />
                 <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} />
+                <ReportingPanel tasks={data.tasks} currentUserId={data.currentUserId} />
                 <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
               </div>
             </div>
