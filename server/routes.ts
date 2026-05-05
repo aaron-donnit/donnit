@@ -337,6 +337,14 @@ function addDays(days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
+  const now = new Date();
+  const today = now.getDay();
+  let delta = targetDay - today;
+  if (delta < 0 || (delta === 0 && preferNextWeek)) delta += 7;
+  return addDays(delta);
+}
+
 function parseDueDate(message: string) {
   const text = message.toLowerCase();
   const isoMatch = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
@@ -351,7 +359,20 @@ function parseDueDate(message: string) {
   if (text.includes("today")) return todayIso();
   if (text.includes("tomorrow")) return addDays(1);
   if (text.includes("next week")) return addDays(7);
-  if (text.includes("this week") || text.includes("friday")) return addDays(3);
+  const weekdayMatch = text.match(/\b(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (weekdayMatch) {
+    const dayIndex: Record<string, number> = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6,
+    };
+    return nextWeekdayIso(dayIndex[weekdayMatch[2]], weekdayMatch[1] === "next");
+  }
+  if (text.includes("this week")) return addDays(3);
   return null;
 }
 
@@ -364,10 +385,13 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
 }
 
 function parseEstimate(message: string) {
-  const minutes = message.match(/(\d+)\s*(?:min|mins|minutes)/i);
-  if (minutes) return Number(minutes[1]);
-  const hours = message.match(/(\d+)\s*(?:hr|hrs|hour|hours)/i);
-  if (hours) return Number(hours[1]) * 60;
+  const minutes = message.match(/\b(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i);
+  if (minutes) return Math.max(5, Math.round(Number(minutes[1])));
+  const hours = message.match(/\b(\d+(?:\.\d+)?)\s*(?:hr|hrs|hour|hours)\b/i);
+  if (hours) return Math.max(15, Math.round(Number(hours[1]) * 60));
+  if (/\bquick|small|simple|brief\b/i.test(message)) return 15;
+  if (/\breview|audit|analyze|draft|prepare|proposal|contract\b/i.test(message)) return 45;
+  if (/\bplan|strategy|report|presentation|deck|onboarding\b/i.test(message)) return 60;
   return 30;
 }
 
@@ -379,16 +403,48 @@ function findAssignee(message: string, users: User[]) {
   return named ?? users.find((user) => user.id === DEMO_USER_ID) ?? users[0];
 }
 
-function titleFromMessage(message: string) {
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
+  let cleaned = message;
+  for (const label of assigneeLabels) {
+    const safe = escapeRegExp(label.trim());
+    if (!safe) continue;
+    cleaned = cleaned
+      .replace(new RegExp(`\\bassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bdelegate(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\breassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`@${safe}\\b`, "gi"), "");
+  }
+  return cleaned;
+}
+
+function titleFromMessage(message: string, assigneeLabels: string[] = []) {
   const cleaned = message
+    .replace(/\b(?:please\s+)?(?:add|create|make|log)\s+(?:a\s+)?(?:task|todo|to-do)\s+(?:to\s+)?/gi, "")
+    .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
+    .replace(/\b(?:due|by|before|on)\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/gi, "")
+    .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
+    .replace(/\b(?:due|by|before|on)?\s*(?:(?:next|this)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\b(today|tomorrow|next week|this week|urgent|asap|critical|high priority|low priority)\b/gi, "")
     .replace(/\bby\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
-    .replace(/\b\d+\s*(?:min|mins|minutes|hr|hrs|hour|hours)\b/gi, "")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:min|mins|minutes|hr|hrs|hour|hours)\b/gi, "")
+    .replace(/\b\d+\s*days?\s*before\b/gi, "")
+    .replace(/\b(?:normal|medium|high|low)\s+urgency\b/gi, "")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^(add|create|remind me to|please|task to)\s+/i, "")
+    .replace(/^(add|create|make|log|please|task to|todo to|to-do to)\s+/i, "")
     .slice(0, 150);
-  return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : cleaned;
+  const withoutAssignee = stripAssigneePhrases(cleaned, assigneeLabels)
+    .replace(/\s+/g, " ")
+    .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
+    .trim();
+  return withoutAssignee
+    ? withoutAssignee.charAt(0).toUpperCase() + withoutAssignee.slice(1)
+    : withoutAssignee;
 }
 
 function parseAnnualReminderDays(message: string) {
@@ -404,7 +460,7 @@ function parseChatTask(message: string, users: User[]): InsertTask {
   const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
   const assignedToId = assignee?.id ?? DEMO_USER_ID;
   const assignedById = DEMO_USER_ID;
-  const title = titleFromMessage(message) || "Untitled task";
+  const title = titleFromMessage(message, [assignee?.name ?? "", assignee?.email ?? ""]) || "Untitled task";
 
   return {
     title,
@@ -1107,7 +1163,11 @@ function parseChatTaskAuthenticated(
   const reminderDaysBefore = parseAnnualReminderDays(message);
   const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
   const assignedToId = assignee?.user_id ?? selfId;
-  const title = titleFromMessage(message) || "Untitled task";
+  const title =
+    titleFromMessage(message, [
+      assignee?.profile?.full_name ?? "",
+      assignee?.profile?.email ?? "",
+    ]) || "Untitled task";
   return {
     title,
     description: message,

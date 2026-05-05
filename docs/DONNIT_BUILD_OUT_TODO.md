@@ -94,9 +94,8 @@ Known operational items:
 
 Current sprint:
 
-1. Build approval inbox modal and open it automatically after scans.
-2. Improve chat/email structured extraction.
+1. Done - build approval inbox modal and open it automatically after scans.
+2. In progress - improve chat/email structured extraction.
 3. Add approval metrics to reporting.
 4. Implement Slack suggestion source using the same approval pipeline.
 5. Add notification center foundation.
-
