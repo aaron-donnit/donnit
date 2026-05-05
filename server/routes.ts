@@ -386,9 +386,9 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
 }
 
 function parseEstimate(message: string) {
-  const minutes = message.match(/\b(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i);
+  const minutes = message.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i);
   if (minutes) return Math.max(5, Math.round(Number(minutes[1])));
-  const hours = message.match(/\b(\d+(?:\.\d+)?)\s*(?:hr|hrs|hour|hours)\b/i);
+  const hours = message.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:hr|hrs|hour|hours)\b/i);
   if (hours) return Math.max(15, Math.round(Number(hours[1]) * 60));
   if (/\bquick|small|simple|brief\b/i.test(message)) return 15;
   if (/\breview|audit|analyze|draft|prepare|proposal|contract\b/i.test(message)) return 45;
@@ -415,8 +415,11 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
     if (!safe) continue;
     cleaned = cleaned
       .replace(new RegExp(`\\bassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bassign\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bdelegate(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bdelegate\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\breassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\breassign\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
   }
