@@ -1325,6 +1325,11 @@ function parseChatTaskAuthenticated(
 
 type SuggestionSource = "email" | "slack" | "sms";
 
+type IngestTarget = {
+  orgId: string;
+  assignedTo: string;
+};
+
 type AiTaskExtraction = {
   title: string;
   description: string;
@@ -1463,6 +1468,35 @@ function sourceFromSuggestion(input: { fromEmail: string; subject: string }): "e
   if (marker.includes("slack:") || marker.includes("slack")) return "slack";
   if (marker.includes("sms:") || marker.includes("text message") || marker.includes("sms")) return "sms";
   return "email";
+}
+
+async function resolveDefaultIngestTarget(): Promise<IngestTarget | null> {
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data: org, error: orgError } = await admin
+    .from("organizations")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (orgError) throw orgError;
+  const orgId = typeof org?.id === "string" ? org.id : null;
+  if (!orgId) return null;
+
+  const { data: members, error: memberError } = await admin
+    .from("organization_members")
+    .select("user_id, role, can_assign, created_at")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: true });
+  if (memberError) throw memberError;
+
+  const rows = Array.isArray(members) ? members : [];
+  const owner =
+    rows.find((member: any) => member.role === "owner") ??
+    rows.find((member: any) => member.can_assign) ??
+    rows[0];
+  const assignedTo = typeof owner?.user_id === "string" ? owner.user_id : null;
+  return assignedTo ? { orgId, assignedTo } : null;
 }
 
 function buildExternalSuggestionCandidate(input: {
@@ -3255,6 +3289,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const payload = serializeSupabaseError(error);
         console.error(`[donnit] ${source} suggestion failed`, { userId: req.donnitAuth?.userId, ...payload });
         res.status(500).json({ ok: false, ...payload });
+        return;
+      }
+    }
+
+    if (isSupabaseConfigured()) {
+      try {
+        const admin = createSupabaseAdminClient();
+        if (!admin) {
+          res.status(503).json({
+            ok: false,
+            reason: "missing_service_role",
+            message: "Slack/SMS ingest needs SUPABASE_SERVICE_ROLE_KEY to save into the workspace.",
+          });
+          return;
+        }
+        const target = await resolveDefaultIngestTarget();
+        if (!target) {
+          res.status(409).json({
+            ok: false,
+            reason: "workspace_not_bootstrapped",
+            message: "No Donnit workspace is available for external suggestions.",
+          });
+          return;
+        }
+        const store = new DonnitStore(admin, target.assignedTo);
+        const assignedTo =
+          typeof parsed.data.assignedToId === "string" ? parsed.data.assignedToId : target.assignedTo;
+        const suggestion = await store.createEmailSuggestion(target.orgId, {
+          gmail_message_id: `${source}:${crypto.createHash("sha1").update(candidate.body).digest("hex").slice(0, 20)}`,
+          from_email: candidate.fromEmail,
+          subject: candidate.subject,
+          preview: candidate.preview,
+          body: candidate.body,
+          received_at: normalizeTimestamp(candidate.receivedAt),
+          action_items: candidate.actionItems,
+          suggested_title: candidate.suggestedTitle,
+          suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
+          urgency: candidate.urgency,
+          assigned_to: assignedTo,
+        });
+        res.status(201).json({ ok: true, source, destination: "supabase", suggestion });
+        return;
+      } catch (error) {
+        const payload = serializeSupabaseError(error);
+        console.error(`[donnit] ${source} admin suggestion failed`, { ...payload });
+        res.status(500).json({ ok: false, reason: "external_suggestion_persist_failed", ...payload });
         return;
       }
     }

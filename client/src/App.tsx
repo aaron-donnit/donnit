@@ -1358,7 +1358,7 @@ function AcceptancePanel({
   }
   if (remainingSuggestions > 0) {
     overflowParts.push(
-      `+${remainingSuggestions} email suggestion${remainingSuggestions === 1 ? "" : "s"}`,
+      `+${remainingSuggestions} approval item${remainingSuggestions === 1 ? "" : "s"}`,
     );
   }
   const overflowLabel = overflowParts.length > 0 ? overflowParts.join(" · ") : null;
@@ -1429,7 +1429,7 @@ function AcceptancePanel({
         {visibleSuggestions.length > 0 && (
           <div className="space-y-2 pt-1">
             <p className="ui-label text-[10px] uppercase tracking-wider text-muted-foreground">
-              From your inbox
+              Approval queue
             </p>
             {visibleSuggestions.map((suggestion) => (
               <SuggestionCard
@@ -1454,7 +1454,7 @@ function AcceptancePanel({
             <span className="inline-flex items-center gap-1.5">
               <MailPlus className="size-3.5" />
               {overflowLabel ??
-                `+${remainingSuggestionsAfterVisible} email suggestion${
+                `+${remainingSuggestionsAfterVisible} approval item${
                   remainingSuggestionsAfterVisible === 1 ? "" : "s"
                 }`}
             </span>
@@ -2918,18 +2918,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const dailyActions: FunctionAction[] = [
-    ...(metrics.emailQueue + metrics.needsAcceptance > 0
-      ? [
-          {
-            id: "approval-inbox",
-            label: "Review queue",
-            icon: Inbox,
-            primary: true,
-            onClick: () => setApprovalInboxOpen(true),
-            hint: "Approve suggested and assigned tasks",
-          } satisfies FunctionAction,
-        ]
-      : []),
+    {
+      id: "approval-inbox",
+      label: "Approval inbox",
+      icon: Inbox,
+      primary: metrics.emailQueue + metrics.needsAcceptance > 0,
+      onClick: () => setApprovalInboxOpen(true),
+      hint: "Approve suggested and assigned tasks",
+    },
     {
       id: "create-todo",
       label: "Quick add",
@@ -3092,7 +3088,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <Stat label="Open" value={metrics.open} />
             <Stat label="Due today" value={metrics.dueToday} />
             <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-            <Stat label="Email queue" value={metrics.emailQueue} />
+            <Stat label="Approval queue" value={metrics.emailQueue} />
             <Stat label="Completed" value={metrics.completed} />
           </div>
         </div>
