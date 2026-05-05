@@ -346,6 +346,77 @@ function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
   return addDays(delta);
 }
 
+const monthIndexes: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+const monthNamePattern =
+  "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+
+function toIsoDate(year: number, month: number, day: number) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function parseNaturalDate(text: string) {
+  const monthFirst = text.match(
+    new RegExp(`\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?(${monthNamePattern})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(20\\d{2}|\\d{2}))?\\b`, "i"),
+  );
+  if (monthFirst) {
+    const month = monthIndexes[monthFirst[1].toLowerCase().replace(".", "")];
+    const day = Number(monthFirst[2]);
+    const year = monthFirst[3]
+      ? Number(monthFirst[3].length === 2 ? `20${monthFirst[3]}` : monthFirst[3])
+      : new Date().getFullYear();
+    return toIsoDate(year, month, day);
+  }
+
+  const dayFirst = text.match(
+    new RegExp(`\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNamePattern})\\.?(?:,?\\s*(20\\d{2}|\\d{2}))?\\b`, "i"),
+  );
+  if (dayFirst) {
+    const day = Number(dayFirst[1]);
+    const month = monthIndexes[dayFirst[2].toLowerCase().replace(".", "")];
+    const year = dayFirst[3]
+      ? Number(dayFirst[3].length === 2 ? `20${dayFirst[3]}` : dayFirst[3])
+      : new Date().getFullYear();
+    return toIsoDate(year, month, day);
+  }
+
+  return null;
+}
+
 function parseDueDate(message: string) {
   const text = message.toLowerCase();
   const isoMatch = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
@@ -355,8 +426,10 @@ function parseDueDate(message: string) {
     const year = slashMatch[3]
       ? Number(slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3])
       : new Date().getFullYear();
-    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`;
+    return toIsoDate(year, Number(slashMatch[1]), Number(slashMatch[2]));
   }
+  const natural = parseNaturalDate(text);
+  if (natural) return natural;
   if (text.includes("today")) return todayIso();
   if (text.includes("tomorrow")) return addDays(1);
   if (text.includes("next week")) return addDays(7);
@@ -375,6 +448,15 @@ function parseDueDate(message: string) {
   }
   if (text.includes("this week")) return addDays(3);
   return null;
+}
+
+function isPastDue(dueDate: string | null) {
+  return Boolean(dueDate && dueDate < todayIso());
+}
+
+function dueDateAssistantText(dueDate: string | null) {
+  if (!dueDate) return "";
+  return isPastDue(dueDate) ? ` Due ${dueDate} (past due).` : ` Due ${dueDate}.`;
 }
 
 function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
@@ -462,10 +544,25 @@ function stripLeadingUnknownAssignee(message: string) {
 }
 
 function titleFromMessage(message: string, assigneeLabels: string[] = []) {
+  const naturalDate = new RegExp(
+    `\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?(?:${monthNamePattern})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*(?:20\\d{2}|\\d{2}))?\\b`,
+    "gi",
+  );
+  const naturalDateDayFirst = new RegExp(
+    `\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${monthNamePattern})\\.?(?:,?\\s*(?:20\\d{2}|\\d{2}))?\\b`,
+    "gi",
+  );
   const cleaned = message
+    .replace(/\bfor me (?:thats|that's|that is)\b/gi, "")
+    .replace(/^(?:for me|me)\b[,\s:]*/gi, "")
+    .replace(/\bfor me to\s+/gi, "")
+    .replace(/\bfor me\b/gi, "")
     .replace(/\b(?:please\s+)?(?:add|create|make|log)\s+(?:a\s+)?(?:task|todo|to-do)\s+(?:to\s+)?/gi, "")
     .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
+    .replace(/\b(?:i need|need|needs|need to)\s+/gi, "")
     .replace(/\b(?:due|by|before|on)\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/gi, "")
+    .replace(naturalDate, "")
+    .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
     .replace(/\b(?:due|by|before|on)?\s*(?:(?:next|this)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\b(today|tomorrow|next week|this week|urgent|asap|critical|high priority|low priority)\b/gi, "")
@@ -500,13 +597,15 @@ function parseChatTask(message: string, users: User[]): InsertTask {
   const assignedToId = assignee?.id ?? DEMO_USER_ID;
   const assignedById = DEMO_USER_ID;
   const title = titleFromMessage(message, [assignee?.name ?? "", assignee?.email ?? ""]) || "Untitled task";
+  const dueDate = parseDueDate(message);
+  const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
 
   return {
     title,
     description: message,
     status: assignedToId === assignedById ? "open" : "pending_acceptance",
-    urgency: parseUrgency(message),
-    dueDate: parseDueDate(message),
+    urgency,
+    dueDate,
     estimatedMinutes: parseEstimate(message),
     assignedToId,
     assignedById,
@@ -1207,12 +1306,14 @@ function parseChatTaskAuthenticated(
       assignee?.profile?.full_name ?? "",
       assignee?.profile?.email ?? "",
     ]) || "Untitled task";
+  const dueDate = parseDueDate(message);
+  const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
   return {
     title,
     description: message,
     status: assignedToId === selfId ? "open" : "pending_acceptance",
-    urgency: parseUrgency(message),
-    dueDate: parseDueDate(message),
+    urgency,
+    dueDate,
     estimatedMinutes: parseEstimate(message),
     assignedToId,
     assignedById: selfId,
@@ -1761,13 +1862,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             })
           : null;
         const assignedToId = aiAssignee?.user_id ?? fallbackInput.assignedToId;
+        const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+        const resolvedUrgency =
+          resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
+        const resolvedTitle = ai
+          ? titleFromMessage(ai.title, [
+              aiAssignee?.profile?.full_name ?? "",
+              aiAssignee?.profile?.email ?? "",
+            ]) || fallbackInput.title
+          : fallbackInput.title;
         const taskInput = ai
           ? {
-              title: ai.title,
+              title: resolvedTitle,
               description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
-              urgency: ai.urgency,
-              dueDate: ai.dueDate ?? fallbackInput.dueDate,
+              urgency: resolvedUrgency,
+              dueDate: resolvedDueDate,
               estimatedMinutes: ai.estimatedMinutes,
               assignedToId,
               assignedById: auth.userId,
@@ -1791,7 +1901,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: created.id });
         const assignee = members.find((m) => m.user_id === created.assigned_to);
-        const dueText = created.due_date ? ` Due ${created.due_date}.` : "";
+        const dueText = dueDateAssistantText(created.due_date);
         const assignmentText =
           created.status === "pending_acceptance"
             ? ` I asked ${assignee?.profile?.full_name ?? "the assignee"} to accept or deny it.`
@@ -1817,13 +1927,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fallbackInput = parseChatTask(parsed.data.message, users);
     const aiAssignee = matchAiAssignee(ai?.assigneeHint ?? null, users);
     const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId;
+    const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+    const resolvedUrgency =
+      resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
+    const resolvedTitle = ai
+      ? titleFromMessage(ai.title, [aiAssignee?.name ?? "", aiAssignee?.email ?? ""]) || fallbackInput.title
+      : fallbackInput.title;
     const taskInput = ai
       ? {
-          title: ai.title,
+          title: resolvedTitle,
           description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
-          urgency: ai.urgency,
-          dueDate: ai.dueDate ?? fallbackInput.dueDate,
+          urgency: resolvedUrgency,
+          dueDate: resolvedDueDate,
           estimatedMinutes: ai.estimatedMinutes,
           assignedToId,
           assignedById: DEMO_USER_ID,
@@ -1835,7 +1951,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const task = await storage.createTask(taskInput);
     await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: task.id });
     const assignee = users.find((user) => user.id === task.assignedToId);
-    const dueText = task.dueDate ? ` Due ${task.dueDate}.` : "";
+    const dueText = dueDateAssistantText(task.dueDate);
     const assignmentText =
       task.status === "pending_acceptance"
         ? ` I asked ${assignee?.name ?? "the assignee"} to accept or deny it.`
