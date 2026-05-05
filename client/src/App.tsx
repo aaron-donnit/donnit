@@ -4,6 +4,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Archive,
+  BarChart3,
   Bell,
   CalendarClock,
   CalendarCheck,
@@ -2917,6 +2918,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const currentUser = data.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null;
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
+  const scrollToReporting = () => {
+    document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const dailyActions: FunctionAction[] = [
     {
       id: "approval-inbox",
@@ -2961,6 +2965,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: UserPlus,
       onClick: () => setAssignTaskOpen(true),
       hint: "Create and assign a task",
+    },
+    {
+      id: "manager-report",
+      label: "Reporting",
+      icon: BarChart3,
+      onClick: scrollToReporting,
+      hint: "Review manager metrics and source mix",
     },
   ];
   const toolsSyncActions: FunctionAction[] = [
