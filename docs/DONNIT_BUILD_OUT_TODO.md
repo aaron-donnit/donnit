@@ -21,6 +21,7 @@ Shipped foundations:
 - Approval inbox opens after new Gmail suggestions.
 - Optional OpenAI structured chat extraction with deterministic fallback.
 - Slack/SMS suggestion ingestion endpoints that feed the approval inbox.
+- Connected tools settings panel for Gmail, Calendar, Slack, and SMS status/testing.
 - In-app notification bell for due, overdue, delegated, and approval-waiting work.
 - Team memory panel for role, recurring work, source mix, and open/completed work.
 
@@ -108,8 +109,8 @@ Current sprint:
 
 Next sprint:
 
-1. Provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
-2. Provision SMS provider webhook and verified phone routing.
+1. Tabled for MVP provider wiring - provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
+2. Tabled for MVP provider wiring - provision SMS provider webhook and verified phone routing.
 3. Persist admin settings, invites, and team management.
 4. Add visual agenda drag/rebuild and calendar conflict repair.
 5. Add design-partner analytics dashboard.

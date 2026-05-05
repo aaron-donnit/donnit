@@ -44,13 +44,17 @@ export function getIntegrationStatus() {
     },
     slack: {
       provider: "slack",
-      status: process.env.SLACK_BOT_TOKEN ? "configured" : "scaffolded",
+      status: process.env.DONNIT_SLACK_WEBHOOK_TOKEN || process.env.SLACK_BOT_TOKEN ? "configured" : "scaffolded",
       mode: "approval_before_task_creation",
+      webhookConfigured: Boolean(process.env.DONNIT_SLACK_WEBHOOK_TOKEN),
+      botConfigured: Boolean(process.env.SLACK_BOT_TOKEN),
     },
     sms: {
       provider: "sms",
       status: process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN ? "configured" : "scaffolded",
       mode: "approval_before_task_creation",
+      webhookConfigured: Boolean(process.env.DONNIT_SMS_WEBHOOK_TOKEN),
+      providerConfigured: Boolean(process.env.TWILIO_AUTH_TOKEN),
     },
     reminders: {
       channelOrder: process.env.REMINDER_CHANNEL_ORDER?.split(",") ?? [...APPROVED_CHANNEL_ORDER],

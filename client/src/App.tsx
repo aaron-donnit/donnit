@@ -163,8 +163,8 @@ type Bootstrap = {
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };
     email: { provider: string; sourceId: string; status: string; mode: string };
-    slack?: { provider: string; status: string; mode: string };
-    sms?: { provider: string; status: string; mode: string };
+    slack?: { provider: string; status: string; mode: string; webhookConfigured?: boolean; botConfigured?: boolean };
+    sms?: { provider: string; status: string; mode: string; webhookConfigured?: boolean; providerConfigured?: boolean };
     reminders: { channelOrder: string[]; reminderOrder: string[] };
     app: { delivery: string; native: string };
   };
@@ -2323,6 +2323,70 @@ function CalendarExportDialog({
   );
 }
 
+function ToolStatusBadge({ status }: { status: "ready" | "warning" | "setup" }) {
+  const label = status === "ready" ? "Ready" : status === "warning" ? "Needs attention" : "Setup";
+  const classes =
+    status === "ready"
+      ? "border-brand-green/30 bg-brand-green/10 text-brand-green"
+      : status === "warning"
+        ? "border-destructive/30 bg-destructive/10 text-destructive"
+        : "border-border bg-muted text-muted-foreground";
+  return (
+    <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${classes}`}>
+      {label}
+    </span>
+  );
+}
+
+function ConnectedToolRow({
+  icon: Icon,
+  name,
+  detail,
+  status,
+  actionLabel,
+  action,
+  loading,
+  disabled,
+}: {
+  icon: typeof Inbox;
+  name: string;
+  detail: string;
+  status: "ready" | "warning" | "setup";
+  actionLabel: string;
+  action: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Icon className="size-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium text-foreground">{name}</p>
+            <ToolStatusBadge status={status} />
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>
+        </div>
+      </div>
+      <Button
+        type="button"
+        variant={status === "ready" ? "outline" : "default"}
+        size="sm"
+        onClick={action}
+        disabled={disabled || loading}
+        className="shrink-0"
+        data-testid={`button-tool-${name.toLowerCase().replace(/\s+/g, "-")}`}
+      >
+        {loading ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+        {actionLabel}
+      </Button>
+    </div>
+  );
+}
+
 function WorkspaceSettingsDialog({
   open,
   onOpenChange,
@@ -2330,6 +2394,11 @@ function WorkspaceSettingsDialog({
   users,
   integrations,
   oauthStatus,
+  onConnectGmail,
+  onScanEmail,
+  onOpenCalendarExport,
+  isConnectingGmail,
+  isScanningEmail,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -2337,9 +2406,65 @@ function WorkspaceSettingsDialog({
   users: User[];
   integrations: Bootstrap["integrations"];
   oauthStatus?: GmailOAuthStatus;
+  onConnectGmail: () => void;
+  onScanEmail: () => void;
+  onOpenCalendarExport: () => void;
+  isConnectingGmail: boolean;
+  isScanningEmail: boolean;
 }) {
   const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
   const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
+  const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
+  const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
+  const testSlack = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/slack/suggest", {
+        text: "Please assign follow-up on the Slack integration test by Friday, 15 minutes",
+        from: currentUser?.name ?? "Donnit test",
+        channel: "donnit-test",
+        subject: "Slack: integration test",
+      });
+      return (await res.json()) as { ok: boolean };
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "Slack test queued",
+        description: "Open Approval inbox to review the Slack test suggestion.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Slack test failed",
+        description: "Donnit could not queue a Slack test suggestion.",
+        variant: "destructive",
+      });
+    },
+  });
+  const testSms = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/integrations/sms/inbound", {
+        text: "Remind me to call the payroll vendor tomorrow, urgent",
+        from: "+15555555555",
+        subject: "SMS integration test",
+      });
+      return (await res.json()) as { ok: boolean };
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "SMS test queued",
+        description: "Open Approval inbox to review the SMS test suggestion.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "SMS test failed",
+        description: "Donnit could not queue an SMS test suggestion.",
+        variant: "destructive",
+      });
+    },
+  });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
@@ -2374,22 +2499,76 @@ function WorkspaceSettingsDialog({
 
           <div className="rounded-md border border-border">
             <div className="border-b border-border px-3 py-2">
-              <p className="text-sm font-medium text-foreground">Task automation</p>
+              <p className="text-sm font-medium text-foreground">Connected tools</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Review status and queue safe test suggestions.
+              </p>
             </div>
-            <div className="grid gap-2 px-3 py-3 text-sm">
-              {([
-                ["Email suggestions require approval", true],
-                ["Delegated tasks stay visible until complete", true],
-                ["Agenda schedules around Google Calendar", Boolean(oauthStatus?.calendarConnected)],
-                ["Slack ingestion: " + (integrations.slack?.status ?? "scaffolded"), true],
-                ["SMS ingestion: " + (integrations.sms?.status ?? "scaffolded"), true],
-                ["Reminder channels: " + integrations.reminders.channelOrder.join(" / "), true],
-              ] as Array<[string, boolean]>).map(([label, checked]) => (
-                <label key={String(label)} className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
-                  <span>{label}</span>
-                  <input type="checkbox" checked={Boolean(checked)} readOnly disabled={!isAdmin} className="size-4" />
-                </label>
-              ))}
+            <div className="grid gap-2 px-3 py-3">
+              <ConnectedToolRow
+                icon={MailPlus}
+                name="Gmail"
+                status={oauthStatus?.connected ? "ready" : needsGoogleReconnect ? "warning" : "setup"}
+                detail={
+                  oauthStatus?.connected
+                    ? `Scanning ${oauthStatus.email ?? "connected Gmail"}. Last scan: ${oauthStatus.lastScannedAt ? formatReceivedAt(oauthStatus.lastScannedAt) : "not yet scanned"}.`
+                    : needsGoogleReconnect
+                      ? "Google authorization needs to be refreshed before scanning email."
+                      : oauthStatus?.configured
+                        ? "OAuth is configured; connect a Gmail account to scan unread messages."
+                        : "Google OAuth environment variables are not configured."
+                }
+                actionLabel={oauthStatus?.connected ? "Scan email" : needsGoogleReconnect ? "Reconnect" : "Connect"}
+                action={oauthStatus?.connected ? onScanEmail : onConnectGmail}
+                loading={isScanningEmail || isConnectingGmail}
+                disabled={!oauthStatus?.connected && !oauthStatus?.configured}
+              />
+              <ConnectedToolRow
+                icon={CalendarCheck}
+                name="Google Calendar"
+                status={calendarReady ? "ready" : needsGoogleReconnect ? "warning" : "setup"}
+                detail={
+                  calendarReady
+                    ? "Agenda export can read availability and sync scheduled task blocks."
+                    : needsGoogleReconnect
+                      ? "Reconnect Google to grant Calendar access."
+                      : "Connect Google with Calendar access before direct agenda sync."
+                }
+                actionLabel={calendarReady ? "Open export" : "Connect"}
+                action={calendarReady ? onOpenCalendarExport : onConnectGmail}
+                loading={isConnectingGmail}
+                disabled={!calendarReady && !oauthStatus?.configured}
+              />
+              <ConnectedToolRow
+                icon={Inbox}
+                name="Slack"
+                status={integrations.slack?.webhookConfigured ? "ready" : integrations.slack?.botConfigured ? "warning" : "setup"}
+                detail={
+                  integrations.slack?.webhookConfigured
+                    ? "Webhook token is configured. Real Slack app wiring is tabled for the next MVP step."
+                    : integrations.slack?.botConfigured
+                      ? "Slack bot token exists, but the Donnit ingest webhook token is not configured."
+                      : "No Slack webhook token is configured yet."
+                }
+                actionLabel="Queue test"
+                action={() => testSlack.mutate()}
+                loading={testSlack.isPending}
+              />
+              <ConnectedToolRow
+                icon={Send}
+                name="SMS"
+                status={integrations.sms?.webhookConfigured ? "ready" : integrations.sms?.providerConfigured ? "warning" : "setup"}
+                detail={
+                  integrations.sms?.webhookConfigured
+                    ? "Inbound SMS token is configured. Twilio provider wiring is tabled for the next MVP step."
+                    : integrations.sms?.providerConfigured
+                      ? "SMS provider credentials exist, but the Donnit ingest webhook token is not configured."
+                      : "No SMS webhook token is configured yet."
+                }
+                actionLabel="Queue test"
+                action={() => testSms.mutate()}
+                loading={testSms.isPending}
+              />
             </div>
           </div>
 
@@ -3178,6 +3357,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         users={data.users}
         integrations={data.integrations}
         oauthStatus={oauthData}
+        onConnectGmail={() => connectGmail.mutate()}
+        onScanEmail={() => scan.mutate()}
+        onOpenCalendarExport={() => setCalendarExportOpen(true)}
+        isConnectingGmail={connectGmail.isPending}
+        isScanningEmail={scan.isPending}
       />
 
       <footer className="border-t border-border bg-background/80">
