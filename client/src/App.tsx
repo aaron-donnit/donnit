@@ -2696,7 +2696,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       const sep = message.indexOf(": ");
       let parsed: {
         reason?: string;
-        message?: string;
+        message?: unknown;
         googleStatus?: number;
         googleError?: { status?: string; message?: string; reason?: string; domain?: string };
       } = {};
@@ -2708,6 +2708,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         }
       }
       const reason = parsed.reason;
+      const serverMessage =
+        typeof parsed.message === "string"
+          ? parsed.message
+          : parsed.message && typeof parsed.message === "object"
+            ? JSON.stringify(parsed.message).slice(0, 300)
+            : undefined;
       const oauthConfigured = oauthStatus.data?.configured ?? false;
 
       // Reason -> {title, description, action} map. The action drives the
@@ -2729,37 +2735,37 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       ) {
         title = "Reconnect Gmail";
         description =
-          parsed.message ??
+          serverMessage ??
           "Gmail authorization expired. Reconnect Gmail and try again.";
         action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
       } else if (reason === "gmail_scope_missing") {
         title = "Reconnect Gmail with read access";
         description =
-          parsed.message ??
+          serverMessage ??
           "Donnit's Gmail authorization is missing the gmail.readonly scope. Reconnect Gmail and accept the 'Read your email' permission on Google's consent screen.";
         action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
       } else if (reason === "gmail_api_not_enabled") {
         title = "Enable Gmail API in Google Cloud";
         description =
-          parsed.message ??
+          serverMessage ??
           "Gmail API is not enabled in the Google Cloud project tied to this OAuth client. Open console.cloud.google.com → APIs & Services → Library → Gmail API → Enable, then redeploy and try Scan email again.";
       } else if (reason === "gmail_api_forbidden") {
         title = "Gmail API access denied";
         description =
-          parsed.message ??
+          serverMessage ??
           "Google rejected the Gmail API request as forbidden. Confirm the OAuth client and Gmail API are in the same Google Cloud project, and that your account is allowed to use this app.";
       } else if (reason === "gmail_rate_limited") {
         title = "Gmail API rate limit hit";
         description =
-          parsed.message ?? "Wait about a minute and click Scan email again.";
+          serverMessage ?? "Wait about a minute and click Scan email again.";
       } else if (reason === "gmail_api_unavailable") {
         title = "Gmail API temporarily unavailable";
         description =
-          parsed.message ?? "Google reports the Gmail API is unavailable. Try again shortly.";
+          serverMessage ?? "Google reports the Gmail API is unavailable. Try again shortly.";
       } else if (reason === "gmail_api_bad_request") {
         title = "Gmail API rejected the request";
         description =
-          parsed.message ?? "Donnit sent a request Gmail rejected as malformed. Please report this.";
+          serverMessage ?? "Donnit sent a request Gmail rejected as malformed. Please report this.";
       } else if (reason === "gmail_oauth_not_configured") {
         title = "Email scan not available";
         description =
@@ -2774,14 +2780,19 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           description =
             "Google OAuth is not configured on this server. Ask the operator to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI, then redeploy.";
         }
+      } else if (reason === "gmail_suggestion_persist_failed") {
+        title = "Email suggestions could not be saved";
+        description =
+          serverMessage ??
+          "Gmail was scanned, but Donnit could not save the suggestions. Check Supabase migrations and try again.";
       } else if (reason === "gmail_api_call_failed") {
         title = "Email scan unavailable";
         description =
-          parsed.message ?? "Gmail API call failed. Try again shortly.";
+          serverMessage ?? "Gmail API call failed. Try again shortly.";
       } else {
         title = "Email scan unavailable";
         description =
-          parsed.message ??
+          serverMessage ??
           "Gmail scan failed. Try again shortly.";
       }
 

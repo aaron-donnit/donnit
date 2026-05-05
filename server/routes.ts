@@ -2611,7 +2611,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         return;
       } catch (error) {
-        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        const payload = serializeSupabaseError(error);
+        console.error("[donnit] gmail suggestion persist failed", {
+          userId: req.donnitAuth?.userId,
+          ...payload,
+        });
+        res.status(500).json({
+          ok: false,
+          reason: "gmail_suggestion_persist_failed",
+          message: payload.message,
+          code: payload.code,
+          details: payload.details,
+          hint: payload.hint,
+        });
         return;
       }
     }
