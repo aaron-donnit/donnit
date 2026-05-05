@@ -3278,7 +3278,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       process.env.NODE_ENV === "production" &&
       (!expected || req.get("x-donnit-ingest-token") !== expected)
     ) {
-      res.status(401).json({ message: "Authenticate or provide the Slack ingest token." });
+      res.status(401).json({
+        message: "Authenticate or provide the Slack ingest token.",
+        reason: expected ? "token_mismatch" : "token_not_configured",
+      });
       return;
     }
     return createExternalSuggestion(req, res, "slack");
@@ -3291,7 +3294,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       process.env.NODE_ENV === "production" &&
       (!expected || req.get("x-donnit-ingest-token") !== expected)
     ) {
-      res.status(401).json({ message: "Authenticate or provide the SMS ingest token." });
+      res.status(401).json({
+        message: "Authenticate or provide the SMS ingest token.",
+        reason: expected ? "token_mismatch" : "token_not_configured",
+      });
       return;
     }
     return createExternalSuggestion(req, res, "sms");
