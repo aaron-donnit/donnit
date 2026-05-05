@@ -25,6 +25,31 @@ function wrapSupabaseError(prefix: string, raw: unknown): Error {
   return err;
 }
 
+function normalizeSupabaseTimestamp(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+  if (typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
+function isTimestampSyntaxError(error: unknown) {
+  const raw = error as { code?: unknown; message?: unknown; details?: unknown };
+  const haystack = `${String(raw?.message ?? "")} ${String(raw?.details ?? "")}`.toLowerCase();
+  return (
+    raw?.code === "22007" ||
+    (haystack.includes("invalid input syntax") && haystack.includes("timestamp with time zone"))
+  );
+}
+
 export type DonnitProfile = {
   id: string;
   full_name: string;
@@ -280,12 +305,28 @@ export class DonnitStore {
   }
 
   async createEmailSuggestion(orgId: string, input: Omit<DonnitEmailSuggestion, "id" | "org_id" | "status" | "created_at">): Promise<DonnitEmailSuggestion> {
+    const payload = {
+      ...input,
+      received_at: normalizeSupabaseTimestamp(input.received_at),
+      org_id: orgId,
+      status: "pending",
+    };
     const { data, error } = await this.client
       .from(DONNIT_TABLES.emailSuggestions)
-      .insert({ ...input, org_id: orgId, status: "pending" })
+      .insert(payload)
       .select("*")
       .single();
-    if (error) throw error;
+    if (error) {
+      if (isTimestampSyntaxError(error) && payload.received_at !== null) {
+        const { data: retryData, error: retryError } = await this.client
+          .from(DONNIT_TABLES.emailSuggestions)
+          .insert({ ...payload, received_at: null })
+          .select("*")
+          .single();
+        if (!retryError) return retryData as DonnitEmailSuggestion;
+      }
+      throw error;
+    }
     return data as DonnitEmailSuggestion;
   }
 
