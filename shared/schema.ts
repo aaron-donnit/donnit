@@ -103,7 +103,7 @@ export const taskCreateRequestSchema = insertTaskSchema.extend({
   status: z
     .enum(["open", "pending_acceptance", "accepted", "denied", "completed"])
     .default("open"),
-  source: z.enum(["chat", "manual", "email", "automation", "annual"]).default("manual"),
+  source: z.enum(["chat", "manual", "email", "slack", "sms", "automation", "annual"]).default("manual"),
   recurrence: z.enum(["none", "annual"]).default("none"),
   dueDate: z.string().nullable().optional(),
   description: z.string().optional().default(""),
@@ -124,6 +124,14 @@ export const taskUpdateRequestSchema = z.object({
 
 export const noteRequestSchema = z.object({
   note: z.string().trim().min(1).max(1000),
+});
+
+export const externalTaskSuggestionSchema = z.object({
+  text: z.string().trim().min(2).max(4000),
+  from: z.string().trim().max(200).optional(),
+  channel: z.string().trim().max(120).optional(),
+  subject: z.string().trim().max(180).optional(),
+  assignedToId: z.union([z.string().min(1), z.number()]).optional(),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import crypto from "node:crypto";
 import {
   chatRequestSchema,
+  externalTaskSuggestionSchema,
   noteRequestSchema,
   taskCreateRequestSchema,
   taskUpdateRequestSchema,
@@ -1183,6 +1184,177 @@ function parseChatTaskAuthenticated(
   };
 }
 
+type SuggestionSource = "email" | "slack" | "sms";
+
+type AiTaskExtraction = {
+  title: string;
+  description: string;
+  urgency: "low" | "normal" | "high" | "critical";
+  dueDate: string | null;
+  estimatedMinutes: number;
+  assigneeHint: string | null;
+  recurrence: "none" | "annual";
+  reminderDaysBefore: number;
+  confidence: "low" | "medium" | "high";
+  rationale: string;
+};
+
+const aiTaskExtractionSchema = z.object({
+  title: z.string().trim().min(2).max(160),
+  description: z.string().trim().max(1200).default(""),
+  urgency: z.enum(["low", "normal", "high", "critical"]),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  estimatedMinutes: z.number().int().min(5).max(480),
+  assigneeHint: z.string().trim().max(160).nullable(),
+  recurrence: z.enum(["none", "annual"]),
+  reminderDaysBefore: z.number().int().min(0).max(365),
+  confidence: z.enum(["low", "medium", "high"]),
+  rationale: z.string().trim().max(400),
+});
+
+function extractOutputText(response: any): string | null {
+  if (typeof response?.output_text === "string") return response.output_text;
+  const output = Array.isArray(response?.output) ? response.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      if (typeof part?.text === "string") return part.text;
+    }
+  }
+  return null;
+}
+
+async function extractChatTaskWithAi(message: string, memberLabels: string[]): Promise<AiTaskExtraction | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
+        input: [
+          {
+            role: "system",
+            content:
+              "Extract one actionable task from manager input. Return only fields that fit the schema. Use null dueDate when no date is clear. Keep titles grammatical and concise.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              message,
+              availableAssignees: memberLabels,
+              today: todayIso(),
+            }),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "donnit_task_extraction",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string" },
+                description: { type: "string" },
+                urgency: { type: "string", enum: ["low", "normal", "high", "critical"] },
+                dueDate: { anyOf: [{ type: "string", format: "date" }, { type: "null" }] },
+                estimatedMinutes: { type: "integer" },
+                assigneeHint: { anyOf: [{ type: "string" }, { type: "null" }] },
+                recurrence: { type: "string", enum: ["none", "annual"] },
+                reminderDaysBefore: { type: "integer" },
+                confidence: { type: "string", enum: ["low", "medium", "high"] },
+                rationale: { type: "string" },
+              },
+              required: [
+                "title",
+                "description",
+                "urgency",
+                "dueDate",
+                "estimatedMinutes",
+                "assigneeHint",
+                "recurrence",
+                "reminderDaysBefore",
+                "confidence",
+                "rationale",
+              ],
+            },
+          },
+        },
+      }),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const text = extractOutputText(json);
+    if (!text) return null;
+    const parsed = aiTaskExtractionSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function matchAiAssignee<T extends { name?: string; email?: string; id?: string | number }>(
+  hint: string | null,
+  candidates: T[],
+): T | null {
+  if (!hint) return null;
+  const lowered = hint.toLowerCase();
+  return (
+    candidates.find((candidate) => {
+      const name = (candidate.name ?? "").toLowerCase();
+      const email = (candidate.email ?? "").toLowerCase();
+      return Boolean((name && lowered.includes(name)) || (email && lowered.includes(email)));
+    }) ?? null
+  );
+}
+
+function sourceFromSuggestion(input: { fromEmail: string; subject: string }): "email" | "slack" | "sms" {
+  const marker = `${input.fromEmail} ${input.subject}`.toLowerCase();
+  if (marker.includes("slack:") || marker.includes("slack")) return "slack";
+  if (marker.includes("sms:") || marker.includes("text message") || marker.includes("sms")) return "sms";
+  return "email";
+}
+
+function buildExternalSuggestionCandidate(input: {
+  source: "slack" | "sms";
+  text: string;
+  from?: string;
+  channel?: string;
+  subject?: string;
+}) {
+  const sourceLabel = input.source === "slack" ? "Slack" : "SMS";
+  const actor = input.from?.trim() || (input.source === "slack" ? "Slack user" : "SMS user");
+  const context = input.channel?.trim();
+  const title = titleFromMessage(input.text, [actor]) || `Review ${sourceLabel} request`;
+  const urgency = parseUrgency(input.text);
+  const dueDate = parseDueDate(input.text);
+  const estimate = parseEstimate(input.text);
+  const rationale = `${sourceLabel} message from ${actor}${context ? ` in ${context}` : ""} appears actionable.`;
+  return {
+    fromEmail: `${input.source}:${actor}`,
+    subject: input.subject?.trim() || `${sourceLabel}${context ? `: ${context}` : ""}`,
+    preview: `${rationale} Suggested task: ${title}.`,
+    body: input.text,
+    receivedAt: new Date().toISOString(),
+    actionItems: [`Confirm and assign: ${title}.`],
+    suggestedTitle: title,
+    suggestedDueDate: dueDate,
+    urgency,
+    estimatedMinutes: estimate,
+  };
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use("/api", attachSupabaseAuth);
   const detailedHealthAllowed = (req: Request) => {
@@ -1516,7 +1688,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const orgId = profile.default_org_id;
         const members = await store.listOrgMembers(orgId);
-        const taskInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
+        const ai = await extractChatTaskWithAi(
+          parsed.data.message,
+          members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
+        );
+        const fallbackInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
+        const aiAssignee = ai
+          ? members.find((member) => {
+              const candidate = matchAiAssignee(ai.assigneeHint, [
+                {
+                  id: member.user_id,
+                  name: member.profile?.full_name ?? "",
+                  email: member.profile?.email ?? "",
+                },
+              ]);
+              return Boolean(candidate);
+            })
+          : null;
+        const assignedToId = aiAssignee?.user_id ?? fallbackInput.assignedToId;
+        const taskInput = ai
+          ? {
+              title: ai.title,
+              description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
+              status: assignedToId === auth.userId ? "open" : "pending_acceptance",
+              urgency: ai.urgency,
+              dueDate: ai.dueDate ?? fallbackInput.dueDate,
+              estimatedMinutes: ai.estimatedMinutes,
+              assignedToId,
+              assignedById: auth.userId,
+              source: "chat" as const,
+              recurrence: ai.recurrence,
+              reminderDaysBefore: ai.reminderDaysBefore,
+            }
+          : fallbackInput;
         const created = await store.createTask(orgId, {
           title: taskInput.title,
           description: taskInput.description,
@@ -1551,7 +1755,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const users = await storage.listUsers();
-    const taskInput = parseChatTask(parsed.data.message, users);
+    const ai = await extractChatTaskWithAi(
+      parsed.data.message,
+      users.map((user) => `${user.name} ${user.email}`),
+    );
+    const fallbackInput = parseChatTask(parsed.data.message, users);
+    const aiAssignee = matchAiAssignee(ai?.assigneeHint ?? null, users);
+    const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId;
+    const taskInput = ai
+      ? {
+          title: ai.title,
+          description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
+          status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
+          urgency: ai.urgency,
+          dueDate: ai.dueDate ?? fallbackInput.dueDate,
+          estimatedMinutes: ai.estimatedMinutes,
+          assignedToId,
+          assignedById: DEMO_USER_ID,
+          source: "chat" as const,
+          recurrence: ai.recurrence,
+          reminderDaysBefore: ai.reminderDaysBefore,
+        }
+      : fallbackInput;
     const task = await storage.createTask(taskInput);
     await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: task.id });
     const assignee = users.find((user) => user.id === task.assignedToId);
@@ -1905,6 +2130,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const updated = await store.updateEmailSuggestion(suggestion.id, { status: "approved" });
         const assignedTo = suggestion.assigned_to ?? auth.userId;
+        const suggestionSource = sourceFromSuggestion({
+          fromEmail: suggestion.from_email,
+          subject: suggestion.subject,
+        });
         const task = await store.createTask(suggestion.org_id, {
           title: suggestion.suggested_title,
           description: buildEmailTaskDescription({
@@ -1925,7 +2154,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }),
           assigned_to: assignedTo,
           assigned_by: auth.userId,
-          source: "email",
+          source: suggestionSource,
           recurrence: "none",
           reminder_days_before: 0,
         });
@@ -1933,7 +2162,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           task_id: task.id,
           actor_id: auth.userId,
           type: "email_approved",
-          note: `Approved task suggestion from ${suggestion.from_email}.`,
+          note: `Approved ${suggestionSource} task suggestion from ${suggestion.from_email}.`,
         });
         res.json({ suggestion: updated, task: toClientTask(task) });
         return;
@@ -2797,6 +3026,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       assignedToId: candidate.assignedToId,
     });
     res.status(201).json({ ok: true, suggestion });
+  });
+
+  async function createExternalSuggestion(req: Request, res: Response, source: "slack" | "sms") {
+    const parsed = externalTaskSuggestionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Provide message text between 2 and 4000 characters." });
+      return;
+    }
+    const candidate = buildExternalSuggestionCandidate({
+      source,
+      text: parsed.data.text,
+      from: parsed.data.from,
+      channel: parsed.data.channel,
+      subject: parsed.data.subject,
+    });
+
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const orgId = await store.getDefaultOrgId();
+        if (!orgId) {
+          res.status(409).json({ message: "Workspace not bootstrapped." });
+          return;
+        }
+        const assignedTo =
+          typeof parsed.data.assignedToId === "string" ? parsed.data.assignedToId : auth.userId;
+        const suggestion = await store.createEmailSuggestion(orgId, {
+          gmail_message_id: `${source}:${crypto.createHash("sha1").update(candidate.body).digest("hex").slice(0, 20)}`,
+          from_email: candidate.fromEmail,
+          subject: candidate.subject,
+          preview: candidate.preview,
+          body: candidate.body,
+          received_at: candidate.receivedAt,
+          action_items: candidate.actionItems,
+          suggested_title: candidate.suggestedTitle,
+          suggested_due_date: candidate.suggestedDueDate,
+          urgency: candidate.urgency,
+          assigned_to: assignedTo,
+        });
+        res.status(201).json({ ok: true, suggestion });
+        return;
+      } catch (error) {
+        const payload = serializeSupabaseError(error);
+        console.error(`[donnit] ${source} suggestion failed`, { userId: req.donnitAuth?.userId, ...payload });
+        res.status(500).json({ ok: false, ...payload });
+        return;
+      }
+    }
+
+    const suggestion = await storage.createEmailSuggestion({
+      fromEmail: candidate.fromEmail,
+      subject: candidate.subject,
+      preview: candidate.preview,
+      suggestedTitle: candidate.suggestedTitle,
+      suggestedDueDate: candidate.suggestedDueDate,
+      urgency: candidate.urgency,
+      assignedToId: typeof parsed.data.assignedToId === "number" ? parsed.data.assignedToId : DEMO_USER_ID,
+    });
+    res.status(201).json({ ok: true, suggestion });
+  }
+
+  app.post("/api/integrations/slack/suggest", async (req: Request, res: Response) => {
+    const expected = process.env.DONNIT_SLACK_WEBHOOK_TOKEN;
+    if (
+      !req.donnitAuth &&
+      process.env.NODE_ENV === "production" &&
+      (!expected || req.get("x-donnit-ingest-token") !== expected)
+    ) {
+      res.status(401).json({ message: "Authenticate or provide the Slack ingest token." });
+      return;
+    }
+    return createExternalSuggestion(req, res, "slack");
+  });
+
+  app.post("/api/integrations/sms/inbound", async (req: Request, res: Response) => {
+    const expected = process.env.DONNIT_SMS_WEBHOOK_TOKEN;
+    if (
+      !req.donnitAuth &&
+      process.env.NODE_ENV === "production" &&
+      (!expected || req.get("x-donnit-ingest-token") !== expected)
+    ) {
+      res.status(401).json({ message: "Authenticate or provide the SMS ingest token." });
+      return;
+    }
+    return createExternalSuggestion(req, res, "sms");
   });
 
   return httpServer;

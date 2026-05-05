@@ -340,6 +340,11 @@ export class DatabaseStorage implements IStorage {
       .returning()
       .get();
 
+    const source = suggestion.fromEmail.toLowerCase().startsWith("slack:")
+      ? "slack"
+      : suggestion.fromEmail.toLowerCase().startsWith("sms:")
+        ? "sms"
+        : "email";
     const task = await this.createTask({
       title: suggestion.suggestedTitle,
       description: `${suggestion.subject}\n\n${suggestion.preview}`,
@@ -349,7 +354,7 @@ export class DatabaseStorage implements IStorage {
       estimatedMinutes: suggestion.urgency === "high" ? 45 : 30,
       assignedToId: suggestion.assignedToId,
       assignedById: actorId,
-      source: "email",
+      source,
       recurrence: "none",
       reminderDaysBefore: 0,
     });
@@ -358,7 +363,7 @@ export class DatabaseStorage implements IStorage {
       taskId: task.id,
       actorId,
       type: "email_approved",
-      note: `Approved task suggestion from ${suggestion.fromEmail}.`,
+      note: `Approved ${source} task suggestion from ${suggestion.fromEmail}.`,
     });
 
     return { suggestion: updatedSuggestion, task };

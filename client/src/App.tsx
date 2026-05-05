@@ -4,6 +4,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Archive,
+  Bell,
   CalendarClock,
   CalendarCheck,
   CalendarPlus,
@@ -161,6 +162,8 @@ type Bootstrap = {
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };
     email: { provider: string; sourceId: string; status: string; mode: string };
+    slack?: { provider: string; status: string; mode: string };
+    sms?: { provider: string; status: string; mode: string };
     reminders: { channelOrder: string[]; reminderOrder: string[] };
     app: { delivery: string; native: string };
   };
@@ -1207,7 +1210,15 @@ function AgendaPanel({
   );
 }
 
-function ReportingPanel({ tasks, currentUserId }: { tasks: Task[]; currentUserId: Id }) {
+function ReportingPanel({
+  tasks,
+  suggestions,
+  currentUserId,
+}: {
+  tasks: Task[];
+  suggestions: EmailSuggestion[];
+  currentUserId: Id;
+}) {
   const now = new Date();
   const total = tasks.length;
   const completed = tasks.filter((task) => task.status === "completed");
@@ -1230,6 +1241,13 @@ function ReportingPanel({ tasks, currentUserId }: { tasks: Task[]; currentUserId
       ? completionDurations.reduce((sum, value) => sum + value, 0) / completionDurations.length / 36e5
       : null;
   const incompletePct = total > 0 ? Math.round((incomplete.length / total) * 100) : 0;
+  const reviewedSuggestions = suggestions.filter((suggestion) => suggestion.status !== "pending");
+  const approvedSuggestions = suggestions.filter((suggestion) => suggestion.status === "approved");
+  const dismissedSuggestions = suggestions.filter((suggestion) => suggestion.status === "dismissed");
+  const approvalRate =
+    reviewedSuggestions.length > 0
+      ? Math.round((approvedSuggestions.length / reviewedSuggestions.length) * 100)
+      : null;
   const bySource = tasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.source] = (acc[task.source] ?? 0) + 1;
     return acc;
@@ -1246,6 +1264,8 @@ function ReportingPanel({ tasks, currentUserId }: { tasks: Task[]; currentUserId
         <ReportMetric label="Overdue" value={String(overdue.length)} />
         <ReportMetric label="Delegated" value={String(delegatedOutstanding.length)} />
         <ReportMetric label="Avg done" value={avgHours === null ? "N/A" : `${avgHours < 1 ? Math.round(avgHours * 60) + "m" : avgHours.toFixed(1) + "h"}`} />
+        <ReportMetric label="Accepted AI" value={approvalRate === null ? "N/A" : `${approvalRate}%`} />
+        <ReportMetric label="Dismissed" value={String(dismissedSuggestions.length)} />
       </div>
       {Object.keys(bySource).length > 0 && (
         <div className="border-t border-border px-4 py-3">
@@ -1268,6 +1288,48 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
     <div className="rounded-md border border-border bg-background px-3 py-2">
       <p className="ui-label">{label}</p>
       <p className="display-font mt-1 text-lg font-bold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function TeamProfilesPanel({ tasks, users }: { tasks: Task[]; users: User[] }) {
+  const profiles = users.map((user) => {
+    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
+    const open = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
+    const recurring = owned.filter((task) => task.recurrence !== "none");
+    const completed = owned.filter((task) => task.status === "completed");
+    const sources = Array.from(new Set(owned.map((task) => task.source))).slice(0, 3);
+    return { user, owned, open, recurring, completed, sources };
+  });
+
+  return (
+    <div className="panel" data-testid="panel-team-profiles">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="display-font text-sm font-bold">Team memory</h3>
+        <p className="ui-label mt-1">Work profile and handoff signal</p>
+      </div>
+      <div className="space-y-2 px-4 py-3">
+        {profiles.map((profile) => (
+          <div key={String(profile.user.id)} className="rounded-md border border-border bg-background px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{profile.user.name}</p>
+                <p className="truncate text-xs text-muted-foreground">{profile.user.role} - {profile.user.persona}</p>
+              </div>
+              <span className="ui-label whitespace-nowrap">{profile.open.length} open</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+              <span className="rounded-md bg-muted px-2 py-1">{profile.completed.length} done</span>
+              <span className="rounded-md bg-muted px-2 py-1">{profile.recurring.length} recurring</span>
+              {profile.sources.map((source) => (
+                <span key={`${profile.user.id}-${source}`} className="rounded-md bg-muted px-2 py-1">
+                  {source}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1433,6 +1495,11 @@ function SuggestionCard({
   const actionItems = suggestion.actionItems ?? [];
   const body = (suggestion.body ?? "").trim();
   const preview = (suggestion.preview ?? body.slice(0, 240)).trim();
+  const sourceLabel = suggestion.fromEmail.toLowerCase().startsWith("slack:")
+    ? "Slack"
+    : suggestion.fromEmail.toLowerCase().startsWith("sms:")
+      ? "SMS"
+      : "Email";
   return (
     <div
       className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
@@ -1444,7 +1511,7 @@ function SuggestionCard({
             {suggestion.suggestedTitle}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground break-words" data-testid={`text-suggestion-from-${suggestion.id}`}>
-            From {suggestion.fromEmail} · {formatReceivedAt(suggestion.receivedAt ?? null)}
+            {sourceLabel} - {suggestion.fromEmail} - {formatReceivedAt(suggestion.receivedAt ?? null)}
           </p>
           <p className="mt-0.5 text-xs italic text-muted-foreground break-words">
             Source: {suggestion.subject}
@@ -1575,6 +1642,114 @@ function DoneLogPanel({
         )}
       </div>
     </div>
+  );
+}
+
+type DerivedNotification = {
+  id: string;
+  title: string;
+  detail: string;
+  severity: "high" | "normal" | "low";
+};
+
+function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): DerivedNotification[] {
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 2);
+  const soonIso = soon.toISOString().slice(0, 10);
+  const active = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
+  const items: DerivedNotification[] = [];
+
+  for (const suggestion of suggestions.filter((item) => item.status === "pending")) {
+    items.push({
+      id: `suggestion-${suggestion.id}`,
+      title: "Approval waiting",
+      detail: suggestion.suggestedTitle,
+      severity: "normal",
+    });
+  }
+
+  for (const task of active) {
+    if (task.dueDate && task.dueDate < today) {
+      items.push({
+        id: `overdue-${task.id}`,
+        title: "Past due",
+        detail: task.title,
+        severity: "high",
+      });
+    } else if (task.dueDate && task.dueDate <= soonIso) {
+      items.push({
+        id: `soon-${task.id}`,
+        title: task.dueDate === today ? "Due today" : "Due soon",
+        detail: task.title,
+        severity: task.urgency === "critical" || task.urgency === "high" ? "high" : "normal",
+      });
+    }
+    if (task.status === "pending_acceptance") {
+      items.push({
+        id: `acceptance-${task.id}`,
+        title: "Needs acceptance",
+        detail: task.title,
+        severity: "normal",
+      });
+    }
+    if (task.delegatedToId) {
+      items.push({
+        id: `delegated-${task.id}`,
+        title: "Delegated work open",
+        detail: task.title,
+        severity: "low",
+      });
+    }
+  }
+
+  return items.slice(0, 12);
+}
+
+function NotificationCenter({ notifications }: { notifications: DerivedNotification[] }) {
+  const highCount = notifications.filter((item) => item.severity === "high").length;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon" aria-label="Open notifications" data-testid="button-notifications">
+          <span className="relative inline-flex">
+            <Bell className="size-4" />
+            {notifications.length > 0 && (
+              <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-green px-1 text-[10px] font-bold text-white">
+                {notifications.length}
+              </span>
+            )}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>
+          Notifications{highCount > 0 ? ` - ${highCount} urgent` : ""}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {notifications.length === 0 ? (
+          <DropdownMenuItem disabled>No task alerts right now.</DropdownMenuItem>
+        ) : (
+          notifications.map((item) => (
+            <DropdownMenuItem key={item.id} className="items-start gap-2">
+              <span
+                className={`mt-1 size-2 shrink-0 rounded-full ${
+                  item.severity === "high"
+                    ? "bg-destructive"
+                    : item.severity === "normal"
+                      ? "bg-brand-green"
+                      : "bg-muted-foreground"
+                }`}
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-foreground">{item.title}</span>
+                <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>
+              </span>
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -2205,6 +2380,8 @@ function WorkspaceSettingsDialog({
                 ["Email suggestions require approval", true],
                 ["Delegated tasks stay visible until complete", true],
                 ["Agenda schedules around Google Calendar", Boolean(oauthStatus?.calendarConnected)],
+                ["Slack ingestion: " + (integrations.slack?.status ?? "scaffolded"), true],
+                ["SMS ingestion: " + (integrations.sms?.status ?? "scaffolded"), true],
                 ["Reminder channels: " + integrations.reminders.channelOrder.join(" / "), true],
               ] as Array<[string, boolean]>).map(([label, checked]) => (
                 <label key={String(label)} className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
@@ -2699,6 +2876,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     [],
   );
+  const notifications = useMemo(
+    () => buildNotifications(data?.tasks ?? [], data?.suggestions ?? []),
+    [data?.tasks, data?.suggestions],
+  );
 
   if (isLoading) {
     return (
@@ -2875,6 +3056,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 : "demo (Supabase not configured)"}
             </span>
             <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
+            <NotificationCenter notifications={notifications} />
             <ThemeToggle />
             {auth.authenticated && (
               <Button
@@ -2934,7 +3116,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   suggestions={data.suggestions}
                   onOpenInbox={() => setApprovalInboxOpen(true)}
                 />
-                <ReportingPanel tasks={data.tasks} currentUserId={data.currentUserId} />
+                <ReportingPanel
+                  tasks={data.tasks}
+                  suggestions={data.suggestions}
+                  currentUserId={data.currentUserId}
+                />
+                <TeamProfilesPanel tasks={data.tasks} users={data.users} />
                 <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
               </div>
             </div>

@@ -18,10 +18,16 @@ Shipped foundations:
 - Task detail editing, completion, assignment, reassignment, delegation, and collaborators.
 - Manager reporting basics.
 - Workspace hamburger menu and admin/settings scaffolding.
+- Approval inbox opens after new Gmail suggestions.
+- Optional OpenAI structured chat extraction with deterministic fallback.
+- Slack/SMS suggestion ingestion endpoints that feed the approval inbox.
+- In-app notification bell for due, overdue, delegated, and approval-waiting work.
+- Team memory panel for role, recurring work, source mix, and open/completed work.
 
 Known operational items:
 
 - Apply `supabase/migrations/0008_task_relationships.sql` in Supabase so delegated/collaborator fields persist as first-class columns.
+- Apply `supabase/migrations/0009_slack_sms_task_sources.sql` so approved Slack/SMS suggestions can retain source provenance.
 - Keep `package-lock.json` line-ending noise uncommitted unless dependencies actually change.
 
 ## P0: Pilot-Critical Work Loop
@@ -95,7 +101,15 @@ Known operational items:
 Current sprint:
 
 1. Done - build approval inbox modal and open it automatically after scans.
-2. In progress - improve chat/email structured extraction.
-3. Add approval metrics to reporting.
-4. Implement Slack suggestion source using the same approval pipeline.
-5. Add notification center foundation.
+2. Done - improve chat/email structured extraction with optional OpenAI JSON extraction and fallback parsing.
+3. Done - add approval metrics to reporting.
+4. Done - implement Slack suggestion source using the same approval pipeline.
+5. Done - add notification center foundation.
+
+Next sprint:
+
+1. Provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
+2. Provision SMS provider webhook and verified phone routing.
+3. Persist admin settings, invites, and team management.
+4. Add visual agenda drag/rebuild and calendar conflict repair.
+5. Add design-partner analytics dashboard.

@@ -42,6 +42,16 @@ export function getIntegrationStatus() {
         redirectUriPresent: Boolean(process.env.GOOGLE_REDIRECT_URI),
       },
     },
+    slack: {
+      provider: "slack",
+      status: process.env.SLACK_BOT_TOKEN ? "configured" : "scaffolded",
+      mode: "approval_before_task_creation",
+    },
+    sms: {
+      provider: "sms",
+      status: process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN ? "configured" : "scaffolded",
+      mode: "approval_before_task_creation",
+    },
     reminders: {
       channelOrder: process.env.REMINDER_CHANNEL_ORDER?.split(",") ?? [...APPROVED_CHANNEL_ORDER],
       reminderOrder: [...APPROVED_REMINDER_ORDER],
