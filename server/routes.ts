@@ -576,6 +576,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .slice(0, 150);
   const withoutAssignee = stripLeadingUnknownAssignee(stripAssigneePhrases(cleaned, assigneeLabels))
     .replace(/\s+/g, " ")
+    .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
   return withoutAssignee
