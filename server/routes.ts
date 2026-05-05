@@ -426,6 +426,41 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
   return cleaned;
 }
 
+function stripLeadingUnknownAssignee(message: string) {
+  const words = message.trim().split(/\s+/);
+  if (words.length < 4) return message;
+  const command = words[0]?.toLowerCase();
+  if (!["assign", "delegate", "reassign"].includes(command)) return message;
+  if (words[1]?.toLowerCase() === "to") return message;
+
+  const actionHints = new Set([
+    "urgent",
+    "critical",
+    "quick",
+    "review",
+    "audit",
+    "analyze",
+    "draft",
+    "prepare",
+    "follow",
+    "call",
+    "email",
+    "reconcile",
+    "schedule",
+    "update",
+    "complete",
+    "send",
+    "confirm",
+  ]);
+  const second = words[1] ?? "";
+  const third = words[2]?.toLowerCase() ?? "";
+  const looksLikeName =
+    /^[A-Z][A-Za-z'’-]{1,40}$/.test(second) ||
+    (!actionHints.has(second.toLowerCase()) && actionHints.has(third));
+
+  return looksLikeName ? words.slice(2).join(" ") : message;
+}
+
 function titleFromMessage(message: string, assigneeLabels: string[] = []) {
   const cleaned = message
     .replace(/\b(?:please\s+)?(?:add|create|make|log)\s+(?:a\s+)?(?:task|todo|to-do)\s+(?:to\s+)?/gi, "")
@@ -442,7 +477,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .trim()
     .replace(/^(add|create|make|log|please|task to|todo to|to-do to)\s+/i, "")
     .slice(0, 150);
-  const withoutAssignee = stripAssigneePhrases(cleaned, assigneeLabels)
+  const withoutAssignee = stripLeadingUnknownAssignee(stripAssigneePhrases(cleaned, assigneeLabels))
     .replace(/\s+/g, " ")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
