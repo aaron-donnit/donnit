@@ -1393,6 +1393,23 @@ function buildExternalSuggestionCandidate(input: {
   };
 }
 
+function normalizeDateOnly(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const parsed = new Date(`${trimmed}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) ? trimmed : null;
+  }
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : null;
+}
+
+function normalizeTimestamp(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use("/api", attachSupabaseAuth);
   const detailedHealthAllowed = (req: Request) => {
@@ -2593,10 +2610,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             subject: candidate.subject,
             preview: candidate.preview,
             body: candidate.body,
-            received_at: candidate.receivedAt,
+            received_at: normalizeTimestamp(candidate.receivedAt),
             action_items: candidate.actionItems,
             suggested_title: candidate.suggestedTitle,
-            suggested_due_date: candidate.suggestedDueDate,
+            suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
             urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
             assigned_to: auth.userId,
           });
@@ -3050,10 +3067,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           subject: candidate.subject,
           preview: candidate.preview,
           body: candidate.body,
-          received_at: candidate.receivedAt,
+          received_at: normalizeTimestamp(candidate.receivedAt),
           action_items: candidate.actionItems,
           suggested_title: candidate.suggestedTitle,
-          suggested_due_date: candidate.suggestedDueDate,
+          suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
           urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
           assigned_to: auth.userId,
         });
@@ -3109,10 +3126,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           subject: candidate.subject,
           preview: candidate.preview,
           body: candidate.body,
-          received_at: candidate.receivedAt,
+          received_at: normalizeTimestamp(candidate.receivedAt),
           action_items: candidate.actionItems,
           suggested_title: candidate.suggestedTitle,
-          suggested_due_date: candidate.suggestedDueDate,
+          suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
           urgency: candidate.urgency,
           assigned_to: assignedTo,
         });
