@@ -6,6 +6,8 @@ Last updated: 2026-05-05
 
 Codex is the implementation source of truth. Perplexity Computer should be used for deployed preview testing, account-console checks, and founder feedback. Avoid editing the same source files outside Codex while this build-out is active.
 
+All Donnit dialogs, popovers, and approval screens must fit inside the current viewport with visible close/action controls and internal scrolling for long content. No popup should touch the screen edge or require the page behind it to scroll.
+
 ## Current MVP State
 
 Shipped foundations:

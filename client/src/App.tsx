@@ -361,7 +361,7 @@ function FunctionActionButton({ action }: { action: FunctionAction }) {
 function FunctionBar({ primaryActions }: { primaryActions: FunctionAction[] }) {
   return (
     <div
-      className="flex flex-wrap items-center gap-2"
+      className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0"
       data-testid="bar-functions"
       role="toolbar"
       aria-label="Workspace functions"
@@ -372,6 +372,12 @@ function FunctionBar({ primaryActions }: { primaryActions: FunctionAction[] }) {
     </div>
   );
 }
+
+const dialogShellClass =
+  "flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0";
+const dialogHeaderClass = "shrink-0 border-b border-border px-5 py-4 pr-12";
+const dialogBodyClass = "min-h-0 flex-1 overflow-y-auto px-5 py-4";
+const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
 
 function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
@@ -384,7 +390,10 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   });
 
   return (
-    <div className="panel flex h-[520px] max-h-[calc(100vh-10.5rem)] min-h-[420px] flex-col lg:h-[calc(100vh-10.5rem)]" data-testid="panel-chat">
+    <div
+      className="panel flex h-[min(520px,calc(100dvh-10.5rem))] min-h-[360px] flex-col lg:h-[calc(100dvh-10.5rem)] lg:min-h-[420px]"
+      data-testid="panel-chat"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-brand-green" />
@@ -891,7 +900,7 @@ function TaskDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+      <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>Task details</DialogTitle>
           <DialogDescription>
@@ -1392,7 +1401,7 @@ function AcceptancePanel({
     <div className="panel" data-testid="panel-acceptance">
       <div className="border-b border-border px-4 py-3">
         <h3 className="display-font text-sm font-bold">Waiting on you</h3>
-        <p className="ui-label mt-1">Acceptances above · email queue below</p>
+        <p className="ui-label mt-1">Acceptances and approval queue</p>
       </div>
       <div className="space-y-3 px-4 py-3">
         {waiting.length === 0 && pendingSuggestions.length === 0 && (
@@ -1789,7 +1798,7 @@ function ApprovalInboxDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-4xl flex-col overflow-hidden p-0">
+      <DialogContent className={`${dialogShellClass} max-w-4xl`}>
         <DialogHeader className="border-b border-border px-5 py-4">
           <DialogTitle className="flex items-center gap-2">
             <Inbox className="size-5 text-brand-green" />
@@ -1990,14 +1999,15 @@ function AssignTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className={`${dialogShellClass} sm:max-w-lg`}>
+        <DialogHeader className={dialogHeaderClass}>
           <DialogTitle>Assign task</DialogTitle>
           <DialogDescription>
             Create a task for yourself or another workspace member.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <div className={dialogBodyClass}>
+          <div className="grid gap-4">
           <div className="space-y-1.5">
             <Label htmlFor="assign-title">Title</Label>
             <Input
@@ -2078,7 +2088,8 @@ function AssignTaskDialog({
             />
           </div>
         </div>
-        <DialogFooter>
+        </div>
+        <DialogFooter className={dialogFooterClass}>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-assign-cancel">
             Cancel
           </Button>
@@ -2116,7 +2127,7 @@ function ManualEmailImportDialog({
       await invalidateWorkspace();
       toast({
         title: "Email added",
-        description: "Pasted email is queued in Waiting on you.",
+        description: "Pasted email is queued in the approval inbox.",
       });
       setSubject("");
       setBody("");
@@ -2136,15 +2147,15 @@ function ManualEmailImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className={`${dialogShellClass} max-w-lg`}>
+        <DialogHeader className={dialogHeaderClass}>
           <DialogTitle>Manual email import (diagnostic)</DialogTitle>
           <DialogDescription>
             Donnit's primary email flow is "Scan email", which reads unread Gmail directly. Use this
             paste form only as a one-off diagnostic when Gmail OAuth is not yet configured.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className={`${dialogBodyClass} space-y-3`}>
           <div>
             <Label htmlFor="manual-email-from" className="ui-label mb-1.5 block">
               From (optional)
@@ -2185,7 +2196,7 @@ function ManualEmailImportDialog({
             />
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className={dialogFooterClass}>
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
@@ -2233,8 +2244,8 @@ function CalendarExportDialog({
   const scheduledCount = agenda.filter((item) => item.startAt && item.endAt && item.scheduleStatus === "scheduled").length;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className={`${dialogShellClass} max-w-lg`}>
+        <DialogHeader className={dialogHeaderClass}>
           <DialogTitle>Calendar export</DialogTitle>
           <DialogDescription>
             {scheduledCount > 0
@@ -2242,7 +2253,7 @@ function CalendarExportDialog({
               : "Build an agenda before exporting."}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className={`${dialogBodyClass} space-y-3`}>
           <div className="rounded-md border border-border px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -2467,8 +2478,8 @@ function WorkspaceSettingsDialog({
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className={`${dialogShellClass} sm:max-w-3xl`}>
+        <DialogHeader className={dialogHeaderClass}>
           <DialogTitle className="flex items-center gap-2">
             <Users className="size-5 text-brand-green" />
             Workspace settings
@@ -2479,7 +2490,8 @@ function WorkspaceSettingsDialog({
               : "Your workspace controls. Admin-only options are locked."}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <div className={dialogBodyClass}>
+          <div className="grid gap-4">
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-md border border-border px-3 py-3">
               <p className="ui-label">Your role</p>
@@ -2590,7 +2602,8 @@ function WorkspaceSettingsDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        </div>
+        <DialogFooter className={dialogFooterClass}>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
@@ -3102,14 +3115,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   };
   const dailyActions: FunctionAction[] = [
     {
-      id: "approval-inbox",
-      label: "Approval inbox",
-      icon: Inbox,
-      primary: metrics.emailQueue + metrics.needsAcceptance > 0,
-      onClick: () => setApprovalInboxOpen(true),
-      hint: "Approve suggested and assigned tasks",
-    },
-    {
       id: "create-todo",
       label: "Quick add",
       icon: ListPlus,
@@ -3119,6 +3124,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         el?.focus();
       },
       hint: "Focus chat to dictate a new list",
+    },
+    {
+      id: "approval-inbox",
+      label: "Approval inbox",
+      icon: Inbox,
+      primary: metrics.emailQueue + metrics.needsAcceptance > 0,
+      onClick: () => setApprovalInboxOpen(true),
+      hint: "Approve suggested and assigned tasks",
     },
     {
       id: "scan-email",
@@ -3144,13 +3157,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: UserPlus,
       onClick: () => setAssignTaskOpen(true),
       hint: "Create and assign a task",
-    },
-    {
-      id: "manager-report",
-      label: "Reporting",
-      icon: BarChart3,
-      onClick: scrollToReporting,
-      hint: "Review manager metrics and source mix",
     },
   ];
   const toolsSyncActions: FunctionAction[] = [
@@ -3201,6 +3207,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
   ];
   const workspaceActions: FunctionAction[] = [
+    {
+      id: "manager-report",
+      label: "Reporting",
+      icon: BarChart3,
+      onClick: scrollToReporting,
+      hint: "Review manager metrics and source mix",
+    },
     {
       id: "view-log",
       label: "View log",
@@ -3302,16 +3315,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               {/* Narrower supporting column stack */}
               <div className="flex flex-col gap-4 xl:col-span-4">
                 <DueTodayPanel tasks={data.tasks} />
+                <AcceptancePanel
+                  tasks={data.tasks}
+                  suggestions={data.suggestions}
+                  onOpenInbox={() => setApprovalInboxOpen(true)}
+                />
                 <AgendaPanel
                   agenda={data.agenda}
                   onBuild={() => buildAgenda.mutate()}
                   onExport={() => setCalendarExportOpen(true)}
                   isBuilding={buildAgenda.isPending}
-                />
-                <AcceptancePanel
-                  tasks={data.tasks}
-                  suggestions={data.suggestions}
-                  onOpenInbox={() => setApprovalInboxOpen(true)}
                 />
                 <ReportingPanel
                   tasks={data.tasks}
