@@ -363,6 +363,10 @@ function buildPositionProfiles(tasks: Task[], users: User[], events: TaskEvent[]
   });
 }
 
+function canAdministerProfiles(user: User | null | undefined) {
+  return user?.role === "owner" || user?.role === "admin";
+}
+
 function escapeIcsText(value: string) {
   return value
     .replace(/\\/g, "\\\\")
@@ -1560,29 +1564,114 @@ function PositionProfilesPanel({
   currentUserId: Id;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
-  const canViewRisk = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
-  const [selectedProfileId, setSelectedProfileId] = useState(profiles[0]?.id ?? "");
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
+  const canManageProfiles = canAdministerProfiles(currentUser);
+  const [customProfileMetas, setCustomProfileMetas] = useState<Array<{ id: string; title: string; ownerId: string }>>(() => {
+    try {
+      if (typeof window === "undefined") return [];
+      return JSON.parse(window.localStorage.getItem("donnit.customPositionProfiles") ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [deletedProfileIds, setDeletedProfileIds] = useState<Set<string>>(() => {
+    try {
+      if (typeof window === "undefined") return new Set();
+      return new Set(JSON.parse(window.localStorage.getItem("donnit.deletedPositionProfiles") ?? "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const [newProfileTitle, setNewProfileTitle] = useState("");
+  const [newProfileOwnerId, setNewProfileOwnerId] = useState(String(users[0]?.id ?? ""));
+  const customProfiles = customProfileMetas
+    .map((meta) => {
+      const owner = users.find((user) => String(user.id) === meta.ownerId) ?? users[0];
+      if (!owner) return null;
+      const base = profiles.find((profile) => String(profile.owner.id) === String(owner.id));
+      return {
+        ...(base ?? {
+          currentIncompleteTasks: [],
+          recurringTasks: [],
+          completedTasks: [],
+          criticalDates: [],
+          howTo: [],
+          tools: [],
+          stakeholders: [],
+          riskScore: 0,
+          riskLevel: "low" as const,
+          riskReasons: [],
+          transitionChecklist: [
+            "Assign an owner for this job title.",
+            "Add recurring responsibilities as they are discovered.",
+            "Attach tool access and account ownership details.",
+          ],
+          lastUpdatedAt: null,
+          status: "active" as const,
+        }),
+        id: meta.id,
+        title: meta.title,
+        owner,
+      } satisfies PositionProfile;
+    })
+    .filter((profile): profile is PositionProfile => Boolean(profile));
+  const repositoryProfiles = [
+    ...profiles.filter((profile) => !deletedProfileIds.has(profile.id)),
+    ...customProfiles,
+  ].sort((a, b) => a.title.localeCompare(b.title));
+  const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
+  const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId) ?? repositoryProfiles[0];
   const targetUsers = users.filter((user) => selectedProfile && String(user.id) !== String(selectedProfile.owner.id));
   const [targetUserId, setTargetUserId] = useState("");
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
 
   useEffect(() => {
-    if (!selectedProfile && profiles[0]) {
-      setSelectedProfileId(profiles[0].id);
+    if (!selectedProfile && repositoryProfiles[0]) {
+      setSelectedProfileId(repositoryProfiles[0].id);
       return;
     }
-    if (selectedProfile && !profiles.some((profile) => profile.id === selectedProfile.id)) {
-      setSelectedProfileId(profiles[0]?.id ?? "");
+    if (selectedProfile && !repositoryProfiles.some((profile) => profile.id === selectedProfile.id)) {
+      setSelectedProfileId(repositoryProfiles[0]?.id ?? "");
     }
-  }, [profiles, selectedProfile]);
+  }, [repositoryProfiles, selectedProfile]);
 
   useEffect(() => {
     if (!selectedProfile) return;
     const fallback = targetUsers.find((user) => String(user.id) === String(currentUserId)) ?? targetUsers[0];
     setTargetUserId(fallback ? String(fallback.id) : "");
   }, [selectedProfile?.id, currentUserId, users.length]);
+
+  const persistCustomProfiles = (next: Array<{ id: string; title: string; ownerId: string }>) => {
+    setCustomProfileMetas(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("donnit.customPositionProfiles", JSON.stringify(next));
+    }
+  };
+  const persistDeletedProfiles = (next: Set<string>) => {
+    setDeletedProfileIds(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("donnit.deletedPositionProfiles", JSON.stringify(Array.from(next)));
+    }
+  };
+  const addProfile = () => {
+    const title = newProfileTitle.trim();
+    if (!title || !newProfileOwnerId) return;
+    const id = `custom-position-${Date.now()}`;
+    persistCustomProfiles([...customProfileMetas, { id, title, ownerId: newProfileOwnerId }]);
+    setSelectedProfileId(id);
+    setNewProfileTitle("");
+  };
+  const deleteProfile = () => {
+    if (!selectedProfile) return;
+    if (selectedProfile.id.startsWith("custom-position-")) {
+      persistCustomProfiles(customProfileMetas.filter((profile) => profile.id !== selectedProfile.id));
+    } else {
+      const next = new Set(deletedProfileIds);
+      next.add(selectedProfile.id);
+      persistDeletedProfiles(next);
+    }
+    setSelectedProfileId(repositoryProfiles.find((profile) => profile.id !== selectedProfile.id)?.id ?? "");
+  };
 
   const assign = useMutation({
     mutationFn: async () => {
@@ -1614,7 +1703,7 @@ function PositionProfilesPanel({
 
   if (!selectedProfile) {
     return (
-      <div className="panel" data-testid="panel-position-profiles">
+      <div className="rounded-md border border-border" data-testid="panel-position-profiles">
         <div className="border-b border-border px-4 py-3">
           <h3 className="display-font text-sm font-bold">Position profiles</h3>
           <p className="ui-label mt-1">No role memory yet</p>
@@ -1627,17 +1716,57 @@ function PositionProfilesPanel({
   }
 
   return (
-    <div className="panel" data-testid="panel-position-profiles">
+    <div className="rounded-md border border-border" data-testid="panel-position-profiles">
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="display-font text-sm font-bold">Position profiles</h3>
-            <p className="ui-label mt-1">Workforce continuity memory</p>
+            <h3 className="display-font text-sm font-bold">Position Profiles</h3>
+            <p className="ui-label mt-1">Admin repository by job title</p>
           </div>
           <BriefcaseBusiness className="size-4 text-brand-green" />
         </div>
       </div>
       <div className="space-y-3 px-4 py-3">
+        {!canManageProfiles && (
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            Position Profiles are restricted to admins.
+          </div>
+        )}
+        {canManageProfiles && (
+          <div className="rounded-md border border-border bg-background px-3 py-3">
+            <p className="mb-2 text-xs font-medium text-foreground">Add job-title profile</p>
+            <div className="grid gap-2">
+              <Input
+                value={newProfileTitle}
+                onChange={(event) => setNewProfileTitle(event.target.value)}
+                placeholder="Executive Assistant to the CEO"
+                maxLength={160}
+                data-testid="input-position-profile-title"
+              />
+              <select
+                value={newProfileOwnerId}
+                onChange={(event) => setNewProfileOwnerId(event.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-position-profile-owner"
+              >
+                {users.map((user) => (
+                  <option key={String(user.id)} value={String(user.id)}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                onClick={addProfile}
+                disabled={newProfileTitle.trim().length < 2}
+                data-testid="button-position-profile-add"
+              >
+                <ListPlus className="size-4" />
+                Add profile
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="space-y-1.5">
           <Label htmlFor="position-profile-select" className="ui-label">
             Profile
@@ -1649,9 +1778,9 @@ function PositionProfilesPanel({
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             data-testid="select-position-profile"
           >
-            {profiles.map((profile) => (
+            {repositoryProfiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
-                {profile.title} - {profile.owner.name}
+                {profile.title}
               </option>
             ))}
           </select>
@@ -1665,19 +1794,17 @@ function PositionProfilesPanel({
                 Owner: {selectedProfile.owner.name} - {selectedProfile.status}
               </p>
             </div>
-            {canViewRisk && (
-              <span
-                className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
-                  selectedProfile.riskLevel === "high"
-                    ? "bg-destructive/10 text-destructive"
-                    : selectedProfile.riskLevel === "medium"
-                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                      : "bg-brand-green/10 text-brand-green"
-                }`}
-              >
-                Risk {selectedProfile.riskScore}
-              </span>
-            )}
+            <span
+              className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
+                selectedProfile.riskLevel === "high"
+                  ? "bg-destructive/10 text-destructive"
+                  : selectedProfile.riskLevel === "medium"
+                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                    : "bg-brand-green/10 text-brand-green"
+              }`}
+            >
+              Risk {selectedProfile.riskScore}
+            </span>
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
             <div className="rounded-md bg-muted px-2 py-2">
@@ -1695,7 +1822,7 @@ function PositionProfilesPanel({
           </div>
         </div>
 
-        {canViewRisk && selectedProfile.riskReasons.length > 0 && (
+        {selectedProfile.riskReasons.length > 0 && (
           <div className="rounded-md border border-border bg-background px-3 py-2">
             <div className="mb-1 flex items-center gap-2">
               <AlertTriangle className="size-4 text-muted-foreground" />
@@ -1784,10 +1911,21 @@ function PositionProfilesPanel({
         </div>
 
         <div className="rounded-md border border-border bg-background px-3 py-3">
-          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-            <UserCog className="size-4 text-muted-foreground" />
-            Assign coverage
-          </p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+              <UserCog className="size-4 text-muted-foreground" />
+              Assign / reassign
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={deleteProfile}
+              data-testid="button-position-profile-delete"
+            >
+              <X className="size-4" />
+              Delete
+            </Button>
+          </div>
           <div className="grid gap-2">
             <select
               value={mode}
@@ -3059,6 +3197,8 @@ function WorkspaceSettingsDialog({
   onOpenChange,
   currentUser,
   users,
+  positionProfiles,
+  currentUserId,
   integrations,
   oauthStatus,
   onConnectGmail,
@@ -3071,6 +3211,8 @@ function WorkspaceSettingsDialog({
   onOpenChange: (open: boolean) => void;
   currentUser: User | null;
   users: User[];
+  positionProfiles: PositionProfile[];
+  currentUserId: Id;
   integrations: Bootstrap["integrations"];
   oauthStatus?: GmailOAuthStatus;
   onConnectGmail: () => void;
@@ -3080,6 +3222,7 @@ function WorkspaceSettingsDialog({
   isScanningEmail: boolean;
 }) {
   const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
+  const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
@@ -3164,6 +3307,14 @@ function WorkspaceSettingsDialog({
               </p>
             </div>
           </div>
+
+          {canManagePositionProfiles && (
+            <PositionProfilesPanel
+              profiles={positionProfiles}
+              users={users}
+              currentUserId={currentUserId}
+            />
+          )}
 
           <div className="rounded-md border border-border">
             <div className="border-b border-border px-3 py-2">
@@ -3310,7 +3461,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
-  const [activePositionView, setActivePositionView] = useState("all");
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
       if (typeof window === "undefined") return new Set();
@@ -3758,21 +3908,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? []),
     [data?.tasks, data?.users, data?.events],
   );
-  const activePositionProfile = positionProfiles.find((profile) => profile.id === activePositionView) ?? null;
-  const visibleTasks = useMemo(() => {
-    if (!activePositionProfile) return data?.tasks ?? [];
-    return (data?.tasks ?? []).filter(
-      (task) =>
-        String(task.assignedToId) === String(activePositionProfile.owner.id) ||
-        String(task.delegatedToId) === String(activePositionProfile.owner.id),
-    );
-  }, [data?.tasks, activePositionProfile]);
-  useEffect(() => {
-    if (activePositionView === "all") return;
-    if (!positionProfiles.some((profile) => profile.id === activePositionView)) {
-      setActivePositionView("all");
-    }
-  }, [activePositionView, positionProfiles]);
   const markNotificationsReviewed = (ids: string[]) => {
     if (ids.length === 0) return;
     setReviewedNotificationIds((current) => {
@@ -3808,6 +3943,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const oauthData = oauthStatus.data;
   const currentUser = data.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null;
+  const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const scrollToReporting = () => {
@@ -3905,6 +4041,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       : []),
   ];
   const adminActions: FunctionAction[] = [
+    ...(canManagePositionProfiles
+      ? [
+          {
+            id: "position-profiles",
+            label: "Position Profiles",
+            icon: BriefcaseBusiness,
+            onClick: () => setWorkspaceSettingsOpen(true),
+            hint: "Open the admin repository of job-title profiles",
+          } satisfies FunctionAction,
+        ]
+      : []),
     {
       id: "workspace-settings",
       label: "Workspace settings",
@@ -3993,31 +4140,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <section className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
           <FunctionBar primaryActions={dailyActions} />
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-              <span className="ui-label">Today · {todayLabel}</span>
-              <Stat label="Open" value={metrics.open} />
-              <Stat label="Due today" value={metrics.dueToday} />
-              <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-              <Stat label="Approval queue" value={metrics.emailQueue} />
-              <Stat label="Completed" value={metrics.completed} />
-            </div>
-            <div className="flex items-center gap-2">
-              <BriefcaseBusiness className="size-4 text-muted-foreground" />
-              <select
-                value={activePositionView}
-                onChange={(event) => setActivePositionView(event.target.value)}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                data-testid="select-position-view"
-              >
-                <option value="all">All workspace work</option>
-                {positionProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.title} - {profile.owner.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            <span className="ui-label">Today · {todayLabel}</span>
+            <Stat label="Open" value={metrics.open} />
+            <Stat label="Due today" value={metrics.dueToday} />
+            <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+            <Stat label="Approval queue" value={metrics.emailQueue} />
+            <Stat label="Completed" value={metrics.completed} />
           </div>
         </div>
       </section>
@@ -4036,14 +4165,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
                 <TaskList
-                  tasks={visibleTasks}
+                  tasks={data.tasks}
                   users={data.users}
-                  viewLabel={activePositionProfile ? activePositionProfile.title : "All workspace work"}
+                  viewLabel="All workspace work"
                 />
               </div>
               {/* Narrower supporting column stack */}
               <div className="flex flex-col gap-4 xl:col-span-4">
-                <DueTodayPanel tasks={visibleTasks} />
+                <DueTodayPanel tasks={data.tasks} />
                 <AcceptancePanel
                   tasks={data.tasks}
                   suggestions={data.suggestions}
@@ -4058,11 +4187,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 <ReportingPanel
                   tasks={data.tasks}
                   suggestions={data.suggestions}
-                  currentUserId={data.currentUserId}
-                />
-                <PositionProfilesPanel
-                  profiles={positionProfiles}
-                  users={data.users}
                   currentUserId={data.currentUserId}
                 />
                 <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
@@ -4106,6 +4230,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onOpenChange={setWorkspaceSettingsOpen}
         currentUser={currentUser}
         users={data.users}
+        positionProfiles={positionProfiles}
+        currentUserId={data.currentUserId}
         integrations={data.integrations}
         oauthStatus={oauthData}
         onConnectGmail={() => connectGmail.mutate()}

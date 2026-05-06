@@ -5,6 +5,25 @@
 -- decisions, assignment history, institutional knowledge, and access-control
 -- posture as the continuity product deepens.
 
+create or replace function donnit.is_org_admin(p_org_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = donnit, public
+as $$
+  select exists (
+    select 1
+    from donnit.organization_members m
+    where m.org_id = p_org_id
+      and m.user_id = auth.uid()
+      and m.role in ('owner', 'admin')
+  );
+$$;
+
+revoke all on function donnit.is_org_admin(uuid) from public;
+grant execute on function donnit.is_org_admin(uuid) to authenticated;
+
 create table if not exists donnit.position_profiles (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references donnit.organizations(id) on delete cascade,
@@ -69,37 +88,43 @@ alter table donnit.position_profile_assignments enable row level security;
 alter table donnit.position_profile_knowledge enable row level security;
 
 drop policy if exists "donnit members can view position profiles" on donnit.position_profiles;
-create policy "donnit members can view position profiles"
+drop policy if exists "donnit admins can view position profiles" on donnit.position_profiles;
+create policy "donnit admins can view position profiles"
   on donnit.position_profiles for select
-  using (donnit.is_org_member(position_profiles.org_id));
+  using (donnit.is_org_admin(position_profiles.org_id));
 
 drop policy if exists "donnit managers can manage position profiles" on donnit.position_profiles;
-create policy "donnit managers can manage position profiles"
+drop policy if exists "donnit admins can manage position profiles" on donnit.position_profiles;
+create policy "donnit admins can manage position profiles"
   on donnit.position_profiles for all
-  using (donnit.is_org_manager(position_profiles.org_id))
-  with check (donnit.is_org_manager(position_profiles.org_id));
+  using (donnit.is_org_admin(position_profiles.org_id))
+  with check (donnit.is_org_admin(position_profiles.org_id));
 
 drop policy if exists "donnit managers can view position assignments" on donnit.position_profile_assignments;
-create policy "donnit managers can view position assignments"
+drop policy if exists "donnit admins can view position assignments" on donnit.position_profile_assignments;
+create policy "donnit admins can view position assignments"
   on donnit.position_profile_assignments for select
-  using (donnit.is_org_manager(position_profile_assignments.org_id));
+  using (donnit.is_org_admin(position_profile_assignments.org_id));
 
 drop policy if exists "donnit managers can manage position assignments" on donnit.position_profile_assignments;
-create policy "donnit managers can manage position assignments"
+drop policy if exists "donnit admins can manage position assignments" on donnit.position_profile_assignments;
+create policy "donnit admins can manage position assignments"
   on donnit.position_profile_assignments for all
-  using (donnit.is_org_manager(position_profile_assignments.org_id))
-  with check (donnit.is_org_manager(position_profile_assignments.org_id));
+  using (donnit.is_org_admin(position_profile_assignments.org_id))
+  with check (donnit.is_org_admin(position_profile_assignments.org_id));
 
 drop policy if exists "donnit members can view position knowledge" on donnit.position_profile_knowledge;
-create policy "donnit members can view position knowledge"
+drop policy if exists "donnit admins can view position knowledge" on donnit.position_profile_knowledge;
+create policy "donnit admins can view position knowledge"
   on donnit.position_profile_knowledge for select
-  using (donnit.is_org_member(position_profile_knowledge.org_id));
+  using (donnit.is_org_admin(position_profile_knowledge.org_id));
 
 drop policy if exists "donnit managers can manage position knowledge" on donnit.position_profile_knowledge;
-create policy "donnit managers can manage position knowledge"
+drop policy if exists "donnit admins can manage position knowledge" on donnit.position_profile_knowledge;
+create policy "donnit admins can manage position knowledge"
   on donnit.position_profile_knowledge for all
-  using (donnit.is_org_manager(position_profile_knowledge.org_id))
-  with check (donnit.is_org_manager(position_profile_knowledge.org_id));
+  using (donnit.is_org_admin(position_profile_knowledge.org_id))
+  with check (donnit.is_org_admin(position_profile_knowledge.org_id));
 
 grant select, insert, update, delete on donnit.position_profiles to authenticated, service_role;
 grant select, insert, update, delete on donnit.position_profile_assignments to authenticated, service_role;

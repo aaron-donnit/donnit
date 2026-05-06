@@ -2427,11 +2427,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const members = await store.listOrgMembers(orgId);
         const actor = members.find((member) => member.user_id === auth.userId);
-        const canManage =
-          Boolean(actor?.can_assign) ||
-          ["owner", "admin", "manager"].includes(String(actor?.role ?? ""));
+        const canManage = ["owner", "admin"].includes(String(actor?.role ?? ""));
         if (!canManage) {
-          res.status(403).json({ message: "Only managers and admins can assign position profiles." });
+          res.status(403).json({ message: "Only admins can assign position profiles." });
           return;
         }
         const fromUserId = String(parsed.data.fromUserId);
