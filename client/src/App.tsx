@@ -733,6 +733,11 @@ function LandingPage() {
       copy: "Recurring work and handoff context stay tied to the job, not one person.",
     },
   ];
+  const heroSignals = [
+    { source: "Unread email", title: "Renew vendor contract", meta: "Due Friday" },
+    { source: "Slack note", title: "Send onboarding access", meta: "Jordan owns" },
+    { source: "Recurring duty", title: "Prep board packet", meta: "Weekly" },
+  ];
   const continuitySteps = [
     {
       title: "Before someone leaves",
@@ -781,42 +786,62 @@ function LandingPage() {
       </header>
 
       <section className="relative isolate overflow-hidden px-4 pb-12 pt-20 lg:px-6 lg:pb-20 lg:pt-28">
-        <div className="pointer-events-none absolute inset-x-0 top-12 mx-auto hidden max-w-7xl opacity-[0.09] lg:block" aria-hidden="true">
-          <div className="ml-auto w-[560px] rounded-md border border-foreground/20 bg-card px-4 py-4">
-            <div className="mb-3 flex items-center justify-between text-xs">
-              <span>TODAY</span>
-              <span>ready</span>
-            </div>
-            {["Renew vendor contract", "Draft transition notes", "Confirm onboarding access", "Reconcile software receipt"].map((item) => (
-              <div key={item} className="mb-2 rounded-md border border-foreground/15 px-3 py-2 text-sm">
-                {item}
-              </div>
-            ))}
-          </div>
-        </div>
         <div className="relative mx-auto max-w-7xl">
-          <div className="max-w-3xl">
-            <p className="ui-label">Workforce continuity for real work</p>
-            <h1 className="mt-5 max-w-4xl text-5xl font-semibold leading-[1.06] text-foreground md:text-7xl">
-              Work gets handed off before it gets lost.
-            </h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-              Donnit turns scattered messages, emails, and recurring duties into clear work people can finish, cover, or hand to the next person.
-            </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button size="lg" asChild data-testid="button-landing-demo-hero">
-                <a href={demoMailto}>
-                  Book a demo
-                  <ArrowRight className="size-4" />
-                </a>
-              </Button>
-              <Button size="lg" variant="outline" onClick={goToLogin} data-testid="button-landing-start">
-                Start trial
-              </Button>
+          <div className="grid gap-12 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+            <div className="max-w-3xl">
+              <p className="ui-label">Workforce continuity for real work</p>
+              <h1 className="mt-5 max-w-4xl text-5xl font-semibold leading-[1.06] text-foreground md:text-7xl">
+                Work gets handed off before it gets lost.
+              </h1>
+              <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
+                Donnit turns scattered messages, emails, and recurring duties into clear work people can finish, cover, or hand to the next person.
+              </p>
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                <Button size="lg" asChild data-testid="button-landing-demo-hero">
+                  <a href={demoMailto}>
+                    Book a demo
+                    <ArrowRight className="size-4" />
+                  </a>
+                </Button>
+                <Button size="lg" variant="outline" onClick={goToLogin} data-testid="button-landing-start">
+                  Start trial
+                </Button>
+              </div>
+              <p className="mt-6 max-w-xl text-sm leading-6 text-muted-foreground">
+                Built for the work that starts in passing comments, unread messages, annual routines, and the quiet details people usually carry in their heads.
+              </p>
             </div>
-            <p className="mt-6 max-w-xl text-sm leading-6 text-muted-foreground">
-              Built for the work that starts in passing comments, unread messages, annual routines, and the quiet details people usually carry in their heads.
-            </p>
+            <div className="landing-motion-panel" aria-hidden="true">
+              <div className="landing-motion-thread" />
+              <div className="landing-preview-shell">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="ui-label">Donnit today</p>
+                  <span className="rounded-full bg-brand-green/10 px-3 py-1 text-xs font-medium text-brand-green">
+                    ready
+                  </span>
+                </div>
+                <div className="mt-5 space-y-2">
+                  {["Draft transition notes", "Confirm onboarding access", "Reconcile software receipt"].map((item, index) => (
+                    <div key={item} className="landing-preview-row" style={{ animationDelay: `${index * 120}ms` }}>
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-brand-green text-white">
+                        <Check className="size-3" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{item}</span>
+                      <span className="text-xs text-muted-foreground">{index === 0 ? "handoff" : "today"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="landing-signal-stack">
+                {heroSignals.map((signal, index) => (
+                  <div key={signal.title} className="landing-signal" style={{ animationDelay: `${index * 550}ms` }}>
+                    <p className="ui-label">{signal.source}</p>
+                    <p className="mt-1 text-sm font-medium text-foreground">{signal.title}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{signal.meta}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -830,9 +855,9 @@ function LandingPage() {
                 Nothing has to live in someone's head.
               </h2>
             </div>
-            <div className="space-y-8">
+            <div className="landing-flow-list space-y-8">
               {flow.map((item, index) => (
-                <div key={item.title} className="grid gap-4 border-l border-border pl-5 sm:grid-cols-[44px_1fr] sm:border-l-0 sm:pl-0">
+                <div key={item.title} className="landing-flow-step grid gap-4 border-l border-border pl-5 sm:grid-cols-[44px_1fr] sm:border-l-0 sm:pl-0">
                   <div className="flex size-10 items-center justify-center rounded-md bg-card text-brand-green">
                     <item.icon className="size-5" />
                   </div>
@@ -862,7 +887,7 @@ function LandingPage() {
           <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_0.9fr] lg:items-start">
             <div className="space-y-6">
               {continuitySteps.map((step) => (
-                <div key={step.title} className="flex gap-4">
+                <div key={step.title} className="landing-continuity-step flex gap-4">
                   <span className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-full bg-brand-green text-white">
                     <Check className="size-4" />
                   </span>
@@ -873,7 +898,7 @@ function LandingPage() {
                 </div>
               ))}
             </div>
-            <div className="rounded-md border border-border bg-card p-4">
+            <div className="landing-profile-preview rounded-md border border-border bg-card p-4">
               <p className="ui-label">Position profile</p>
               <h3 className="mt-2 text-xl font-semibold">Executive Assistant to the CEO</h3>
               <div className="mt-5 space-y-2">

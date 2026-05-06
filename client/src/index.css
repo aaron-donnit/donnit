@@ -191,6 +191,186 @@
     letter-spacing: 0;
   }
 
+  .landing-motion-panel {
+    position: relative;
+    min-height: 440px;
+  }
+
+  .landing-motion-thread {
+    position: absolute;
+    inset: 14% 10% auto auto;
+    width: 58%;
+    height: 66%;
+    border: 1px solid hsl(var(--brand-green) / 0.22);
+    border-left: 0;
+    border-bottom: 0;
+    border-radius: 0.5rem;
+  }
+
+  .landing-motion-thread::after {
+    content: "";
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: hsl(var(--brand-green));
+    animation: landing-nudge 900ms ease-in-out infinite;
+  }
+
+  .landing-preview-shell,
+  .landing-signal {
+    border-radius: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--card) / 0.92);
+  }
+
+  .landing-preview-shell {
+    position: absolute;
+    bottom: 34px;
+    right: 0;
+    width: min(420px, 88vw);
+    padding: 1rem;
+  }
+
+  .landing-preview-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+    padding: 0.625rem 0.75rem;
+    font-size: 0.875rem;
+    animation: landing-row-in 2.8s ease-in-out infinite;
+  }
+
+  .landing-signal-stack {
+    position: absolute;
+    left: 0;
+    top: 44px;
+    display: grid;
+    gap: 0.75rem;
+    width: min(260px, 72vw);
+  }
+
+  .landing-signal {
+    padding: 0.875rem 1rem;
+    animation: landing-float 4.4s ease-in-out infinite;
+  }
+
+  .landing-flow-step,
+  .landing-continuity-step {
+    animation: landing-soft-rise 680ms ease-out both;
+  }
+
+  .landing-flow-step:nth-child(2),
+  .landing-continuity-step:nth-child(2) {
+    animation-delay: 90ms;
+  }
+
+  .landing-flow-step:nth-child(3),
+  .landing-continuity-step:nth-child(3) {
+    animation-delay: 180ms;
+  }
+
+  .landing-continuity-step:nth-child(4) {
+    animation-delay: 270ms;
+  }
+
+  .landing-profile-preview {
+    animation: landing-profile-breathe 5s ease-in-out infinite;
+  }
+
+  @keyframes landing-nudge {
+    0%,
+    100% {
+      transform: translateX(0);
+      opacity: 0.65;
+    }
+    50% {
+      transform: translateX(12px);
+      opacity: 1;
+    }
+  }
+
+  @keyframes landing-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+
+  @keyframes landing-row-in {
+    0%,
+    100% {
+      border-color: transparent;
+    }
+    45% {
+      border-color: hsl(var(--brand-green) / 0.22);
+    }
+  }
+
+  @keyframes landing-soft-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes landing-profile-breathe {
+    0%,
+    100% {
+      border-color: hsl(var(--border));
+    }
+    50% {
+      border-color: hsl(var(--brand-green) / 0.28);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-motion-thread::after,
+    .landing-preview-row,
+    .landing-signal,
+    .landing-flow-step,
+    .landing-continuity-step,
+    .landing-profile-preview {
+      animation: none;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .landing-motion-panel {
+      min-height: 540px;
+    }
+
+    .landing-motion-thread {
+      inset: 8% 5% auto auto;
+      width: 76%;
+      height: 74%;
+    }
+
+    .landing-signal-stack {
+      left: 0;
+      top: 0;
+      width: min(100%, 22rem);
+    }
+
+    .landing-preview-shell {
+      bottom: 0;
+      right: 0;
+      width: 100%;
+    }
+  }
+
   /* Brand lockup: green check mark + "Donn" + green "it" in DM Sans.
      Avoids reliance on Syne rendering. Uses positive tracking so letters
      never visually overlap, regardless of font fallback. */
