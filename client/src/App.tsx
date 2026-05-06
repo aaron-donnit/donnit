@@ -135,6 +135,13 @@ type TaskEvent = {
   createdAt: string;
 };
 
+type LocalSubtask = {
+  id: string;
+  title: string;
+  done: boolean;
+  createdAt: string;
+};
+
 type ChatMessage = {
   id: Id;
   role: string;
@@ -450,9 +457,9 @@ function downloadAgendaCalendar(agenda: AgendaItem[]) {
   });
 }
 
-function Wordmark() {
-  return (
-    <span className="brand-lockup" aria-label="Donnit">
+function Wordmark({ onClick }: { onClick?: () => void }) {
+  const content = (
+    <>
       <span className="brand-mark" aria-hidden="true">
         <Check className="size-4" strokeWidth={3.25} />
       </span>
@@ -460,6 +467,24 @@ function Wordmark() {
         <span className="brand-text-base">Donn</span>
         <span className="brand-text-accent">it</span>
       </span>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className="brand-lockup rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        aria-label="Go to Donnit home"
+        onClick={onClick}
+        data-testid="button-donnit-home"
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <span className="brand-lockup" aria-label="Donnit">
+      {content}
     </span>
   );
 }
@@ -1090,6 +1115,8 @@ function TaskDetailDialog({
   const [delegatedToId, setDelegatedToId] = useState("");
   const [collaboratorIds, setCollaboratorIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [subtasks, setSubtasks] = useState<LocalSubtask[]>([]);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
 
   useEffect(() => {
     if (!task) return;
@@ -1103,6 +1130,16 @@ function TaskDetailDialog({
     setDelegatedToId(task.delegatedToId ? String(task.delegatedToId) : "");
     setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
+    setNewSubtaskTitle("");
+    try {
+      if (typeof window === "undefined") {
+        setSubtasks([]);
+      } else {
+        setSubtasks(JSON.parse(window.localStorage.getItem(`donnit.subtasks.${task.id}`) ?? "[]"));
+      }
+    } catch {
+      setSubtasks([]);
+    }
   }, [task]);
 
   const save = useMutation({
@@ -1215,6 +1252,27 @@ function TaskDetailDialog({
     setDelegatedToId(userId);
     updateRelationships.mutate({ assignedToId, delegatedToId: userId, collaboratorIds });
   };
+  const persistSubtasks = (next: LocalSubtask[]) => {
+    setSubtasks(next);
+    if (task && typeof window !== "undefined") {
+      window.localStorage.setItem(`donnit.subtasks.${task.id}`, JSON.stringify(next));
+    }
+  };
+  const addSubtask = () => {
+    const titleText = newSubtaskTitle.trim();
+    if (!titleText) return;
+    persistSubtasks([
+      ...subtasks,
+      { id: `subtask-${Date.now()}`, title: titleText, done: false, createdAt: new Date().toISOString() },
+    ]);
+    setNewSubtaskTitle("");
+  };
+  const toggleSubtask = (subtaskId: string) => {
+    persistSubtasks(subtasks.map((item) => (item.id === subtaskId ? { ...item, done: !item.done } : item)));
+  };
+  const deleteSubtask = (subtaskId: string) => {
+    persistSubtasks(subtasks.filter((item) => item.id !== subtaskId));
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1316,6 +1374,71 @@ function TaskDetailDialog({
               maxLength={1000}
               data-testid="input-task-detail-note"
             />
+          </div>
+          <div className="rounded-md border border-border bg-background px-3 py-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">Subtasks</p>
+                <p className="text-xs text-muted-foreground">
+                  {subtasks.filter((item) => item.done).length}/{subtasks.length} complete
+                </p>
+              </div>
+              <ListChecks className="size-4 text-muted-foreground" />
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={newSubtaskTitle}
+                onChange={(event) => setNewSubtaskTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addSubtask();
+                  }
+                }}
+                placeholder="Add a subtask"
+                maxLength={160}
+                data-testid="input-new-subtask"
+              />
+              <Button type="button" variant="outline" onClick={addSubtask} disabled={!newSubtaskTitle.trim()}>
+                <ListPlus className="size-4" />
+                Add
+              </Button>
+            </div>
+            <div className="mt-3 space-y-1.5">
+              {subtasks.length === 0 ? (
+                <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                  Break this task into steps as you work.
+                </p>
+              ) : (
+                subtasks.map((subtask) => (
+                  <div key={subtask.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleSubtask(subtask.id)}
+                      className={`flex size-6 shrink-0 items-center justify-center rounded-md border ${
+                        subtask.done ? "border-brand-green bg-brand-green text-white" : "border-border bg-muted"
+                      }`}
+                      data-testid={`button-subtask-toggle-${subtask.id}`}
+                    >
+                      {subtask.done && <Check className="size-3.5" />}
+                    </button>
+                    <span className={`min-w-0 flex-1 truncate text-sm ${subtask.done ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                      {subtask.title}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      onClick={() => deleteSubtask(subtask.id)}
+                      aria-label="Delete subtask"
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
           </div>
         </div>
@@ -1641,6 +1764,7 @@ function AgendaPanel({
   onBuild,
   onToggleTask,
   onApprove,
+  onOpenWork,
   onExport,
   isBuilding,
 }: {
@@ -1650,6 +1774,7 @@ function AgendaPanel({
   onBuild: () => void;
   onToggleTask: (taskId: Id) => void;
   onApprove: () => void;
+  onOpenWork: () => void;
   onExport: () => void;
   isBuilding: boolean;
 }) {
@@ -1675,6 +1800,16 @@ function AgendaPanel({
           >
             {isBuilding ? <Loader2 className="size-4 animate-spin" /> : <Workflow className="size-4" />}
             Build
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onOpenWork}
+            disabled={includedAgenda.length === 0}
+            data-testid="button-panel-work-agenda"
+          >
+            <Play className="size-4" />
+            Work
           </Button>
           <Button
             variant="outline"
@@ -1740,6 +1875,109 @@ function AgendaPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function AgendaWorkDialog({
+  open,
+  onOpenChange,
+  agenda,
+  tasks,
+  users,
+  onPinTask,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  agenda: AgendaItem[];
+  tasks: Task[];
+  users: User[];
+  onPinTask: (taskId: Id) => void;
+}) {
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+  const totalMinutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+
+  useEffect(() => {
+    if (!open) setSelectedTaskId(null);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${dialogShellClass} sm:max-w-3xl`}>
+        <DialogHeader className={dialogHeaderClass}>
+          <DialogTitle>Daily agenda</DialogTitle>
+          <DialogDescription>
+            Work through approved agenda blocks in order. Pin a task to keep notes open while working.
+          </DialogDescription>
+        </DialogHeader>
+        <div className={`${dialogBodyClass} space-y-3`}>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <ReportMetric label="Agenda items" value={String(agenda.length)} />
+            <ReportMetric label="Scheduled" value={String(agenda.filter((item) => item.scheduleStatus === "scheduled").length)} />
+            <ReportMetric label="Total time" value={`${totalMinutes}m`} />
+          </div>
+          {agenda.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              Build and approve an agenda before opening the work screen.
+            </p>
+          ) : (
+            <ol className="space-y-2">
+              {agenda.map((item) => {
+                const task = tasks.find((candidate) => String(candidate.id) === String(item.taskId));
+                return (
+                  <li key={`${item.taskId}-${item.order}`} className={`task-row ${urgencyClass(item.urgency)}`}>
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
+                      {item.order}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => task && setSelectedTaskId(String(task.id))}
+                        disabled={!task}
+                        data-testid={`button-agenda-work-open-${item.taskId}`}
+                      >
+                        <Eye className="size-4" />
+                        Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          onPinTask(item.taskId);
+                          toast({ title: "Task pinned", description: "The work box is ready for notes." });
+                        }}
+                      >
+                        <Play className="size-4" />
+                        Work
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+        <DialogFooter className={dialogFooterClass}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      <TaskDetailDialog
+        task={selectedTask}
+        users={users}
+        open={Boolean(selectedTask)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setSelectedTaskId(null);
+        }}
+      />
+    </Dialog>
   );
 }
 
@@ -2905,6 +3143,9 @@ type DerivedNotification = {
   title: string;
   detail: string;
   severity: "high" | "normal" | "low";
+  source: "approval" | "task";
+  taskId?: Id;
+  suggestionId?: Id;
 };
 
 function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): DerivedNotification[] {
@@ -2921,6 +3162,8 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
       title: "Approval waiting",
       detail: suggestion.suggestedTitle,
       severity: "normal",
+      source: "approval",
+      suggestionId: suggestion.id,
     });
   }
 
@@ -2931,6 +3174,8 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
         title: "Past due",
         detail: task.title,
         severity: "high",
+        source: "task",
+        taskId: task.id,
       });
     } else if (task.dueDate && task.dueDate <= soonIso) {
       items.push({
@@ -2938,6 +3183,8 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
         title: task.dueDate === today ? "Due today" : "Due soon",
         detail: task.title,
         severity: task.urgency === "critical" || task.urgency === "high" ? "high" : "normal",
+        source: "task",
+        taskId: task.id,
       });
     }
     if (task.status === "pending_acceptance") {
@@ -2946,6 +3193,8 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
         title: "Needs acceptance",
         detail: task.title,
         severity: "normal",
+        source: "approval",
+        taskId: task.id,
       });
     }
     if (task.delegatedToId) {
@@ -2954,6 +3203,8 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
         title: "Delegated work open",
         detail: task.title,
         severity: "low",
+        source: "task",
+        taskId: task.id,
       });
     }
   }
@@ -2964,9 +3215,11 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
 function NotificationCenter({
   notifications,
   onReviewed,
+  onOpenNotification,
 }: {
   notifications: DerivedNotification[];
   onReviewed: (ids: string[]) => void;
+  onOpenNotification: (notification: DerivedNotification) => void;
 }) {
   const highCount = notifications.filter((item) => item.severity === "high").length;
   return (
@@ -2995,7 +3248,10 @@ function NotificationCenter({
             <DropdownMenuItem
               key={item.id}
               className="items-start gap-2"
-              onClick={() => onReviewed([item.id])}
+              onClick={() => {
+                onReviewed([item.id]);
+                onOpenNotification(item);
+              }}
               data-testid={`notification-item-${item.id}`}
             >
               <span
@@ -4110,6 +4366,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
+  const [agendaWorkOpen, setAgendaWorkOpen] = useState(false);
+  const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     try {
       if (typeof window === "undefined") return null;
@@ -4625,11 +4883,24 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const oauthData = oauthStatus.data;
   const currentUser = data.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null;
   const activeTask = data.tasks.find((task) => String(task.id) === activeTaskId) ?? null;
+  const notificationTask = data.tasks.find((task) => String(task.id) === notificationTaskId) ?? null;
   const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const scrollToReporting = () => {
     document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const goHome = () => {
+    setManualImportOpen(false);
+    setDocumentImportOpen(false);
+    setAssignTaskOpen(false);
+    setCalendarExportOpen(false);
+    setWorkspaceSettingsOpen(false);
+    setApprovalInboxOpen(false);
+    setAgendaWorkOpen(false);
+    setNotificationTaskId(null);
+    window.location.hash = "/";
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const addTaskActions: FunctionAction[] = [
     {
@@ -4790,7 +5061,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:px-6">
           <div className="flex items-center gap-3">
-            <Wordmark />
+            <Wordmark onClick={goHome} />
             <span className="hidden text-xs text-muted-foreground sm:inline">
               Chat it in. Cross it off. Done.
             </span>
@@ -4807,7 +5078,19 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 : "demo (Supabase not configured)"}
             </span>
             <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
-            <NotificationCenter notifications={notifications} onReviewed={markNotificationsReviewed} />
+            <NotificationCenter
+              notifications={notifications}
+              onReviewed={markNotificationsReviewed}
+              onOpenNotification={(notification) => {
+                if (notification.source === "approval") {
+                  setApprovalInboxOpen(true);
+                  return;
+                }
+                if (notification.taskId) {
+                  setNotificationTaskId(String(notification.taskId));
+                }
+              }}
+            />
             <ThemeToggle />
             {auth.authenticated && (
               <Button
@@ -4885,6 +5168,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     setAgendaApproved(true);
                     toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
                   }}
+                  onOpenWork={() => setAgendaWorkOpen(true)}
                   onExport={() => setCalendarExportOpen(true)}
                   isBuilding={buildAgenda.isPending}
                 />
@@ -4917,6 +5201,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         tasks={data.tasks}
         suggestions={data.suggestions}
       />
+      <AgendaWorkDialog
+        open={agendaWorkOpen}
+        onOpenChange={setAgendaWorkOpen}
+        agenda={approvedAgenda}
+        tasks={data.tasks}
+        users={data.users}
+        onPinTask={(taskId) => setActiveWorkTask(taskId)}
+      />
       <CalendarExportDialog
         open={calendarExportOpen}
         onOpenChange={setCalendarExportOpen}
@@ -4948,6 +5240,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onOpenCalendarExport={() => setCalendarExportOpen(true)}
         isConnectingGmail={connectGmail.isPending}
         isScanningEmail={scan.isPending}
+      />
+      <TaskDetailDialog
+        task={notificationTask}
+        users={data.users}
+        open={Boolean(notificationTask)}
+        onOpenChange={(open) => {
+          if (!open) setNotificationTaskId(null);
+        }}
       />
       <FloatingTaskBox task={activeTask} users={data.users} onClose={() => setActiveWorkTask(null)} />
 
