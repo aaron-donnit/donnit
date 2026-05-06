@@ -5,6 +5,7 @@ import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-quer
 import {
   Archive,
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Bell,
   BriefcaseBusiness,
@@ -703,6 +704,288 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const demoMailto =
+  "mailto:hello@donnit.ai?subject=Book%20a%20Donnit%20demo&body=I%20want%20to%20see%20how%20Donnit%20can%20help%20my%20team.";
+const purchaseMailto =
+  "mailto:hello@donnit.ai?subject=Purchase%20Donnit&body=I%20want%20to%20purchase%20or%20start%20a%20paid%20pilot%20for%20Donnit.";
+
+function LandingPage() {
+  const goToLogin = () => {
+    window.location.hash = "/app";
+  };
+  const stats = [
+    { value: "2 sec", label: "to capture work from chat" },
+    { value: "1 view", label: "for today's actual priorities" },
+    { value: "100%", label: "logged for manager visibility" },
+  ];
+  const differentiators = [
+    {
+      icon: Inbox,
+      title: "Your inbox assigns tasks.",
+      copy: "Donnit scans unread email and Slack signals, then asks before adding work.",
+    },
+    {
+      icon: UserRoundCheck,
+      title: "Assignments stay clear.",
+      copy: "Managers assign work. Teammates accept, decline, delegate, or ask for time.",
+    },
+    {
+      icon: BriefcaseBusiness,
+      title: "Roles do not vanish.",
+      copy: "Position Profiles preserve recurring work, notes, and handoff context.",
+    },
+    {
+      icon: BarChart3,
+      title: "The log is always there.",
+      copy: "Every update, completion, and handoff is visible without another status meeting.",
+    },
+  ];
+  const personas = [
+    {
+      initials: "JL",
+      name: "Jordan, Operations Manager",
+      quote: "I need tasks to stop disappearing into Slack threads.",
+      needs: "Team status, overdue work, assignment history.",
+    },
+    {
+      initials: "SK",
+      name: "Sam, IC contributor",
+      quote: "I want to type a task, not click through five dropdowns.",
+      needs: "Fast capture, simple sort, email triage.",
+    },
+    {
+      initials: "RH",
+      name: "Rachel, Founder",
+      quote: "I need work and life reminders in one reliable place.",
+      needs: "Daily agenda, recurring tasks, contractors.",
+    },
+  ];
+
+  return (
+    <main className="min-h-screen bg-background text-foreground" data-testid="page-landing">
+      <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 lg:px-6">
+          <Wordmark />
+          <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
+            <a href="#how-it-works" className="hover:text-foreground">How it works</a>
+            <a href="#teams" className="hover:text-foreground">Teams</a>
+            <a href="#pricing" className="hover:text-foreground">Pricing</a>
+          </nav>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={goToLogin} data-testid="button-landing-login">
+              Login
+            </Button>
+            <Button size="sm" asChild data-testid="button-landing-demo-top">
+              <a href={demoMailto}>
+                Book demo
+              </a>
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <section className="relative isolate overflow-hidden bg-[hsl(var(--brand-charcoal))] text-white">
+        <div className="absolute inset-0 opacity-35" aria-hidden="true">
+          <div className="absolute left-4 top-10 w-[520px] max-w-[92vw] rounded-md border border-white/10 bg-white/10 p-3">
+            <div className="mb-3 flex items-center justify-between text-xs text-white/70">
+              <span>TODAY - 6 TASKS</span>
+              <span>3 due before noon</span>
+            </div>
+            {["Review Q3 budget proposal", "Follow up on ACME renewal", "Send client brief to Sarah"].map((item, index) => (
+              <div key={item} className="mb-2 rounded-md border border-white/10 bg-white/10 px-3 py-2">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-sm font-medium">{item}</span>
+                  <span className="text-xs text-white/60">{index === 0 ? "High" : "Ready"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="absolute bottom-12 right-4 w-[460px] max-w-[88vw] rounded-md border border-white/10 bg-white/10 p-3">
+            <div className="mb-3 flex items-center gap-2 text-xs text-white/70">
+              <Sparkles className="size-4 text-[hsl(var(--brand-green))]" />
+              Email scan
+            </div>
+            <div className="rounded-md border border-white/10 bg-white/10 px-3 py-3">
+              <p className="text-sm font-medium">Receipt found: ChatGPT, $55.00</p>
+              <p className="mt-1 text-xs text-white/60">Create a task to reconcile this expense?</p>
+            </div>
+          </div>
+        </div>
+        <div className="absolute inset-0 bg-[linear-gradient(90deg,hsl(var(--brand-charcoal))_0%,hsl(var(--brand-charcoal)/0.92)_45%,hsl(var(--brand-charcoal)/0.55)_100%)]" aria-hidden="true" />
+        <div className="relative mx-auto grid min-h-[78dvh] max-w-7xl content-center gap-8 px-4 py-16 lg:px-6">
+          <div className="max-w-3xl">
+            <p className="ui-label text-white/60">Workforce continuity for real work</p>
+            <h1 className="mt-4 max-w-4xl text-5xl font-extrabold leading-[1.02] tracking-tight text-white md:text-7xl">
+              The to-do list that actually finishes itself.
+            </h1>
+            <p className="mt-5 max-w-2xl text-lg leading-8 text-white/80">
+              Donnit captures tasks from chat, email, Slack, and manager input. Then it assigns, schedules, follows up, and logs the work.
+            </p>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button size="lg" asChild data-testid="button-landing-demo-hero">
+                <a href={demoMailto}>
+                  Book a demo
+                  <ArrowRight className="size-4" />
+                </a>
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={goToLogin}
+                className="border-white/25 bg-white/10 text-white hover:bg-white/15 hover:text-white"
+                data-testid="button-landing-start"
+              >
+                Start trial
+              </Button>
+            </div>
+          </div>
+          <div className="grid max-w-3xl gap-2 sm:grid-cols-3">
+            {stats.map((stat) => (
+              <div key={stat.label} className="rounded-md border border-white/10 bg-white/10 px-4 py-3">
+                <p className="display-font text-2xl font-bold text-[hsl(var(--brand-green))]">{stat.value}</p>
+                <p className="mt-1 text-xs text-white/70">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="how-it-works" className="border-b border-border bg-background px-4 py-16 lg:px-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-2xl">
+            <p className="ui-label">How Donnit wins</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Tasks stop hiding.</h2>
+            <p className="mt-3 text-muted-foreground">
+              Work arrives scattered. Donnit turns it into a short list with owners, urgency, due dates, notes, and accountability.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {differentiators.map((item) => (
+              <div key={item.title} className="rounded-md border border-border bg-card px-4 py-4">
+                <item.icon className="size-5 text-brand-green" />
+                <h3 className="mt-4 text-base font-semibold">{item.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.copy}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-b border-border bg-card px-4 py-16 lg:px-6">
+        <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
+          <div>
+            <p className="ui-label">Position Profiles</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">When someone leaves, the work stays visible.</h2>
+            <p className="mt-4 text-muted-foreground">
+              Donnit learns recurring duties, open tasks, context notes, and tool access by job title. Managers can cover the role today and hand it to a new hire tomorrow.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-2">
+              {["Recurring tasks", "How-to notes", "Delegated coverage", "Manager-only access"].map((item) => (
+                <span key={item} className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium">
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-md border border-border bg-background p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-semibold">Executive Assistant to the CEO</p>
+              <span className="rounded-md bg-brand-green/10 px-2 py-1 text-[10px] font-semibold uppercase text-brand-green">Active</span>
+            </div>
+            {["Weekly board packet prep", "Annual insurance renewal", "CEO travel hold review", "Vendor invoice reconciliation"].map((task, index) => (
+              <div key={task} className="mb-2 rounded-md border border-border bg-card px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="truncate text-sm font-medium">{task}</p>
+                  <span className="text-xs text-muted-foreground">{index === 1 ? "Annual" : "Open"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="teams" className="border-b border-border px-4 py-16 lg:px-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-2xl">
+            <p className="ui-label">Built for the people doing the work</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Simple enough for Sunday night. Strong enough for managers.</h2>
+          </div>
+          <div className="mt-8 grid gap-3 lg:grid-cols-3">
+            {personas.map((persona) => (
+              <div key={persona.initials} className="rounded-md border border-border bg-card px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-10 items-center justify-center rounded-md bg-muted font-semibold">{persona.initials}</span>
+                  <div>
+                    <h3 className="text-sm font-semibold">{persona.name}</h3>
+                    <p className="text-xs text-muted-foreground">{persona.needs}</p>
+                  </div>
+                </div>
+                <p className="mt-4 text-sm leading-6 text-muted-foreground">"{persona.quote}"</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" className="border-b border-border bg-card px-4 py-16 lg:px-6">
+        <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+          <div>
+            <p className="ui-label">Pilot offer</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Start with one team.</h2>
+            <p className="mt-3 text-muted-foreground">
+              We are optimizing the first commercial motion around teams that already lose work in email, Slack, and role transitions.
+            </p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <div className="rounded-md border border-border bg-background px-4 py-5">
+              <p className="ui-label">Demo</p>
+              <h3 className="mt-2 text-xl font-bold">See Donnit in 20 minutes</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Best for managers validating fit before a pilot.</p>
+              <Button className="mt-5 w-full" asChild>
+                <a href={demoMailto}>Book demo</a>
+              </Button>
+            </div>
+            <div className="rounded-md border border-brand-green bg-background px-4 py-5">
+              <p className="ui-label">Pilot</p>
+              <h3 className="mt-2 text-xl font-bold">Run a team pilot</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Capture real tasks, prove adoption, then connect billing.</p>
+              <Button className="mt-5 w-full" onClick={goToLogin}>
+                Start trial
+              </Button>
+            </div>
+            <div className="rounded-md border border-border bg-background px-4 py-5">
+              <p className="ui-label">Purchase</p>
+              <h3 className="mt-2 text-xl font-bold">Buy for your team</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Ready to move now? We will set up billing and onboarding.</p>
+              <Button className="mt-5 w-full" variant="outline" asChild>
+                <a href={purchaseMailto}>Purchase</a>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="px-4 py-16 lg:px-6">
+        <div className="mx-auto max-w-4xl text-center">
+          <p className="ui-label">Ready</p>
+          <h2 className="mt-3 text-3xl font-bold md:text-5xl">Chat it in. Cross it off. Done.</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
+            Connect the scattered places where work starts. Give every task a clear owner and a clean finish.
+          </p>
+          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+            <Button size="lg" asChild>
+              <a href={demoMailto}>Book a demo</a>
+            </Button>
+            <Button size="lg" variant="outline" onClick={goToLogin}>
+              Login
+            </Button>
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -4899,7 +5182,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setApprovalInboxOpen(false);
     setAgendaWorkOpen(false);
     setNotificationTaskId(null);
-    window.location.hash = "/";
+    window.location.hash = "/app";
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const addTaskActions: FunctionAction[] = [
@@ -5314,7 +5597,7 @@ function LogPage() {
             variant="outline"
             size="sm"
             onClick={() => {
-              window.location.hash = "/";
+              window.location.hash = "/app";
             }}
           >
             Back to workspace
@@ -5364,20 +5647,29 @@ function LogPage() {
   );
 }
 
-function AppRouter({ auth }: { auth: AuthedContext }) {
+function ProtectedCommandCenter() {
+  return <AuthGate>{(auth) => <CommandCenter auth={auth} />}</AuthGate>;
+}
+
+function ProtectedLogPage() {
+  return <AuthGate>{() => <LogPage />}</AuthGate>;
+}
+
+function AppRouter() {
   return (
     <Switch>
-      <Route path="/" component={() => <CommandCenter auth={auth} />} />
-      <Route path="/log" component={LogPage} />
+      <Route path="/" component={LandingPage} />
+      <Route path="/app" component={ProtectedCommandCenter} />
+      <Route path="/log" component={ProtectedLogPage} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-function AppShell({ auth }: { auth: AuthedContext }) {
+function AppShell() {
   return (
     <Router hook={useHashLocation}>
-      <AppRouter auth={auth} />
+      <AppRouter />
     </Router>
   );
 }
@@ -5386,7 +5678,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AuthGate>{(auth) => <AppShell auth={auth} />}</AuthGate>
+        <AppShell />
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
