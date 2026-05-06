@@ -178,6 +178,19 @@
     font-family: var(--font-display);
   }
 
+  .landing-page {
+    font-family: var(--font-sans);
+  }
+
+  .landing-page h1,
+  .landing-page h2,
+  .landing-page h3,
+  .landing-page h4,
+  .landing-page .display-font {
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+  }
+
   /* Brand lockup: green check mark + "Donn" + green "it" in DM Sans.
      Avoids reliance on Syne rendering. Uses positive tracking so letters
      never visually overlap, regardless of font fallback. */

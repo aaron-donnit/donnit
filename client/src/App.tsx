@@ -718,54 +718,54 @@ function LandingPage() {
   };
   const stats = [
     { value: "2 sec", label: "to capture work from chat" },
-    { value: "1 view", label: "for today's actual priorities" },
-    { value: "100%", label: "logged for manager visibility" },
+    { value: "1 list", label: "for the work that matters today" },
+    { value: "0 gaps", label: "when people change roles" },
   ];
   const differentiators = [
     {
       icon: Inbox,
-      title: "Your inbox assigns tasks.",
-      copy: "Donnit scans unread email and Slack signals, then asks before adding work.",
+      title: "Work gets found.",
+      copy: "Donnit reads the places work starts, then asks before turning anything into a task.",
     },
     {
       icon: UserRoundCheck,
-      title: "Assignments stay clear.",
-      copy: "Managers assign work. Teammates accept, decline, delegate, or ask for time.",
+      title: "Ownership stays clear.",
+      copy: "Every task has an owner, a due date, notes, and a next step.",
     },
     {
       icon: BriefcaseBusiness,
-      title: "Roles do not vanish.",
-      copy: "Position Profiles preserve recurring work, notes, and handoff context.",
+      title: "Roles stay intact.",
+      copy: "Position Profiles keep recurring work and handoff context tied to the job, not just one person.",
     },
     {
       icon: BarChart3,
-      title: "The log is always there.",
-      copy: "Every update, completion, and handoff is visible without another status meeting.",
+      title: "The history stays useful.",
+      copy: "Updates, notes, and completions become a living memory for the role.",
     },
   ];
   const personas = [
     {
       initials: "JL",
-      name: "Jordan, Operations Manager",
-      quote: "I need tasks to stop disappearing into Slack threads.",
-      needs: "Team status, overdue work, assignment history.",
+      name: "Jordan, Operations Lead",
+      quote: "I need work to keep moving when people are busy, out, or changing roles.",
+      needs: "Coverage, handoffs, recurring work.",
     },
     {
       initials: "SK",
       name: "Sam, IC contributor",
-      quote: "I want to type a task, not click through five dropdowns.",
-      needs: "Fast capture, simple sort, email triage.",
+      quote: "I want to type what needs doing and get back to the work.",
+      needs: "Fast capture, clear priorities, fewer clicks.",
     },
     {
       initials: "RH",
       name: "Rachel, Founder",
-      quote: "I need work and life reminders in one reliable place.",
-      needs: "Daily agenda, recurring tasks, contractors.",
+      quote: "I need one calm place for client follow-ups, renewals, and everything I cannot drop.",
+      needs: "Daily agenda, recurring work, contractors.",
     },
   ];
 
   return (
-    <main className="min-h-screen bg-background text-foreground" data-testid="page-landing">
+    <main className="landing-page min-h-screen bg-background text-foreground" data-testid="page-landing">
       <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 lg:px-6">
           <Wordmark />
@@ -818,11 +818,11 @@ function LandingPage() {
         <div className="relative mx-auto grid min-h-[78dvh] max-w-7xl content-center gap-8 px-4 py-16 lg:px-6">
           <div className="max-w-3xl">
             <p className="ui-label text-white/60">Workforce continuity for real work</p>
-            <h1 className="mt-4 max-w-4xl text-5xl font-extrabold leading-[1.02] tracking-tight text-white md:text-7xl">
-              The to-do list that actually finishes itself.
+            <h1 className="mt-4 max-w-4xl text-5xl font-bold leading-[1.05] text-white md:text-7xl">
+              Work gets handed off before it gets lost.
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-white/80">
-              Donnit captures tasks from chat, email, Slack, and manager input. Then it assigns, schedules, follows up, and logs the work.
+              Donnit turns scattered messages, emails, and recurring duties into clear work people can actually finish.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Button size="lg" asChild data-testid="button-landing-demo-hero">
@@ -845,7 +845,7 @@ function LandingPage() {
           <div className="grid max-w-3xl gap-2 sm:grid-cols-3">
             {stats.map((stat) => (
               <div key={stat.label} className="rounded-md border border-white/10 bg-white/10 px-4 py-3">
-                <p className="display-font text-2xl font-bold text-[hsl(var(--brand-green))]">{stat.value}</p>
+                <p className="text-2xl font-bold text-[hsl(var(--brand-green))]">{stat.value}</p>
                 <p className="mt-1 text-xs text-white/70">{stat.label}</p>
               </div>
             ))}
@@ -856,10 +856,10 @@ function LandingPage() {
       <section id="how-it-works" className="border-b border-border bg-background px-4 py-16 lg:px-6">
         <div className="mx-auto max-w-7xl">
           <div className="max-w-2xl">
-            <p className="ui-label">How Donnit wins</p>
-            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Tasks stop hiding.</h2>
+            <p className="ui-label">How Donnit helps</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Nothing has to live in someone’s head.</h2>
             <p className="mt-3 text-muted-foreground">
-              Work arrives scattered. Donnit turns it into a short list with owners, urgency, due dates, notes, and accountability.
+              Work arrives scattered. Donnit turns it into a short list with owners, due dates, context, and a clean next step.
             </p>
           </div>
           <div className="mt-8 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -878,12 +878,12 @@ function LandingPage() {
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
           <div>
             <p className="ui-label">Position Profiles</p>
-            <h2 className="mt-3 text-3xl font-bold md:text-4xl">When someone leaves, the work stays visible.</h2>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">The job keeps its memory.</h2>
             <p className="mt-4 text-muted-foreground">
-              Donnit learns recurring duties, open tasks, context notes, and tool access by job title. Managers can cover the role today and hand it to a new hire tomorrow.
+              Donnit learns recurring duties, open work, context notes, and tool access by job title. When someone moves on, the next person is not starting from scratch.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
-              {["Recurring tasks", "How-to notes", "Delegated coverage", "Manager-only access"].map((item) => (
+              {["Recurring work", "How-to notes", "Temporary coverage", "Role-based access"].map((item) => (
                 <span key={item} className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium">
                   {item}
                 </span>
@@ -907,11 +907,40 @@ function LandingPage() {
         </div>
       </section>
 
+      <section className="border-b border-border bg-background px-4 py-16 lg:px-6">
+        <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[1fr_1fr] lg:items-center">
+          <div>
+            <p className="ui-label">Workforce continuity</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">People change. The work still needs a home.</h2>
+            <p className="mt-4 text-muted-foreground">
+              Donnit gives each role a living profile: what comes up every week, what only happens once a year, who needs context, and how the work usually gets done.
+            </p>
+            <p className="mt-3 text-muted-foreground">
+              During PTO, churn, or an internal move, the profile can be covered temporarily and then handed to the next person with the important details already there.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              ["Before someone leaves", "Open work, recurring duties, and notes are already captured."],
+              ["During the gap", "Coverage can be assigned without mixing it into someone else’s role."],
+              ["When the replacement starts", "The profile gives them the actual job, not a stale job description."],
+              ["As the role changes", "New tasks and notes keep the profile current."],
+            ].map(([title, copy]) => (
+              <div key={title} className="rounded-md border border-border bg-card px-4 py-4">
+                <CheckCircle2 className="size-5 text-brand-green" />
+                <h3 className="mt-4 text-base font-semibold">{title}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{copy}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section id="teams" className="border-b border-border px-4 py-16 lg:px-6">
         <div className="mx-auto max-w-7xl">
           <div className="max-w-2xl">
             <p className="ui-label">Built for the people doing the work</p>
-            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Simple enough for Sunday night. Strong enough for managers.</h2>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Simple enough for Sunday night. Useful enough for Monday morning.</h2>
           </div>
           <div className="mt-8 grid gap-3 lg:grid-cols-3">
             {personas.map((persona) => (
@@ -934,24 +963,24 @@ function LandingPage() {
         <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
           <div>
             <p className="ui-label">Pilot offer</p>
-            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Start with one team.</h2>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Start with one role or one team.</h2>
             <p className="mt-3 text-muted-foreground">
-              We are optimizing the first commercial motion around teams that already lose work in email, Slack, and role transitions.
+              Start where work gets lost today: email, Slack, recurring duties, or a role transition.
             </p>
           </div>
           <div className="grid gap-3 lg:grid-cols-3">
             <div className="rounded-md border border-border bg-background px-4 py-5">
               <p className="ui-label">Demo</p>
               <h3 className="mt-2 text-xl font-bold">See Donnit in 20 minutes</h3>
-              <p className="mt-2 text-sm text-muted-foreground">Best for managers validating fit before a pilot.</p>
+              <p className="mt-2 text-sm text-muted-foreground">Best for teams deciding where Donnit should start.</p>
               <Button className="mt-5 w-full" asChild>
                 <a href={demoMailto}>Book demo</a>
               </Button>
             </div>
             <div className="rounded-md border border-brand-green bg-background px-4 py-5">
               <p className="ui-label">Pilot</p>
-              <h3 className="mt-2 text-xl font-bold">Run a team pilot</h3>
-              <p className="mt-2 text-sm text-muted-foreground">Capture real tasks, prove adoption, then connect billing.</p>
+              <h3 className="mt-2 text-xl font-bold">Run a focused pilot</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Capture real work, test handoffs, then connect billing.</p>
               <Button className="mt-5 w-full" onClick={goToLogin}>
                 Start trial
               </Button>
@@ -971,9 +1000,9 @@ function LandingPage() {
       <section className="px-4 py-16 lg:px-6">
         <div className="mx-auto max-w-4xl text-center">
           <p className="ui-label">Ready</p>
-          <h2 className="mt-3 text-3xl font-bold md:text-5xl">Chat it in. Cross it off. Done.</h2>
+          <h2 className="mt-3 text-3xl font-bold md:text-5xl">Chat it in. Donnit keeps it moving.</h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            Connect the scattered places where work starts. Give every task a clear owner and a clean finish.
+            Bring the scattered places where work starts into one calm list people can trust.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <Button size="lg" asChild>
