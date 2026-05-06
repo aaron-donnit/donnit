@@ -1489,6 +1489,7 @@ function FloatingTaskBox({
       <div
         className="flex cursor-move items-center justify-between gap-2 border-b border-border px-3 py-2"
         onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest("button")) return;
           dragRef.current = { startX: event.clientX, startY: event.clientY, originX: clampedX, originY: clampedY };
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
@@ -1514,7 +1515,11 @@ function FloatingTaskBox({
             variant="ghost"
             size="icon"
             className="size-7"
-            onClick={() => setMinimized((value) => !value)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMinimized((value) => !value);
+            }}
             aria-label={minimized ? "Expand active task" : "Minimize active task"}
             data-testid="button-floating-task-minimize"
           >
@@ -1524,7 +1529,11 @@ function FloatingTaskBox({
             variant="ghost"
             size="icon"
             className="size-7"
-            onClick={onClose}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
             aria-label="Close active task"
             data-testid="button-floating-task-close"
           >
@@ -4101,7 +4110,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
+    try {
+      if (typeof window === "undefined") return null;
+      return window.localStorage.getItem("donnit.activeTaskId");
+    } catch {
+      return null;
+    }
+  });
   const [agendaExcludedTaskIds, setAgendaExcludedTaskIds] = useState<Set<string>>(new Set());
   const [agendaApproved, setAgendaApproved] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
@@ -4570,6 +4586,20 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       return next;
     });
   };
+  const setActiveWorkTask = (taskId: Id | null) => {
+    const next = taskId === null ? null : String(taskId);
+    setActiveTaskId(next);
+    if (typeof window === "undefined") return;
+    if (next) window.localStorage.setItem("donnit.activeTaskId", next);
+    else window.localStorage.removeItem("donnit.activeTaskId");
+  };
+  useEffect(() => {
+    if (!activeTaskId || !data?.tasks) return;
+    const taskStillActive = data.tasks.some(
+      (task) => String(task.id) === activeTaskId && task.status !== "completed" && task.status !== "denied",
+    );
+    if (!taskStillActive) setActiveWorkTask(null);
+  }, [activeTaskId, data?.tasks]);
 
   if (isLoading) {
     return (
@@ -4825,7 +4855,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   tasks={data.tasks}
                   users={data.users}
                   viewLabel="All workspace work"
-                  onPinTask={(taskId) => setActiveTaskId(String(taskId))}
+                  onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 />
               </div>
               {/* Narrower supporting column stack */}
@@ -4919,7 +4949,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         isConnectingGmail={connectGmail.isPending}
         isScanningEmail={scan.isPending}
       />
-      <FloatingTaskBox task={activeTask} users={data.users} onClose={() => setActiveTaskId(null)} />
+      <FloatingTaskBox task={activeTask} users={data.users} onClose={() => setActiveWorkTask(null)} />
 
       <footer className="border-t border-border bg-background/80">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
