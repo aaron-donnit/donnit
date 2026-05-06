@@ -1583,63 +1583,81 @@ function PositionProfilesPanel({
   });
   const [newProfileTitle, setNewProfileTitle] = useState("");
   const [newProfileOwnerId, setNewProfileOwnerId] = useState(String(users[0]?.id ?? ""));
-  const customProfiles = customProfileMetas
-    .map((meta) => {
-      const owner = users.find((user) => String(user.id) === meta.ownerId) ?? users[0];
-      if (!owner) return null;
-      const base = profiles.find((profile) => String(profile.owner.id) === String(owner.id));
-      return {
-        ...(base ?? {
-          currentIncompleteTasks: [],
-          recurringTasks: [],
-          completedTasks: [],
-          criticalDates: [],
-          howTo: [],
-          tools: [],
-          stakeholders: [],
-          riskScore: 0,
-          riskLevel: "low" as const,
-          riskReasons: [],
-          transitionChecklist: [
-            "Assign an owner for this job title.",
-            "Add recurring responsibilities as they are discovered.",
-            "Attach tool access and account ownership details.",
-          ],
-          lastUpdatedAt: null,
-          status: "active" as const,
-        }),
-        id: meta.id,
-        title: meta.title,
-        owner,
-      } satisfies PositionProfile;
-    })
-    .filter((profile): profile is PositionProfile => Boolean(profile));
-  const repositoryProfiles = [
-    ...profiles.filter((profile) => !deletedProfileIds.has(profile.id)),
-    ...customProfiles,
-  ].sort((a, b) => a.title.localeCompare(b.title));
+  const [viewMode, setViewMode] = useState<"list" | "detail">("list");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [assignmentFocus, setAssignmentFocus] = useState<"delegate" | "transfer" | null>(null);
+  const customProfiles = useMemo(
+    () =>
+      customProfileMetas
+        .map((meta) => {
+          const owner = users.find((user) => String(user.id) === meta.ownerId) ?? users[0];
+          if (!owner) return null;
+          const base = profiles.find((profile) => String(profile.owner.id) === String(owner.id));
+          return {
+            ...(base ?? {
+              currentIncompleteTasks: [],
+              recurringTasks: [],
+              completedTasks: [],
+              criticalDates: [],
+              howTo: [],
+              tools: [],
+              stakeholders: [],
+              riskScore: 0,
+              riskLevel: "low" as const,
+              riskReasons: [],
+              transitionChecklist: [
+                "Assign an owner for this job title.",
+                "Add recurring responsibilities as they are discovered.",
+                "Attach tool access and account ownership details.",
+              ],
+              lastUpdatedAt: null,
+              status: "active" as const,
+            }),
+            id: meta.id,
+            title: meta.title,
+            owner,
+          } satisfies PositionProfile;
+        })
+        .filter((profile): profile is PositionProfile => Boolean(profile)),
+    [customProfileMetas, profiles, users],
+  );
+  const repositoryProfiles = useMemo(
+    () =>
+      [
+        ...profiles.filter((profile) => !deletedProfileIds.has(profile.id)),
+        ...customProfiles,
+      ].sort((a, b) => a.title.localeCompare(b.title)),
+    [customProfiles, deletedProfileIds, profiles],
+  );
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
-  const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId) ?? repositoryProfiles[0];
-  const targetUsers = users.filter((user) => selectedProfile && String(user.id) !== String(selectedProfile.owner.id));
+  const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
+  const targetUsers = useMemo(
+    () => users.filter((user) => selectedProfile && String(user.id) !== String(selectedProfile.owner.id)),
+    [selectedProfile, users],
+  );
   const [targetUserId, setTargetUserId] = useState("");
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
 
   useEffect(() => {
-    if (!selectedProfile && repositoryProfiles[0]) {
-      setSelectedProfileId(repositoryProfiles[0].id);
+    if (repositoryProfiles.length === 0) {
+      if (selectedProfileId) setSelectedProfileId("");
+      setViewMode("list");
       return;
     }
-    if (selectedProfile && !repositoryProfiles.some((profile) => profile.id === selectedProfile.id)) {
-      setSelectedProfileId(repositoryProfiles[0]?.id ?? "");
+    if (!repositoryProfiles.some((profile) => profile.id === selectedProfileId)) {
+      setSelectedProfileId(repositoryProfiles[0].id);
     }
-  }, [repositoryProfiles, selectedProfile]);
+  }, [repositoryProfiles, selectedProfileId]);
 
   useEffect(() => {
-    if (!selectedProfile) return;
+    if (!selectedProfile) {
+      setTargetUserId("");
+      return;
+    }
     const fallback = targetUsers.find((user) => String(user.id) === String(currentUserId)) ?? targetUsers[0];
     setTargetUserId(fallback ? String(fallback.id) : "");
-  }, [selectedProfile?.id, currentUserId, users.length]);
+  }, [selectedProfile?.id, currentUserId, targetUsers]);
 
   const persistCustomProfiles = (next: Array<{ id: string; title: string; ownerId: string }>) => {
     setCustomProfileMetas(next);
@@ -1660,6 +1678,8 @@ function PositionProfilesPanel({
     persistCustomProfiles([...customProfileMetas, { id, title, ownerId: newProfileOwnerId }]);
     setSelectedProfileId(id);
     setNewProfileTitle("");
+    setCreateOpen(false);
+    setViewMode("detail");
   };
   const deleteProfile = () => {
     if (!selectedProfile) return;
@@ -1671,6 +1691,23 @@ function PositionProfilesPanel({
       persistDeletedProfiles(next);
     }
     setSelectedProfileId(repositoryProfiles.find((profile) => profile.id !== selectedProfile.id)?.id ?? "");
+    setViewMode("list");
+  };
+  const openProfile = (profileId: string) => {
+    setSelectedProfileId(profileId);
+    setCreateOpen(false);
+    setViewMode("detail");
+  };
+  const openAssignment = (nextMode: "delegate" | "transfer") => {
+    setMode(nextMode);
+    setAssignmentFocus(nextMode);
+    setCreateOpen(false);
+    if (!selectedProfile && repositoryProfiles[0]) {
+      setSelectedProfileId(repositoryProfiles[0].id);
+    }
+    if (repositoryProfiles.length > 0) {
+      setViewMode("detail");
+    }
   };
 
   const assign = useMutation({
@@ -1701,20 +1738,6 @@ function PositionProfilesPanel({
     },
   });
 
-  if (!selectedProfile) {
-    return (
-      <div className="rounded-md border border-border" data-testid="panel-position-profiles">
-        <div className="border-b border-border px-4 py-3">
-          <h3 className="display-font text-sm font-bold">Position profiles</h3>
-          <p className="ui-label mt-1">No role memory yet</p>
-        </div>
-        <div className="px-4 py-3 text-sm text-muted-foreground">
-          Donnit will build profiles as tasks are assigned and completed.
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="rounded-md border border-border" data-testid="panel-position-profiles">
       <div className="border-b border-border px-4 py-3">
@@ -1732,9 +1755,43 @@ function PositionProfilesPanel({
             Position Profiles are restricted to admins.
           </div>
         )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              setCreateOpen((open) => !open);
+              setViewMode("list");
+            }}
+            disabled={!canManageProfiles}
+            data-testid="button-position-profile-create"
+          >
+            <ListPlus className="size-4" />
+            Create Position Profile
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openAssignment("transfer")}
+            disabled={!canManageProfiles || repositoryProfiles.length === 0}
+            data-testid="button-position-profile-reassign"
+          >
+            <UserCog className="size-4" />
+            Reassign Position Profile
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openAssignment("delegate")}
+            disabled={!canManageProfiles || repositoryProfiles.length === 0}
+            data-testid="button-position-profile-delegate"
+          >
+            <UserPlus className="size-4" />
+            Delegate Access
+          </Button>
+        </div>
         {canManageProfiles && (
-          <div className="rounded-md border border-border bg-background px-3 py-3">
-            <p className="mb-2 text-xs font-medium text-foreground">Add job-title profile</p>
+          <div className={`${createOpen ? "block" : "hidden"} rounded-md border border-border bg-background px-3 py-3`}>
+            <p className="mb-2 text-xs font-medium text-foreground">Create a job-title profile</p>
             <div className="grid gap-2">
               <Input
                 value={newProfileTitle}
@@ -1767,207 +1824,287 @@ function PositionProfilesPanel({
             </div>
           </div>
         )}
-        <div className="space-y-1.5">
-          <Label htmlFor="position-profile-select" className="ui-label">
-            Profile
-          </Label>
-          <select
-            id="position-profile-select"
-            value={selectedProfile.id}
-            onChange={(event) => setSelectedProfileId(event.target.value)}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            data-testid="select-position-profile"
-          >
-            {repositoryProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.title}
-              </option>
-            ))}
-          </select>
-        </div>
 
-        <div className="rounded-md border border-border bg-background px-3 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                Owner: {selectedProfile.owner.name} - {selectedProfile.status}
+        {viewMode === "list" || !selectedProfile ? (
+          <div className="space-y-2">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground">Current Position Profiles</h4>
+              <p className="text-xs text-muted-foreground">
+                Click a job title to view institutional memory, current work, and transition controls.
               </p>
             </div>
-            <span
-              className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
-                selectedProfile.riskLevel === "high"
-                  ? "bg-destructive/10 text-destructive"
-                  : selectedProfile.riskLevel === "medium"
-                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                    : "bg-brand-green/10 text-brand-green"
-              }`}
-            >
-              Risk {selectedProfile.riskScore}
-            </span>
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="rounded-md bg-muted px-2 py-2">
-              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.currentIncompleteTasks.length}</p>
-              <p className="text-muted-foreground">open</p>
-            </div>
-            <div className="rounded-md bg-muted px-2 py-2">
-              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.recurringTasks.length}</p>
-              <p className="text-muted-foreground">recurring</p>
-            </div>
-            <div className="rounded-md bg-muted px-2 py-2">
-              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.completedTasks.length}</p>
-              <p className="text-muted-foreground">learned</p>
-            </div>
-          </div>
-        </div>
-
-        {selectedProfile.riskReasons.length > 0 && (
-          <div className="rounded-md border border-border bg-background px-3 py-2">
-            <div className="mb-1 flex items-center gap-2">
-              <AlertTriangle className="size-4 text-muted-foreground" />
-              <p className="text-xs font-medium text-foreground">Continuity risk</p>
-            </div>
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {selectedProfile.riskReasons.slice(0, 3).map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-            <ListChecks className="size-4 text-muted-foreground" />
-            Transition checklist
-          </p>
-          <ul className="space-y-1 text-xs text-muted-foreground">
-            {selectedProfile.transitionChecklist.slice(0, 5).map((item) => (
-              <li key={item} className="flex gap-2">
-                <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {selectedProfile.currentIncompleteTasks.length > 0 && (
-          <div className="rounded-md border border-border bg-background px-3 py-2">
-            <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {selectedProfile.currentIncompleteTasks.slice(0, 4).map((task) => (
-                <li key={String(task.id)} className="truncate">
-                  {task.dueDate ?? "No date"} - {task.title}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {selectedProfile.recurringTasks.length > 0 && (
-          <div className="rounded-md border border-border bg-background px-3 py-2">
-            <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-              <Repeat2 className="size-4 text-muted-foreground" />
-              Recurring responsibilities
-            </p>
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {selectedProfile.recurringTasks.slice(0, 4).map((task) => (
-                <li key={String(task.id)} className="truncate">
-                  {inferTaskCadence(task)} - {task.title}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-            <HelpCircle className="size-4 text-muted-foreground" />
-            How-to memory
-          </p>
-          {selectedProfile.howTo.length > 0 ? (
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {selectedProfile.howTo.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-muted-foreground">Donnit needs richer notes on recurring tasks for this profile.</p>
-          )}
-        </div>
-
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-            <KeyRound className="size-4 text-muted-foreground" />
-            Tool access
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {(selectedProfile.tools.length > 0 ? selectedProfile.tools : ["Credential vault pending"]).map((tool) => (
-              <span key={tool} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
-                {tool}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-md border border-border bg-background px-3 py-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="flex items-center gap-2 text-xs font-medium text-foreground">
-              <UserCog className="size-4 text-muted-foreground" />
-              Assign / reassign
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={deleteProfile}
-              data-testid="button-position-profile-delete"
-            >
-              <X className="size-4" />
-              Delete
-            </Button>
-          </div>
-          <div className="grid gap-2">
-            <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value as "delegate" | "transfer")}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              data-testid="select-position-assignment-mode"
-            >
-              <option value="delegate">Delegate coverage</option>
-              <option value="transfer">Transfer to new owner</option>
-            </select>
-            <select
-              value={targetUserId}
-              onChange={(event) => setTargetUserId(event.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              data-testid="select-position-assignment-user"
-            >
-              {targetUsers.map((user) => (
-                <option key={String(user.id)} value={String(user.id)}>
-                  {user.name}
-                </option>
-              ))}
-            </select>
-            {mode === "delegate" && (
-              <Input
-                type="date"
-                value={delegateUntil}
-                onChange={(event) => setDelegateUntil(event.target.value)}
-                className="h-9 text-xs"
-                data-testid="input-position-delegate-until"
-              />
+            {repositoryProfiles.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border bg-background px-3 py-6 text-center text-sm text-muted-foreground">
+                No role memory yet. Create a profile or let Donnit build one as tasks are assigned and completed.
+              </div>
+            ) : (
+              <div className="space-y-2" data-testid="position-profile-list">
+                {repositoryProfiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    onClick={() => openProfile(profile.id)}
+                    className="w-full rounded-md border border-border bg-background px-3 py-3 text-left transition hover:border-brand-green/60 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid={`position-profile-row-${profile.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-foreground">{profile.title}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          Owner: {profile.owner.name} - {profile.status}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
+                          profile.riskLevel === "high"
+                            ? "bg-destructive/10 text-destructive"
+                            : profile.riskLevel === "medium"
+                              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                              : "bg-brand-green/10 text-brand-green"
+                        }`}
+                      >
+                        Risk {profile.riskScore}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-5">
+                      <span className="rounded-md bg-muted px-2 py-2">
+                        <strong className="block text-foreground">{profile.currentIncompleteTasks.length}</strong>
+                        open
+                      </span>
+                      <span className="rounded-md bg-muted px-2 py-2">
+                        <strong className="block text-foreground">{profile.recurringTasks.length}</strong>
+                        recurring
+                      </span>
+                      <span className="rounded-md bg-muted px-2 py-2">
+                        <strong className="block text-foreground">{profile.completedTasks.length}</strong>
+                        learned
+                      </span>
+                      <span className="rounded-md bg-muted px-2 py-2">
+                        <strong className="block text-foreground">{profile.tools.length}</strong>
+                        tools
+                      </span>
+                      <span className="rounded-md bg-muted px-2 py-2">
+                        <strong className="block text-foreground">{profile.stakeholders.length}</strong>
+                        contacts
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
-            <Button
-              size="sm"
-              onClick={() => assign.mutate()}
-              disabled={!targetUserId || assign.isPending}
-              data-testid="button-position-assign"
-            >
-              {assign.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
-              {mode === "transfer" ? "Transfer profile" : "Start coverage"}
-            </Button>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setAssignmentFocus(null);
+                  setViewMode("list");
+                }}
+                data-testid="button-position-profile-list"
+              >
+                <BriefcaseBusiness className="size-4" />
+                All profiles
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={deleteProfile}
+                disabled={!canManageProfiles}
+                data-testid="button-position-profile-delete"
+              >
+                <X className="size-4" />
+                Delete
+              </Button>
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    Owner: {selectedProfile.owner.name} - {selectedProfile.status}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
+                    selectedProfile.riskLevel === "high"
+                      ? "bg-destructive/10 text-destructive"
+                      : selectedProfile.riskLevel === "medium"
+                        ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        : "bg-brand-green/10 text-brand-green"
+                  }`}
+                >
+                  Risk {selectedProfile.riskScore}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">
+                    {selectedProfile.currentIncompleteTasks.length}
+                  </p>
+                  <p className="text-muted-foreground">open</p>
+                </div>
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">{selectedProfile.recurringTasks.length}</p>
+                  <p className="text-muted-foreground">recurring</p>
+                </div>
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">{selectedProfile.completedTasks.length}</p>
+                  <p className="text-muted-foreground">learned</p>
+                </div>
+              </div>
+            </div>
+
+            {selectedProfile.riskReasons.length > 0 && (
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <div className="mb-1 flex items-center gap-2">
+                  <AlertTriangle className="size-4 text-muted-foreground" />
+                  <p className="text-xs font-medium text-foreground">Continuity risk</p>
+                </div>
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {selectedProfile.riskReasons.slice(0, 3).map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="rounded-md border border-border bg-background px-3 py-2">
+              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+                <ListChecks className="size-4 text-muted-foreground" />
+                Transition checklist
+              </p>
+              <ul className="space-y-1 text-xs text-muted-foreground">
+                {selectedProfile.transitionChecklist.slice(0, 5).map((item) => (
+                  <li key={item} className="flex gap-2">
+                    <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {selectedProfile.currentIncompleteTasks.length > 0 && (
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {selectedProfile.currentIncompleteTasks.slice(0, 4).map((task) => (
+                    <li key={String(task.id)} className="truncate">
+                      {task.dueDate ?? "No date"} - {task.title}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {selectedProfile.recurringTasks.length > 0 && (
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+                  <Repeat2 className="size-4 text-muted-foreground" />
+                  Recurring responsibilities
+                </p>
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {selectedProfile.recurringTasks.slice(0, 4).map((task) => (
+                    <li key={String(task.id)} className="truncate">
+                      {inferTaskCadence(task)} - {task.title}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="rounded-md border border-border bg-background px-3 py-2">
+              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+                <HelpCircle className="size-4 text-muted-foreground" />
+                How-to memory
+              </p>
+              {selectedProfile.howTo.length > 0 ? (
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {selectedProfile.howTo.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Donnit needs richer notes on recurring tasks for this profile.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-2">
+              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+                <KeyRound className="size-4 text-muted-foreground" />
+                Tool access
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {(selectedProfile.tools.length > 0 ? selectedProfile.tools : ["Credential vault pending"]).map((tool) => (
+                  <span key={tool} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    {tool}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+                <UserCog className="size-4 text-muted-foreground" />
+                {assignmentFocus === "transfer"
+                  ? "Reassign selected profile"
+                  : assignmentFocus === "delegate"
+                    ? "Delegate access"
+                    : "Assign / reassign"}
+              </p>
+              <div className="grid gap-2">
+                <select
+                  value={mode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value as "delegate" | "transfer";
+                    setMode(nextMode);
+                    setAssignmentFocus(nextMode);
+                  }}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid="select-position-assignment-mode"
+                >
+                  <option value="delegate">Delegate coverage</option>
+                  <option value="transfer">Transfer to new owner</option>
+                </select>
+                <select
+                  value={targetUserId}
+                  onChange={(event) => setTargetUserId(event.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid="select-position-assignment-user"
+                >
+                  {targetUsers.map((user) => (
+                    <option key={String(user.id)} value={String(user.id)}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+                {mode === "delegate" && (
+                  <Input
+                    type="date"
+                    value={delegateUntil}
+                    onChange={(event) => setDelegateUntil(event.target.value)}
+                    className="h-9 text-xs"
+                    data-testid="input-position-delegate-until"
+                  />
+                )}
+                <Button
+                  size="sm"
+                  onClick={() => assign.mutate()}
+                  disabled={!targetUserId || assign.isPending || !canManageProfiles}
+                  data-testid="button-position-assign"
+                >
+                  {assign.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
+                  {mode === "transfer" ? "Transfer profile" : "Start coverage"}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
