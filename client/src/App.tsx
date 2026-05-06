@@ -719,18 +719,18 @@ function LandingPage() {
   const flow = [
     {
       icon: Inbox,
-      title: "Donnit finds the work.",
-      copy: "Messages, emails, and quick notes become task suggestions you can approve.",
+      title: "Donnit catches the loose ends.",
+      copy: "Messages, emails, and quick notes become clear suggestions before they turn into missed work.",
     },
     {
       icon: UserRoundCheck,
-      title: "The next step is clear.",
-      copy: "Each task gets an owner, a due date, notes, and a place to keep updates.",
+      title: "Every task gets a clean next step.",
+      copy: "Owners, due dates, notes, and updates stay attached to the work from the start.",
     },
     {
       icon: BriefcaseBusiness,
-      title: "The role keeps its memory.",
-      copy: "Recurring work and handoff context stay tied to the job, not one person.",
+      title: "Roles build useful history.",
+      copy: "Recurring responsibilities and helpful context stay with the position, so handoffs are fairer for everyone.",
     },
   ];
   const heroSignals = [
@@ -740,26 +740,26 @@ function LandingPage() {
   ];
   const continuitySteps = [
     {
-      title: "Before someone leaves",
-      copy: "Open work, recurring duties, notes, and useful context are already being captured as the job happens.",
+      title: "Before a transition",
+      copy: "Open work, recurring responsibilities, and useful notes are captured as the job happens, not rushed together at the end.",
     },
     {
-      title: "During the gap",
-      copy: "The role can be covered temporarily without mixing that work into someone else's normal responsibilities.",
+      title: "While the role is covered",
+      copy: "Temporary coverage can be assigned clearly without blurring it into someone else's normal workload.",
     },
     {
-      title: "When the replacement starts",
-      copy: "The new person sees the actual rhythm of the job, not a stale job description.",
+      title: "When someone new starts",
+      copy: "The next person sees the actual rhythm of the role, not a stale job description or a folder full of guesses.",
     },
     {
-      title: "As the role changes",
-      copy: "New tasks, notes, and patterns keep the profile current over time.",
+      title: "As the role evolves",
+      copy: "New work, notes, and patterns keep the profile accurate as the role changes over time.",
     },
   ];
   const pilotActions = [
-    ["Book a demo", "See where Donnit fits before you start.", demoMailto],
-    ["Start trial", "Try it with one role or one working team.", null],
-    ["Purchase", "Ready to move now? We will set up billing and onboarding.", purchaseMailto],
+    ["Book a demo", "See how Donnit would fit your team before you roll it out.", demoMailto],
+    ["Start trial", "Try Donnit with one role, one inbox, or one working team.", null],
+    ["Purchase", "Ready to move? We will help set up billing and onboarding.", purchaseMailto],
   ] as const;
 
   return (
@@ -789,12 +789,12 @@ function LandingPage() {
         <div className="relative mx-auto max-w-7xl">
           <div className="grid gap-12 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
             <div className="max-w-3xl">
-              <p className="ui-label">Workforce continuity for real work</p>
+              <p className="ui-label">Workforce continuity for real teams</p>
               <h1 className="mt-5 max-w-4xl text-5xl font-semibold leading-[1.06] text-foreground md:text-7xl">
-                Work gets handed off before it gets lost.
+                Work stays clear when roles change.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-                Donnit turns scattered messages, emails, and recurring duties into clear work people can finish, cover, or hand to the next person.
+                Donnit turns scattered messages, emails, and recurring responsibilities into work people can finish, cover, or pass along with confidence.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Button size="lg" asChild data-testid="button-landing-demo-hero">
@@ -808,7 +808,7 @@ function LandingPage() {
                 </Button>
               </div>
               <p className="mt-6 max-w-xl text-sm leading-6 text-muted-foreground">
-                Built for the work that starts in passing comments, unread messages, annual routines, and the quiet details people usually carry in their heads.
+                Built for passing comments, unread messages, annual routines, and the quiet details strong teammates usually carry in their heads.
               </p>
             </div>
             <div className="landing-motion-panel" aria-hidden="true">
@@ -852,7 +852,7 @@ function LandingPage() {
             <div>
               <p className="ui-label">How Donnit helps</p>
               <h2 className="mt-3 max-w-xl text-3xl font-semibold leading-tight md:text-5xl">
-                Nothing has to live in someone's head.
+                Important details should not depend on memory alone.
               </h2>
             </div>
             <div className="landing-flow-list space-y-8">
@@ -878,10 +878,10 @@ function LandingPage() {
           <div className="max-w-3xl">
             <p className="ui-label">Workforce continuity</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-              People change. The work still needs a home.
+              Transitions are hard. Handoffs can be clearer.
             </h2>
             <p className="mt-5 text-lg leading-8 text-muted-foreground">
-              Donnit gives each role a living profile: what comes up every week, what happens once a year, who needs context, and how the work usually gets done.
+              Donnit gives each role a living profile: what happens every week, what comes up once a year, who needs context, and how the work usually gets done.
             </p>
           </div>
           <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_0.9fr] lg:items-start">
@@ -925,10 +925,10 @@ function LandingPage() {
             </div>
             <div className="space-y-4 text-lg leading-8 text-muted-foreground">
               <p>
-                Donnit is not trying to become another place people manage projects. It is where loose work lands, gets clarified, and keeps moving.
+                Donnit is not another project management maze. It is where loose work lands, gets clarified, and keeps moving.
               </p>
               <p>
-                The result feels simple: type it, approve it, schedule it, or hand it off. Donnit keeps the context close.
+                The experience stays simple: type it, approve it, schedule it, or hand it off. Donnit keeps the context close.
               </p>
             </div>
           </div>
@@ -941,7 +941,7 @@ function LandingPage() {
             <p className="ui-label">Start small</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Start with one role or one team.</h2>
             <p className="mt-4 text-muted-foreground">
-              Pick the place where work gets lost today: email, Slack, recurring duties, or a role transition.
+              Start where the work is most likely to slip: email, Slack, recurring duties, or an upcoming transition.
             </p>
           </div>
           <div className="mt-8 divide-y divide-border border-y border-border">
@@ -969,7 +969,7 @@ function LandingPage() {
           <p className="ui-label">Ready</p>
           <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Chat it in. Donnit keeps it moving.</h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            Bring the scattered places where work starts into one calm list people can trust.
+            Bring the scattered places where work starts into one calm system people can trust.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <Button size="lg" asChild>
