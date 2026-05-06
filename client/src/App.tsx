@@ -447,14 +447,15 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           rows={3}
           className="h-20 max-h-20 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
           onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-              if (message.trim().length >= 2) chat.mutate();
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              if (message.trim().length >= 2 && !chat.isPending) chat.mutate();
             }
           }}
           data-testid="input-chat-message"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Ctrl + Enter to send</span>
+          <span className="text-xs text-muted-foreground">Enter to send · Shift + Enter for a new line</span>
           <Button
             onClick={() => chat.mutate()}
             disabled={message.trim().length < 2 || chat.isPending}
@@ -664,7 +665,7 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
     onError: () => setCompletingId(null),
   });
 
-  // Sort: due date asc (nulls last), then urgency, then completion last.
+  // Sort for execution: completion last, then time pressure, urgency, shorter work, and age.
   const urgencyRank: Record<string, number> = {
     critical: 0,
     high: 1,
@@ -672,26 +673,67 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
     medium: 2,
     low: 3,
   };
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 3);
+  const soonIso = soon.toISOString().slice(0, 10);
+  const pressureRank = (task: Task) => {
+    if (task.status === "completed") return 99;
+    if (task.dueDate && task.dueDate < today) return 0;
+    if (task.dueDate === today) return 1;
+    if (task.dueDate && task.dueDate <= soonIso) return 2;
+    if (!task.dueDate && (task.urgency === "critical" || task.urgency === "high")) return 3;
+    if (task.dueDate) return 4;
+    return 5;
+  };
+  const groupForTask = (task: Task) => {
+    if (task.dueDate && task.dueDate < today) return { id: "overdue", label: "Do now", detail: "Past due work" };
+    if (task.dueDate === today) return { id: "today", label: "Today", detail: "Due today" };
+    if (/reply|respond|follow up|follow-up|email|call|message/i.test(`${task.title} ${task.description}`) || ["email", "slack", "sms"].includes(task.source)) {
+      return { id: "communications", label: "Communications batch", detail: "Handle together while context is open" };
+    }
+    if (/review|approve|audit|contract|document|proposal|invoice|reconcile/i.test(`${task.title} ${task.description}`) || task.source === "document") {
+      return { id: "review", label: "Review batch", detail: "Read, decide, and approve together" };
+    }
+    if (/plan|roadmap|strategy|report|presentation|deck|onboarding/i.test(`${task.title} ${task.description}`)) {
+      return { id: "planning", label: "Planning batch", detail: "Deep work and manager planning" };
+    }
+    if (task.dueDate) return { id: "scheduled", label: "Scheduled later", detail: "Upcoming dated work" };
+    return { id: "backlog", label: "Backlog", detail: "No due date yet" };
+  };
 
   const sorted = [...tasks].sort((a, b) => {
     const aDone = a.status === "completed" ? 1 : 0;
     const bDone = b.status === "completed" ? 1 : 0;
     if (aDone !== bDone) return aDone - bDone;
-    const aTime = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
-    const bTime = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
-    if (aTime !== bTime) return aTime - bTime;
-    return (urgencyRank[a.urgency] ?? 4) - (urgencyRank[b.urgency] ?? 4);
+    const aPressure = pressureRank(a);
+    const bPressure = pressureRank(b);
+    if (aPressure !== bPressure) return aPressure - bPressure;
+    const urgencyDelta = (urgencyRank[a.urgency] ?? 4) - (urgencyRank[b.urgency] ?? 4);
+    if (urgencyDelta !== 0) return urgencyDelta;
+    const aDue = a.dueDate ?? "9999-12-31";
+    const bDue = b.dueDate ?? "9999-12-31";
+    if (aDue !== bDue) return aDue.localeCompare(bDue);
+    if (a.estimatedMinutes !== b.estimatedMinutes) return a.estimatedMinutes - b.estimatedMinutes;
+    return a.createdAt.localeCompare(b.createdAt);
   });
 
   const open = sorted.filter((t) => t.status !== "completed");
   const done = sorted.filter((t) => t.status === "completed");
+  const grouped = open.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
+    const group = groupForTask(task);
+    const existing = groups.find((item) => item.id === group.id);
+    if (existing) existing.tasks.push(task);
+    else groups.push({ ...group, tasks: [task] });
+    return groups;
+  }, []);
 
   return (
     <div className="panel flex flex-col" data-testid="panel-tasks">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="work-heading">To do</h2>
-          <p className="ui-label mt-1">Sorted by due date, then urgency</p>
+          <p className="ui-label mt-1">Prioritized and batched by timing/context</p>
         </div>
         <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium tabular-nums">
           {open.length} open
@@ -708,15 +750,26 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
             </p>
           </div>
         ) : (
-          open.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              users={users}
-              isCompleting={completingId === task.id && complete.isPending}
-              onComplete={() => complete.mutate(task.id)}
-              onOpen={() => setSelectedTaskId(String(task.id))}
-            />
+          grouped.map((group) => (
+            <div key={group.id} className="space-y-2">
+              <div className="flex items-center justify-between gap-3 px-1 pt-1">
+                <div>
+                  <p className="ui-label text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</p>
+                  <p className="text-[11px] text-muted-foreground">{group.detail}</p>
+                </div>
+                <span className="text-[11px] tabular-nums text-muted-foreground">{group.tasks.length}</span>
+              </div>
+              {group.tasks.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  users={users}
+                  isCompleting={completingId === task.id && complete.isPending}
+                  onComplete={() => complete.mutate(task.id)}
+                  onOpen={() => setSelectedTaskId(String(task.id))}
+                />
+              ))}
+            </div>
           ))
         )}
 
@@ -968,8 +1021,8 @@ function TaskDetailDialog({
                 id="task-detail-estimate"
                 type="number"
                 min={5}
-                max={480}
-                step={5}
+                max={1440}
+                step={1}
                 value={estimatedMinutes}
                 onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
                 data-testid="input-task-detail-estimate"
@@ -1502,19 +1555,33 @@ function SuggestionCard({
   dismissing: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyBody, setReplyBody] = useState("");
   const actionItems = suggestion.actionItems ?? [];
   const body = (suggestion.body ?? "").trim();
   const preview = (suggestion.preview ?? body.slice(0, 240)).trim();
-  const sourceLabel = suggestion.fromEmail.toLowerCase().startsWith("slack:")
+  const fromLower = suggestion.fromEmail.toLowerCase();
+  const sourceLabel = fromLower.startsWith("slack:")
     ? "Slack"
-    : suggestion.fromEmail.toLowerCase().startsWith("sms:")
+    : fromLower.startsWith("sms:")
       ? "SMS"
-      : "Email";
+      : fromLower.startsWith("document:")
+        ? "Document"
+        : "Email";
+  const canReplyByEmail = sourceLabel === "Email" && suggestion.fromEmail.includes("@");
+  const openEmailDraft = () => {
+    const subject = suggestion.subject.toLowerCase().startsWith("re:")
+      ? suggestion.subject
+      : `Re: ${suggestion.subject}`;
+    window.location.href = `mailto:${encodeURIComponent(suggestion.fromEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(replyBody)}`;
+    setReplyOpen(false);
+  };
   return (
-    <div
-      className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
-      data-testid={`row-suggestion-${suggestion.id}`}
-    >
+    <>
+      <div
+        className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
+        data-testid={`row-suggestion-${suggestion.id}`}
+      >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground break-words" data-testid={`text-suggestion-title-${suggestion.id}`}>
@@ -1594,8 +1661,48 @@ function SuggestionCard({
         >
           <X className="size-4" /> Dismiss
         </Button>
+        {canReplyByEmail && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setReplyOpen(true)}
+            data-testid={`button-suggestion-reply-${suggestion.id}`}
+          >
+            <Send className="size-4" /> Reply
+          </Button>
+        )}
       </div>
-    </div>
+      </div>
+      <Dialog open={replyOpen} onOpenChange={setReplyOpen}>
+        <DialogContent className={`${dialogShellClass} max-w-lg`}>
+          <DialogHeader className={dialogHeaderClass}>
+            <DialogTitle>Reply to source</DialogTitle>
+            <DialogDescription>
+              Draft a response to {suggestion.fromEmail}. Donnit will open your email client with the message filled in.
+            </DialogDescription>
+          </DialogHeader>
+          <div className={dialogBodyClass}>
+            <Textarea
+              value={replyBody}
+              onChange={(event) => setReplyBody(event.target.value)}
+              placeholder="Thanks. I received this and will follow up shortly."
+              className="min-h-[140px]"
+              maxLength={4000}
+              data-testid={`input-suggestion-reply-${suggestion.id}`}
+            />
+          </div>
+          <DialogFooter className={dialogFooterClass}>
+            <Button variant="outline" onClick={() => setReplyOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={openEmailDraft} disabled={replyBody.trim().length < 2}>
+              <Send className="size-4" />
+              Open email draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1716,10 +1823,20 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
   return items.slice(0, 12);
 }
 
-function NotificationCenter({ notifications }: { notifications: DerivedNotification[] }) {
+function NotificationCenter({
+  notifications,
+  onReviewed,
+}: {
+  notifications: DerivedNotification[];
+  onReviewed: (ids: string[]) => void;
+}) {
   const highCount = notifications.filter((item) => item.severity === "high").length;
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open && notifications.length > 0) onReviewed(notifications.map((item) => item.id));
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="icon" aria-label="Open notifications" data-testid="button-notifications">
           <span className="relative inline-flex">
@@ -1757,6 +1874,15 @@ function NotificationCenter({ notifications }: { notifications: DerivedNotificat
               </span>
             </DropdownMenuItem>
           ))
+        )}
+        {notifications.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onReviewed(notifications.map((item) => item.id))}>
+              <Check className="size-4" />
+              Clear reviewed
+            </DropdownMenuItem>
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -2052,8 +2178,8 @@ function AssignTaskDialog({
                 id="assign-estimate"
                 type="number"
                 min={5}
-                max={480}
-                step={5}
+                max={1440}
+                step={1}
                 value={estimatedMinutes}
                 onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
                 data-testid="input-assign-estimate"
@@ -2211,6 +2337,98 @@ function ManualEmailImportDialog({
           >
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <MailPlus className="size-4" />}
             Add to queue
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DocumentImportDialog({
+  open,
+  onOpenChange,
+  onOpenApprovalInbox,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onOpenApprovalInbox: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+
+  const upload = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("Choose a PDF, Word, or text file first.");
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error("Could not read the document."));
+        reader.readAsDataURL(file);
+      });
+      const dataBase64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+      const res = await apiRequest("POST", "/api/documents/suggest", {
+        fileName: file.name,
+        mimeType: file.type,
+        dataBase64,
+      });
+      return (await res.json()) as { ok: boolean; created: number };
+    },
+    onSuccess: async (result) => {
+      await invalidateWorkspace();
+      toast({
+        title: "Document scanned",
+        description:
+          result.created > 0
+            ? `Queued ${result.created} task suggestion${result.created === 1 ? "" : "s"} for approval.`
+            : "No task suggestions were found.",
+      });
+      setFile(null);
+      onOpenChange(false);
+      if (result.created > 0) onOpenApprovalInbox();
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Document scan failed",
+        description: error instanceof Error ? error.message : "Upload a PDF, Word .docx, or text file.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${dialogShellClass} max-w-lg`}>
+        <DialogHeader className={dialogHeaderClass}>
+          <DialogTitle>Import document</DialogTitle>
+          <DialogDescription>
+            Upload a PDF, Word .docx, or text file and Donnit will queue task suggestions for approval.
+          </DialogDescription>
+        </DialogHeader>
+        <div className={dialogBodyClass}>
+          <div className="space-y-2">
+            <Label htmlFor="document-import-file">Document</Label>
+            <Input
+              id="document-import-file"
+              type="file"
+              accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              data-testid="input-document-import-file"
+            />
+            <p className="text-xs text-muted-foreground">
+              Files are parsed into the approval inbox before anything becomes a task.
+            </p>
+          </div>
+        </div>
+        <DialogFooter className={dialogFooterClass}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-document-import-cancel">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => upload.mutate()}
+            disabled={!file || upload.isPending}
+            data-testid="button-document-import-submit"
+          >
+            {upload.isPending ? <Loader2 className="size-4 animate-spin" /> : <FileText className="size-4" />}
+            Scan document
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2649,10 +2867,19 @@ function useGmailOAuthStatus(authenticated: boolean) {
 function CommandCenter({ auth }: { auth: AuthedContext }) {
   const { data, isLoading, isError } = useBootstrap();
   const [manualImportOpen, setManualImportOpen] = useState(false);
+  const [documentImportOpen, setDocumentImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
+  const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
+    try {
+      if (typeof window === "undefined") return new Set();
+      return new Set(JSON.parse(window.localStorage.getItem("donnit.reviewedNotifications") ?? "[]"));
+    } catch {
+      return new Set();
+    }
+  });
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
   const showDebugTools = import.meta.env.DEV;
 
@@ -3080,10 +3307,25 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     [],
   );
-  const notifications = useMemo(
+  const rawNotifications = useMemo(
     () => buildNotifications(data?.tasks ?? [], data?.suggestions ?? []),
     [data?.tasks, data?.suggestions],
   );
+  const notifications = useMemo(
+    () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
+    [rawNotifications, reviewedNotificationIds],
+  );
+  const markNotificationsReviewed = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setReviewedNotificationIds((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => next.add(id));
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("donnit.reviewedNotifications", JSON.stringify(Array.from(next).slice(-200)));
+      }
+      return next;
+    });
+  };
 
   if (isLoading) {
     return (
@@ -3142,6 +3384,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       hint: oauthData?.connected
         ? `Scan unread Gmail for ${oauthData.email ?? "your inbox"}`
         : "Scan unread Gmail and queue suggested tasks",
+    },
+    {
+      id: "import-document",
+      label: "Import doc",
+      icon: FileText,
+      onClick: () => setDocumentImportOpen(true),
+      hint: "Upload a PDF or Word document and queue task suggestions",
     },
     {
       id: "build-agenda",
@@ -3266,7 +3515,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 : "demo (Supabase not configured)"}
             </span>
             <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
-            <NotificationCenter notifications={notifications} />
+            <NotificationCenter notifications={notifications} onReviewed={markNotificationsReviewed} />
             <ThemeToggle />
             {auth.authenticated && (
               <Button
@@ -3340,6 +3589,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
+      <DocumentImportDialog
+        open={documentImportOpen}
+        onOpenChange={setDocumentImportOpen}
+        onOpenApprovalInbox={() => setApprovalInboxOpen(true)}
+      />
       <ApprovalInboxDialog
         open={approvalInboxOpen}
         onOpenChange={setApprovalInboxOpen}

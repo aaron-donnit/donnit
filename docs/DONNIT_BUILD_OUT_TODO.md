@@ -26,11 +26,15 @@ Shipped foundations:
 - Connected tools settings panel for Gmail, Calendar, Slack, and SMS status/testing.
 - In-app notification bell for due, overdue, delegated, and approval-waiting work.
 - Team memory panel for role, recurring work, source mix, and open/completed work.
+- PDF/Word/text document import into the approval inbox.
+- Enter-to-send chat input with Shift+Enter line breaks.
+- Context-batched task list ordering, reviewed-notification clearing, custom estimates up to 24 hours, and email reply draft popup.
 
 Known operational items:
 
 - Apply `supabase/migrations/0008_task_relationships.sql` in Supabase so delegated/collaborator fields persist as first-class columns.
 - Apply `supabase/migrations/0009_slack_sms_task_sources.sql` so approved Slack/SMS suggestions can retain source provenance.
+- Apply `supabase/migrations/0010_document_source_and_future_task_primitives.sql` so approved document suggestions retain source provenance and the database is ready for subtasks/position credential vault work.
 - Keep `package-lock.json` line-ending noise uncommitted unless dependencies actually change.
 
 ## P0: Pilot-Critical Work Loop
@@ -111,8 +115,11 @@ Current sprint:
 
 Next sprint:
 
-1. Tabled for MVP provider wiring - provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
-2. Tabled for MVP provider wiring - provision SMS provider webhook and verified phone routing.
-3. Persist admin settings, invites, and team management.
-4. Add visual agenda drag/rebuild and calendar conflict repair.
-5. Add design-partner analytics dashboard.
+1. Build the subtask UI/API on top of `donnit.task_subtasks`.
+2. Build the position credential vault UI/API with encryption before exposing secrets.
+3. Add real Gmail send/reply, Slack reply, and SMS outbound provider actions after final OAuth/provider scopes are approved.
+4. Tabled for MVP provider wiring - provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
+5. Tabled for MVP provider wiring - provision SMS provider webhook and verified phone routing.
+6. Persist admin settings, invites, and team management.
+7. Add visual agenda drag/rebuild and calendar conflict repair.
+8. Add design-partner analytics dashboard.

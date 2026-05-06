@@ -80,7 +80,7 @@ export type DonnitTask = {
   assigned_by: string;
   delegated_to: string | null;
   collaborator_ids: string[];
-  source: "chat" | "manual" | "email" | "slack" | "sms" | "automation" | "annual";
+  source: "chat" | "manual" | "email" | "slack" | "sms" | "document" | "automation" | "annual";
   recurrence: "none" | "annual";
   reminder_days_before: number;
   accepted_at: string | null;

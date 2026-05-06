@@ -1324,7 +1324,13 @@ function parseChatTaskAuthenticated(
   };
 }
 
-type SuggestionSource = "email" | "slack" | "sms";
+type SuggestionSource = "email" | "slack" | "sms" | "document";
+
+const documentSuggestRequestSchema = z.object({
+  fileName: z.string().trim().min(1).max(240),
+  mimeType: z.string().trim().max(160).optional(),
+  dataBase64: z.string().min(16).max(12_000_000),
+});
 
 type IngestTarget = {
   orgId: string;
@@ -1349,7 +1355,7 @@ const aiTaskExtractionSchema = z.object({
   description: z.string().trim().max(1200).default(""),
   urgency: z.enum(["low", "normal", "high", "critical"]),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-  estimatedMinutes: z.number().int().min(5).max(480),
+  estimatedMinutes: z.number().int().min(5).max(1440),
   assigneeHint: z.string().trim().max(160).nullable(),
   recurrence: z.enum(["none", "annual"]),
   reminderDaysBefore: z.number().int().min(0).max(365),
@@ -1464,10 +1470,11 @@ function matchAiAssignee<T extends { name?: string; email?: string; id?: string 
   );
 }
 
-function sourceFromSuggestion(input: { fromEmail: string; subject: string }): "email" | "slack" | "sms" {
+function sourceFromSuggestion(input: { fromEmail: string; subject: string }): SuggestionSource {
   const marker = `${input.fromEmail} ${input.subject}`.toLowerCase();
   if (marker.includes("slack:") || marker.includes("slack")) return "slack";
   if (marker.includes("sms:") || marker.includes("text message") || marker.includes("sms")) return "sms";
+  if (marker.includes("document:") || marker.includes("document upload")) return "document";
   return "email";
 }
 
@@ -1527,6 +1534,75 @@ function buildExternalSuggestionCandidate(input: {
     urgency,
     estimatedMinutes: estimate,
   };
+}
+
+async function extractUploadedDocumentText(input: {
+  fileName: string;
+  mimeType?: string;
+  dataBase64: string;
+}) {
+  const buffer = Buffer.from(input.dataBase64, "base64");
+  if (buffer.length === 0 || buffer.length > 8 * 1024 * 1024) {
+    throw new Error("Document must be smaller than 8MB.");
+  }
+  const name = input.fileName.toLowerCase();
+  const mime = (input.mimeType ?? "").toLowerCase();
+  if (name.endsWith(".pdf") || mime.includes("pdf")) {
+    const mod: any = await import("pdf-parse");
+    const pdfParse = mod.default ?? mod;
+    const result = await pdfParse(buffer);
+    return String(result?.text ?? "");
+  }
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml")) {
+    const mod: any = await import("mammoth");
+    const result = await mod.extractRawText({ buffer });
+    return String(result?.value ?? "");
+  }
+  if (name.endsWith(".txt") || name.endsWith(".md") || mime.startsWith("text/")) {
+    return buffer.toString("utf8");
+  }
+  throw new Error("Upload a PDF, Word .docx, or text file.");
+}
+
+function buildDocumentSuggestionCandidates(input: {
+  fileName: string;
+  text: string;
+  assignedToId: string | number;
+}) {
+  const cleaned = input.text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").trim();
+  const lines = cleaned
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .filter((line) => line.length >= 8 && line.length <= 280);
+  const actionable = lines.filter((line) =>
+    /\b(assign|send|review|approve|update|prepare|create|call|follow up|follow-up|schedule|renew|submit|complete|draft|reconcile|confirm|collect|onboard|train|audit)\b/i.test(line),
+  );
+  const candidates = (actionable.length > 0 ? actionable : lines).slice(0, 10);
+  const selected =
+    candidates.length > 0
+      ? candidates
+      : cleaned
+          .split(/(?<=[.!?])\s+/)
+          .filter((sentence) => sentence.length >= 16)
+          .slice(0, 5);
+
+  return selected.map((raw, index) => {
+    const title = titleFromMessage(raw) || `Review ${input.fileName}`;
+    const dueDate = parseDueDate(raw);
+    const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(raw);
+    return {
+      fromEmail: `document:${input.fileName}`,
+      subject: `Document upload: ${input.fileName}`,
+      preview: raw.slice(0, 500),
+      body: cleaned.slice(0, 4000),
+      receivedAt: new Date().toISOString(),
+      actionItems: [`Review document item ${index + 1}: ${title}.`],
+      suggestedTitle: title,
+      suggestedDueDate: dueDate,
+      urgency,
+      assignedTo: input.assignedToId,
+    };
+  });
 }
 
 function normalizeDateOnly(value: string | null | undefined): string | null {
@@ -2320,6 +2396,99 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/notes", (req, res) => handleTaskAction(req, res, "note"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
+
+  // ------------------------------------------------------------------
+  // Document imports
+  // ------------------------------------------------------------------
+  app.post("/api/documents/suggest", async (req: Request, res: Response) => {
+    const parsed = documentSuggestRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Upload a PDF, Word .docx, or text file under 8MB." });
+      return;
+    }
+
+    try {
+      const text = await extractUploadedDocumentText(parsed.data);
+      if (text.trim().length < 12) {
+        res.status(400).json({ message: "Donnit could not read enough text from that document." });
+        return;
+      }
+
+      if (req.donnitAuth) {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const orgId = await store.getDefaultOrgId();
+        if (!orgId) {
+          res.status(409).json({ message: "Workspace not bootstrapped." });
+          return;
+        }
+        const candidates = buildDocumentSuggestionCandidates({
+          fileName: parsed.data.fileName,
+          text,
+          assignedToId: auth.userId,
+        });
+        const suggestions = [];
+        for (const candidate of candidates) {
+          const suggestion = await store.createEmailSuggestion(orgId, {
+            gmail_message_id: `document:${crypto
+              .createHash("sha1")
+              .update(`${parsed.data.fileName}:${candidate.preview}`)
+              .digest("hex")
+              .slice(0, 24)}`,
+            from_email: candidate.fromEmail,
+            subject: candidate.subject,
+            preview: candidate.preview,
+            body: candidate.body,
+            received_at: candidate.receivedAt,
+            action_items: candidate.actionItems,
+            suggested_title: candidate.suggestedTitle,
+            suggested_due_date: candidate.suggestedDueDate,
+            urgency: candidate.urgency,
+            assigned_to: String(candidate.assignedTo),
+          });
+          suggestions.push({
+            id: suggestion.id,
+            fromEmail: suggestion.from_email,
+            subject: suggestion.subject,
+            preview: suggestion.preview,
+            body: suggestion.body,
+            receivedAt: suggestion.received_at,
+            actionItems: suggestion.action_items,
+            suggestedTitle: suggestion.suggested_title,
+            suggestedDueDate: suggestion.suggested_due_date,
+            urgency: suggestion.urgency,
+            status: suggestion.status,
+            assignedToId: suggestion.assigned_to,
+            createdAt: suggestion.created_at,
+          });
+        }
+        res.status(201).json({ ok: true, created: suggestions.length, suggestions });
+        return;
+      }
+
+      const candidates = buildDocumentSuggestionCandidates({
+        fileName: parsed.data.fileName,
+        text,
+        assignedToId: DEMO_USER_ID,
+      });
+      const suggestions = [];
+      for (const candidate of candidates) {
+        const suggestion = await storage.createEmailSuggestion({
+          fromEmail: candidate.fromEmail,
+          subject: candidate.subject,
+          preview: candidate.preview,
+          suggestedTitle: candidate.suggestedTitle,
+          suggestedDueDate: candidate.suggestedDueDate,
+          urgency: candidate.urgency,
+          assignedToId: DEMO_USER_ID,
+        });
+        suggestions.push(suggestion);
+      }
+      res.status(201).json({ ok: true, created: suggestions.length, suggestions });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   // ------------------------------------------------------------------
   // Email suggestions

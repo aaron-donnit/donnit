@@ -103,7 +103,7 @@ export const taskCreateRequestSchema = insertTaskSchema.extend({
   status: z
     .enum(["open", "pending_acceptance", "accepted", "denied", "completed"])
     .default("open"),
-  source: z.enum(["chat", "manual", "email", "slack", "sms", "automation", "annual"]).default("manual"),
+  source: z.enum(["chat", "manual", "email", "slack", "sms", "document", "automation", "annual"]).default("manual"),
   recurrence: z.enum(["none", "annual"]).default("none"),
   dueDate: z.string().nullable().optional(),
   description: z.string().optional().default(""),
@@ -115,7 +115,7 @@ export const taskUpdateRequestSchema = z.object({
   status: z.enum(["open", "pending_acceptance", "accepted", "denied", "completed"]).optional(),
   urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
   dueDate: z.string().nullable().optional(),
-  estimatedMinutes: z.number().int().min(5).max(480).optional(),
+  estimatedMinutes: z.number().int().min(5).max(1440).optional(),
   assignedToId: z.union([z.string().min(1), z.number()]).optional(),
   delegatedToId: z.union([z.string().min(1), z.number()]).nullable().optional(),
   collaboratorIds: z.array(z.union([z.string().min(1), z.number()])).optional(),
