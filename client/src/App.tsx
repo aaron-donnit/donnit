@@ -4,8 +4,10 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Archive,
+  AlertTriangle,
   BarChart3,
   Bell,
+  BriefcaseBusiness,
   CalendarClock,
   CalendarCheck,
   CalendarPlus,
@@ -15,8 +17,10 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  HelpCircle,
   History,
   Inbox,
+  KeyRound,
   ListChecks,
   ListPlus,
   Loader2,
@@ -24,6 +28,7 @@ import {
   Menu,
   Moon,
   RefreshCcw,
+  Repeat2,
   Send,
   Settings,
   ShieldCheck,
@@ -31,6 +36,7 @@ import {
   Sparkles,
   Sun,
   UserPlus,
+  UserCog,
   UserRoundCheck,
   Users,
   Workflow,
@@ -42,7 +48,7 @@ import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/hooks/use-toast";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -170,6 +176,25 @@ type Bootstrap = {
   };
 };
 
+type PositionProfile = {
+  id: string;
+  title: string;
+  owner: User;
+  status: "active" | "vacant" | "covered";
+  currentIncompleteTasks: Task[];
+  recurringTasks: Task[];
+  completedTasks: Task[];
+  criticalDates: string[];
+  howTo: string[];
+  tools: string[];
+  stakeholders: string[];
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high";
+  riskReasons: string[];
+  transitionChecklist: string[];
+  lastUpdatedAt: string | null;
+};
+
 type UrgencyClass = "urgency-high" | "urgency-medium" | "urgency-low";
 
 function urgencyClass(urgency: string): UrgencyClass {
@@ -199,6 +224,143 @@ function useBootstrap() {
 
 function invalidateWorkspace() {
   return queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function positionTitleForUser(user: User) {
+  const persona = titleCase(user.persona || "");
+  const role = titleCase(user.role || "member");
+  if (persona && persona.toLowerCase() !== "operator" && !role.toLowerCase().includes(persona.toLowerCase())) {
+    return `${persona} ${role === "Owner" ? "Lead" : role}`;
+  }
+  if (role === "Owner") return "Founder / Owner";
+  if (role === "Admin") return "Workspace Admin";
+  if (role === "Manager") return "Department Manager";
+  return "Team Member";
+}
+
+function inferTaskCadence(task: Task) {
+  const text = `${task.title} ${task.description}`.toLowerCase();
+  if (task.recurrence === "annual" || /\bannual|yearly|anniversary|birthday\b/.test(text)) return "Annual";
+  if (/\bquarterly|q[1-4]\b/.test(text)) return "Quarterly";
+  if (/\bmonthly|month-end|month end\b/.test(text)) return "Monthly";
+  if (/\bweekly|every week|friday|monday|tuesday|wednesday|thursday\b/.test(text)) return "Weekly";
+  if (/\bdaily|standup|each day|every day\b/.test(text)) return "Daily";
+  return task.recurrence !== "none" ? titleCase(task.recurrence) : "As needed";
+}
+
+function taskKnowledgeText(task: Task) {
+  return [task.description, task.completionNotes]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferToolsFromTasks(tasks: Task[]) {
+  const text = tasks.map((task) => `${task.title} ${task.description} ${task.completionNotes}`).join(" ").toLowerCase();
+  const tools: Array<[string, RegExp]> = [
+    ["Gmail", /\bgmail|email|inbox\b/],
+    ["Slack", /\bslack|channel\b/],
+    ["Google Calendar", /\bcalendar|meeting|schedule\b/],
+    ["LinkedIn", /\blinkedin|recruiting\b/],
+    ["Vercel", /\bvercel|deployment|deploy\b/],
+    ["Supabase", /\bsupabase|database|auth\b/],
+    ["Payroll", /\bpayroll|hris|benefits\b/],
+    ["Billing", /\bbilling|invoice|receipt|expense|contract\b/],
+  ];
+  return tools.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+}
+
+function buildPositionProfiles(tasks: Task[], users: User[], events: TaskEvent[]): PositionProfile[] {
+  const today = new Date().toISOString().slice(0, 10);
+  return users.map((user) => {
+    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
+    const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
+    const completedTasks = owned.filter((task) => task.status === "completed");
+    const recurringTasks = owned.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
+    const criticalDates = Array.from(
+      new Set(
+        owned
+          .filter((task) => task.dueDate && (task.recurrence !== "none" || task.urgency === "critical" || task.urgency === "high"))
+          .map((task) => `${task.dueDate}: ${task.title}`),
+      ),
+    ).slice(0, 4);
+    const howTo = Array.from(
+      new Set(
+        owned
+          .map(taskKnowledgeText)
+          .filter((text) => text.length >= 30)
+          .map((text) => text.slice(0, 180)),
+      ),
+    ).slice(0, 4);
+    const stakeholderNames = users
+      .filter((candidate) => String(candidate.id) !== String(user.id))
+      .filter((candidate) =>
+        owned.some((task) => {
+          const text = `${task.title} ${task.description} ${task.completionNotes}`.toLowerCase();
+          return text.includes(candidate.name.toLowerCase()) || String(task.assignedById) === String(candidate.id);
+        }),
+      )
+      .map((candidate) => candidate.name)
+      .slice(0, 4);
+    const overdue = currentIncompleteTasks.filter((task) => task.dueDate && task.dueDate < today);
+    const high = currentIncompleteTasks.filter((task) => task.urgency === "critical" || task.urgency === "high");
+    const missingHowTo = recurringTasks.filter((task) => taskKnowledgeText(task).length < 30);
+    const riskScore = Math.min(
+      100,
+      overdue.length * 24 +
+        high.length * 12 +
+        Math.max(0, currentIncompleteTasks.length - 5) * 4 +
+        missingHowTo.length * 8 +
+        (inferToolsFromTasks(owned).length === 0 && owned.length > 0 ? 8 : 0),
+    );
+    const riskReasons = [
+      overdue.length > 0 ? `${overdue.length} overdue task${overdue.length === 1 ? "" : "s"}` : "",
+      high.length > 0 ? `${high.length} high-urgency task${high.length === 1 ? "" : "s"}` : "",
+      missingHowTo.length > 0 ? `${missingHowTo.length} recurring item${missingHowTo.length === 1 ? "" : "s"} need better how-to notes` : "",
+      currentIncompleteTasks.length > 0 ? `${currentIncompleteTasks.length} active task${currentIncompleteTasks.length === 1 ? "" : "s"} to cover` : "",
+    ].filter(Boolean);
+    const recentEvents = events
+      .filter((event) => owned.some((task) => String(task.id) === String(event.taskId)))
+      .map((event) => event.createdAt)
+      .sort()
+      .at(-1);
+    const title = positionTitleForUser(user);
+    return {
+      id: `position-${String(user.id)}`,
+      title,
+      owner: user,
+      status: currentIncompleteTasks.some((task) => task.delegatedToId) ? "covered" : "active",
+      currentIncompleteTasks,
+      recurringTasks,
+      completedTasks,
+      criticalDates,
+      howTo,
+      tools: inferToolsFromTasks(owned),
+      stakeholders: stakeholderNames,
+      riskScore,
+      riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
+      riskReasons,
+      transitionChecklist: [
+        `Review ${currentIncompleteTasks.length} current incomplete task${currentIncompleteTasks.length === 1 ? "" : "s"}.`,
+        recurringTasks.length > 0
+          ? `Confirm next occurrence for ${recurringTasks.length} recurring ${recurringTasks.length === 1 ? "responsibility" : "responsibilities"}.`
+          : "Confirm whether this role has recurring responsibilities.",
+        "Verify tool access, account ownership, billing, and recovery contacts.",
+        howTo.length > 0 ? "Review saved how-to context before reassigning." : "Add how-to notes for recurring responsibilities.",
+        "Assign the profile owner or set a delegate coverage period.",
+      ],
+      lastUpdatedAt: recentEvents ?? owned.map((task) => task.createdAt).sort().at(-1) ?? null,
+    };
+  });
 }
 
 function escapeIcsText(value: string) {
@@ -555,6 +717,14 @@ function TaskRow({
   const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
   const collaboratorCount = task.collaboratorIds?.length ?? 0;
   const isDone = task.status === "completed";
+  const contextHints = [
+    task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"
+      ? `${inferTaskCadence(task)} responsibility`
+      : "",
+    task.description ? task.description.slice(0, 140) : "",
+    task.completionNotes ? `Last note: ${task.completionNotes.slice(0, 120)}` : "",
+    task.source !== "manual" ? `Source: ${task.source}` : "",
+  ].filter(Boolean);
 
   return (
     <div
@@ -596,9 +766,32 @@ function TaskRow({
           >
             {task.title}
           </p>
-          <span className="ui-label whitespace-nowrap" data-testid={`text-task-urgency-${task.id}`}>
-            {urgencyLabel(task.urgency)}
-          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            {contextHints.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Show task context"
+                    className="inline-flex size-6 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:text-foreground"
+                    data-testid={`button-task-context-${task.id}`}
+                  >
+                    <HelpCircle className="size-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  <div className="space-y-1 text-xs">
+                    {contextHints.slice(0, 4).map((hint, index) => (
+                      <p key={`${task.id}-hint-${index}`}>{hint}</p>
+                    ))}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <span className="ui-label whitespace-nowrap" data-testid={`text-task-urgency-${task.id}`}>
+              {urgencyLabel(task.urgency)}
+            </span>
+          </div>
         </div>
         {task.description && !isDone && (
           <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{task.description}</p>
@@ -649,7 +842,7 @@ function TaskRow({
   );
 }
 
-function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
+function TaskList({ tasks, users, viewLabel }: { tasks: Task[]; users: User[]; viewLabel?: string }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
@@ -733,7 +926,9 @@ function TaskList({ tasks, users }: { tasks: Task[]; users: User[] }) {
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="work-heading">To do</h2>
-          <p className="ui-label mt-1">Prioritized and batched by timing/context</p>
+          <p className="ui-label mt-1">
+            {viewLabel ? `${viewLabel} - ` : ""}Prioritized and batched by timing/context
+          </p>
         </div>
         <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium tabular-nums">
           {open.length} open
@@ -1355,43 +1550,286 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function TeamProfilesPanel({ tasks, users }: { tasks: Task[]; users: User[] }) {
-  const profiles = users.map((user) => {
-    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
-    const open = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
-    const recurring = owned.filter((task) => task.recurrence !== "none");
-    const completed = owned.filter((task) => task.status === "completed");
-    const sources = Array.from(new Set(owned.map((task) => task.source))).slice(0, 3);
-    return { user, owned, open, recurring, completed, sources };
+function PositionProfilesPanel({
+  profiles,
+  users,
+  currentUserId,
+}: {
+  profiles: PositionProfile[];
+  users: User[];
+  currentUserId: Id;
+}) {
+  const currentUser = users.find((user) => String(user.id) === String(currentUserId));
+  const canViewRisk = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
+  const [selectedProfileId, setSelectedProfileId] = useState(profiles[0]?.id ?? "");
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
+  const targetUsers = users.filter((user) => selectedProfile && String(user.id) !== String(selectedProfile.owner.id));
+  const [targetUserId, setTargetUserId] = useState("");
+  const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
+  const [delegateUntil, setDelegateUntil] = useState("");
+
+  useEffect(() => {
+    if (!selectedProfile && profiles[0]) {
+      setSelectedProfileId(profiles[0].id);
+      return;
+    }
+    if (selectedProfile && !profiles.some((profile) => profile.id === selectedProfile.id)) {
+      setSelectedProfileId(profiles[0]?.id ?? "");
+    }
+  }, [profiles, selectedProfile]);
+
+  useEffect(() => {
+    if (!selectedProfile) return;
+    const fallback = targetUsers.find((user) => String(user.id) === String(currentUserId)) ?? targetUsers[0];
+    setTargetUserId(fallback ? String(fallback.id) : "");
+  }, [selectedProfile?.id, currentUserId, users.length]);
+
+  const assign = useMutation({
+    mutationFn: async () => {
+      if (!selectedProfile || !targetUserId) throw new Error("Choose a profile and target user.");
+      const res = await apiRequest("POST", "/api/position-profiles/assign", {
+        fromUserId: selectedProfile.owner.id,
+        toUserId: targetUserId,
+        mode,
+        delegateUntil: delegateUntil || null,
+        profileTitle: selectedProfile.title,
+      });
+      return (await res.json()) as { ok: boolean; updated: number; mode: string };
+    },
+    onSuccess: async (result) => {
+      await invalidateWorkspace();
+      toast({
+        title: mode === "transfer" ? "Profile transferred" : "Coverage delegated",
+        description: `${result.updated} active task${result.updated === 1 ? "" : "s"} updated for ${selectedProfile?.title ?? "the profile"}.`,
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not assign profile",
+        description: error instanceof Error ? error.message : "Check the profile assignment and try again.",
+        variant: "destructive",
+      });
+    },
   });
 
-  return (
-    <div className="panel" data-testid="panel-team-profiles">
-      <div className="border-b border-border px-4 py-3">
-        <h3 className="display-font text-sm font-bold">Team memory</h3>
-        <p className="ui-label mt-1">Work profile and handoff signal</p>
+  if (!selectedProfile) {
+    return (
+      <div className="panel" data-testid="panel-position-profiles">
+        <div className="border-b border-border px-4 py-3">
+          <h3 className="display-font text-sm font-bold">Position profiles</h3>
+          <p className="ui-label mt-1">No role memory yet</p>
+        </div>
+        <div className="px-4 py-3 text-sm text-muted-foreground">
+          Donnit will build profiles as tasks are assigned and completed.
+        </div>
       </div>
-      <div className="space-y-2 px-4 py-3">
-        {profiles.map((profile) => (
-          <div key={String(profile.user.id)} className="rounded-md border border-border bg-background px-3 py-2">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-foreground">{profile.user.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{profile.user.role} - {profile.user.persona}</p>
-              </div>
-              <span className="ui-label whitespace-nowrap">{profile.open.length} open</span>
+    );
+  }
+
+  return (
+    <div className="panel" data-testid="panel-position-profiles">
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="display-font text-sm font-bold">Position profiles</h3>
+            <p className="ui-label mt-1">Workforce continuity memory</p>
+          </div>
+          <BriefcaseBusiness className="size-4 text-brand-green" />
+        </div>
+      </div>
+      <div className="space-y-3 px-4 py-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="position-profile-select" className="ui-label">
+            Profile
+          </Label>
+          <select
+            id="position-profile-select"
+            value={selectedProfile.id}
+            onChange={(event) => setSelectedProfileId(event.target.value)}
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            data-testid="select-position-profile"
+          >
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.title} - {profile.owner.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="rounded-md border border-border bg-background px-3 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                Owner: {selectedProfile.owner.name} - {selectedProfile.status}
+              </p>
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-              <span className="rounded-md bg-muted px-2 py-1">{profile.completed.length} done</span>
-              <span className="rounded-md bg-muted px-2 py-1">{profile.recurring.length} recurring</span>
-              {profile.sources.map((source) => (
-                <span key={`${profile.user.id}-${source}`} className="rounded-md bg-muted px-2 py-1">
-                  {source}
-                </span>
-              ))}
+            {canViewRisk && (
+              <span
+                className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
+                  selectedProfile.riskLevel === "high"
+                    ? "bg-destructive/10 text-destructive"
+                    : selectedProfile.riskLevel === "medium"
+                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                      : "bg-brand-green/10 text-brand-green"
+                }`}
+              >
+                Risk {selectedProfile.riskScore}
+              </span>
+            )}
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-md bg-muted px-2 py-2">
+              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.currentIncompleteTasks.length}</p>
+              <p className="text-muted-foreground">open</p>
+            </div>
+            <div className="rounded-md bg-muted px-2 py-2">
+              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.recurringTasks.length}</p>
+              <p className="text-muted-foreground">recurring</p>
+            </div>
+            <div className="rounded-md bg-muted px-2 py-2">
+              <p className="font-semibold tabular-nums text-foreground">{selectedProfile.completedTasks.length}</p>
+              <p className="text-muted-foreground">learned</p>
             </div>
           </div>
-        ))}
+        </div>
+
+        {canViewRisk && selectedProfile.riskReasons.length > 0 && (
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <div className="mb-1 flex items-center gap-2">
+              <AlertTriangle className="size-4 text-muted-foreground" />
+              <p className="text-xs font-medium text-foreground">Continuity risk</p>
+            </div>
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {selectedProfile.riskReasons.slice(0, 3).map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+            <ListChecks className="size-4 text-muted-foreground" />
+            Transition checklist
+          </p>
+          <ul className="space-y-1 text-xs text-muted-foreground">
+            {selectedProfile.transitionChecklist.slice(0, 5).map((item) => (
+              <li key={item} className="flex gap-2">
+                <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {selectedProfile.currentIncompleteTasks.length > 0 && (
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {selectedProfile.currentIncompleteTasks.slice(0, 4).map((task) => (
+                <li key={String(task.id)} className="truncate">
+                  {task.dueDate ?? "No date"} - {task.title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {selectedProfile.recurringTasks.length > 0 && (
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+              <Repeat2 className="size-4 text-muted-foreground" />
+              Recurring responsibilities
+            </p>
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {selectedProfile.recurringTasks.slice(0, 4).map((task) => (
+                <li key={String(task.id)} className="truncate">
+                  {inferTaskCadence(task)} - {task.title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+            <HelpCircle className="size-4 text-muted-foreground" />
+            How-to memory
+          </p>
+          {selectedProfile.howTo.length > 0 ? (
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {selectedProfile.howTo.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted-foreground">Donnit needs richer notes on recurring tasks for this profile.</p>
+          )}
+        </div>
+
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+            <KeyRound className="size-4 text-muted-foreground" />
+            Tool access
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {(selectedProfile.tools.length > 0 ? selectedProfile.tools : ["Credential vault pending"]).map((tool) => (
+              <span key={tool} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                {tool}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border bg-background px-3 py-3">
+          <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+            <UserCog className="size-4 text-muted-foreground" />
+            Assign coverage
+          </p>
+          <div className="grid gap-2">
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as "delegate" | "transfer")}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              data-testid="select-position-assignment-mode"
+            >
+              <option value="delegate">Delegate coverage</option>
+              <option value="transfer">Transfer to new owner</option>
+            </select>
+            <select
+              value={targetUserId}
+              onChange={(event) => setTargetUserId(event.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              data-testid="select-position-assignment-user"
+            >
+              {targetUsers.map((user) => (
+                <option key={String(user.id)} value={String(user.id)}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+            {mode === "delegate" && (
+              <Input
+                type="date"
+                value={delegateUntil}
+                onChange={(event) => setDelegateUntil(event.target.value)}
+                className="h-9 text-xs"
+                data-testid="input-position-delegate-until"
+              />
+            )}
+            <Button
+              size="sm"
+              onClick={() => assign.mutate()}
+              disabled={!targetUserId || assign.isPending}
+              data-testid="button-position-assign"
+            >
+              {assign.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
+              {mode === "transfer" ? "Transfer profile" : "Start coverage"}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2872,6 +3310,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
+  const [activePositionView, setActivePositionView] = useState("all");
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
       if (typeof window === "undefined") return new Set();
@@ -3315,6 +3754,25 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
     [rawNotifications, reviewedNotificationIds],
   );
+  const positionProfiles = useMemo(
+    () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? []),
+    [data?.tasks, data?.users, data?.events],
+  );
+  const activePositionProfile = positionProfiles.find((profile) => profile.id === activePositionView) ?? null;
+  const visibleTasks = useMemo(() => {
+    if (!activePositionProfile) return data?.tasks ?? [];
+    return (data?.tasks ?? []).filter(
+      (task) =>
+        String(task.assignedToId) === String(activePositionProfile.owner.id) ||
+        String(task.delegatedToId) === String(activePositionProfile.owner.id),
+    );
+  }, [data?.tasks, activePositionProfile]);
+  useEffect(() => {
+    if (activePositionView === "all") return;
+    if (!positionProfiles.some((profile) => profile.id === activePositionView)) {
+      setActivePositionView("all");
+    }
+  }, [activePositionView, positionProfiles]);
   const markNotificationsReviewed = (ids: string[]) => {
     if (ids.length === 0) return;
     setReviewedNotificationIds((current) => {
@@ -3535,13 +3993,31 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <section className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
           <FunctionBar primaryActions={dailyActions} />
-          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-            <span className="ui-label">Today · {todayLabel}</span>
-            <Stat label="Open" value={metrics.open} />
-            <Stat label="Due today" value={metrics.dueToday} />
-            <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-            <Stat label="Approval queue" value={metrics.emailQueue} />
-            <Stat label="Completed" value={metrics.completed} />
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+              <span className="ui-label">Today · {todayLabel}</span>
+              <Stat label="Open" value={metrics.open} />
+              <Stat label="Due today" value={metrics.dueToday} />
+              <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+              <Stat label="Approval queue" value={metrics.emailQueue} />
+              <Stat label="Completed" value={metrics.completed} />
+            </div>
+            <div className="flex items-center gap-2">
+              <BriefcaseBusiness className="size-4 text-muted-foreground" />
+              <select
+                value={activePositionView}
+                onChange={(event) => setActivePositionView(event.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                data-testid="select-position-view"
+              >
+                <option value="all">All workspace work</option>
+                {positionProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.title} - {profile.owner.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </section>
@@ -3559,11 +4035,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <div className="grid gap-4 xl:grid-cols-12">
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
-                <TaskList tasks={data.tasks} users={data.users} />
+                <TaskList
+                  tasks={visibleTasks}
+                  users={data.users}
+                  viewLabel={activePositionProfile ? activePositionProfile.title : "All workspace work"}
+                />
               </div>
               {/* Narrower supporting column stack */}
               <div className="flex flex-col gap-4 xl:col-span-4">
-                <DueTodayPanel tasks={data.tasks} />
+                <DueTodayPanel tasks={visibleTasks} />
                 <AcceptancePanel
                   tasks={data.tasks}
                   suggestions={data.suggestions}
@@ -3580,7 +4060,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   suggestions={data.suggestions}
                   currentUserId={data.currentUserId}
                 />
-                <TeamProfilesPanel tasks={data.tasks} users={data.users} />
+                <PositionProfilesPanel
+                  profiles={positionProfiles}
+                  users={data.users}
+                  currentUserId={data.currentUserId}
+                />
                 <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
               </div>
             </div>

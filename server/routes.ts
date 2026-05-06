@@ -1332,6 +1332,14 @@ const documentSuggestRequestSchema = z.object({
   dataBase64: z.string().min(16).max(12_000_000),
 });
 
+const positionProfileAssignSchema = z.object({
+  fromUserId: z.union([z.string().min(1), z.number()]),
+  toUserId: z.union([z.string().min(1), z.number()]),
+  mode: z.enum(["transfer", "delegate"]),
+  delegateUntil: z.string().trim().max(20).nullable().optional(),
+  profileTitle: z.string().trim().max(160).optional(),
+});
+
 type IngestTarget = {
   orgId: string;
   assignedTo: string;
@@ -2396,6 +2404,116 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/notes", (req, res) => handleTaskAction(req, res, "note"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
+
+  // ------------------------------------------------------------------
+  // Position profile assignment
+  // ------------------------------------------------------------------
+  app.post("/api/position-profiles/assign", async (req: Request, res: Response) => {
+    const parsed = positionProfileAssignSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Position profile assignment details are incomplete." });
+      return;
+    }
+    const { mode, profileTitle = "Position profile", delegateUntil } = parsed.data;
+
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const orgId = await store.getDefaultOrgId();
+        if (!orgId) {
+          res.status(409).json({ message: "Workspace not bootstrapped." });
+          return;
+        }
+        const members = await store.listOrgMembers(orgId);
+        const actor = members.find((member) => member.user_id === auth.userId);
+        const canManage =
+          Boolean(actor?.can_assign) ||
+          ["owner", "admin", "manager"].includes(String(actor?.role ?? ""));
+        if (!canManage) {
+          res.status(403).json({ message: "Only managers and admins can assign position profiles." });
+          return;
+        }
+        const fromUserId = String(parsed.data.fromUserId);
+        const toUserId = String(parsed.data.toUserId);
+        const toMember = members.find((member) => member.user_id === toUserId);
+        if (!toMember) {
+          res.status(404).json({ message: "Target user is not a workspace member." });
+          return;
+        }
+        const tasks = await store.listTasks(orgId);
+        const active = tasks.filter(
+          (task) =>
+            task.assigned_to === fromUserId &&
+            task.status !== "completed" &&
+            task.status !== "denied",
+        );
+        if (mode === "delegate" && active.some((task) => !hasTaskRelationshipColumns(task))) {
+          res.status(409).json({ message: "Apply migration 0008 before delegating position profiles." });
+          return;
+        }
+        let updatedCount = 0;
+        for (const task of active) {
+          const patch: Partial<DonnitTask> =
+            mode === "transfer"
+              ? { assigned_to: toUserId, ...(hasTaskRelationshipColumns(task) ? { delegated_to: null } : {}) }
+              : { delegated_to: toUserId };
+          const updated = await store.updateTask(task.id, patch);
+          if (!updated) continue;
+          updatedCount += 1;
+          await store.addEvent(orgId, {
+            task_id: task.id,
+            actor_id: auth.userId,
+            type: mode === "transfer" ? "position_profile_transferred" : "position_profile_delegated",
+            note: JSON.stringify({
+              profileTitle,
+              fromUserId,
+              toUserId,
+              mode,
+              delegateUntil: delegateUntil ?? null,
+            }),
+          });
+        }
+        res.json({ ok: true, mode, updated: updatedCount });
+        return;
+      } catch (error) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    const fromUserId = parseDemoUserId(parsed.data.fromUserId);
+    const toUserId = parseDemoUserId(parsed.data.toUserId);
+    if (fromUserId === null || toUserId === null) {
+      res.status(400).json({ message: "Demo position assignment requires numeric user ids." });
+      return;
+    }
+    const tasks = (await storage.listTasks()).filter(
+      (task) => task.assignedToId === fromUserId && task.status !== "completed" && task.status !== "denied",
+    );
+    let updatedCount = 0;
+    for (const task of tasks) {
+      const updated = await storage.updateTask(
+        task.id,
+        mode === "transfer" ? { assignedToId: toUserId, delegatedToId: null } : { delegatedToId: toUserId },
+      );
+      if (!updated) continue;
+      updatedCount += 1;
+      await storage.addEvent({
+        taskId: task.id,
+        actorId: DEMO_USER_ID,
+        type: mode === "transfer" ? "position_profile_transferred" : "position_profile_delegated",
+        note: JSON.stringify({
+          profileTitle,
+          fromUserId,
+          toUserId,
+          mode,
+          delegateUntil: delegateUntil ?? null,
+        }),
+      });
+    }
+    res.json({ ok: true, mode, updated: updatedCount });
+  });
 
   // ------------------------------------------------------------------
   // Document imports

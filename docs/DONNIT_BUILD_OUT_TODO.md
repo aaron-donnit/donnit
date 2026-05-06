@@ -29,12 +29,16 @@ Shipped foundations:
 - PDF/Word/text document import into the approval inbox.
 - Enter-to-send chat input with Shift+Enter line breaks.
 - Context-batched task list ordering, reviewed-notification clearing, custom estimates up to 24 hours, and email reply draft popup.
+- Job-based Position Profiles that derive recurring responsibilities, current incomplete work, how-to memory, tool hints, transition checklist, and manager/admin continuity risk from task history.
+- Position view switcher so managers can inspect a covered role separately from their own work.
+- Position profile transfer/delegate endpoint for vacancy coverage and new-hire handoff.
 
 Known operational items:
 
 - Apply `supabase/migrations/0008_task_relationships.sql` in Supabase so delegated/collaborator fields persist as first-class columns.
 - Apply `supabase/migrations/0009_slack_sms_task_sources.sql` so approved Slack/SMS suggestions can retain source provenance.
 - Apply `supabase/migrations/0010_document_source_and_future_task_primitives.sql` so approved document suggestions retain source provenance and the database is ready for subtasks/position credential vault work.
+- Apply `supabase/migrations/20260506134441_position_profiles_foundation.sql` so explicit position profiles, assignment history, and profile knowledge can persist as the continuity product matures.
 - Keep `package-lock.json` line-ending noise uncommitted unless dependencies actually change.
 
 ## P0: Pilot-Critical Work Loop
@@ -115,11 +119,12 @@ Current sprint:
 
 Next sprint:
 
-1. Build the subtask UI/API on top of `donnit.task_subtasks`.
-2. Build the position credential vault UI/API with encryption before exposing secrets.
-3. Add real Gmail send/reply, Slack reply, and SMS outbound provider actions after final OAuth/provider scopes are approved.
-4. Tabled for MVP provider wiring - provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
-5. Tabled for MVP provider wiring - provision SMS provider webhook and verified phone routing.
-6. Persist admin settings, invites, and team management.
-7. Add visual agenda drag/rebuild and calendar conflict repair.
-8. Add design-partner analytics dashboard.
+1. Persist explicit Position Profile records from the derived profile UI and add manager approval controls for high-impact knowledge changes.
+2. Build the subtask UI/API on top of `donnit.task_subtasks`.
+3. Build the position credential vault UI/API with encryption before exposing secrets.
+4. Add real Gmail send/reply, Slack reply, and SMS outbound provider actions after final OAuth/provider scopes are approved.
+5. Tabled for MVP provider wiring - provision real Slack OAuth/bot credentials and map Slack users to Donnit users.
+6. Tabled for MVP provider wiring - provision SMS provider webhook and verified phone routing.
+7. Persist admin settings, invites, and team management.
+8. Add visual agenda drag/rebuild and calendar conflict repair.
+9. Add design-partner analytics dashboard.
