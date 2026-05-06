@@ -2749,11 +2749,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const tasks = await store.listTasks(orgId);
       const calendarContext = await fetchGoogleCalendarContext(access.accessToken);
+      const excludedTaskIds = Array.isArray(req.body?.excludedTaskIds)
+        ? new Set(req.body.excludedTaskIds.map((id: unknown) => String(id)))
+        : new Set<string>();
       const agenda = buildClientAgenda(
         tasks.map(toClientTask),
         calendarContext.busyByDate,
         calendarContext.timeZone,
-      );
+      ).filter((item) => !excludedTaskIds.has(String(item.taskId)));
       let exported = 0;
       let skipped = 0;
       let updated = 0;

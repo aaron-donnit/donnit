@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
@@ -17,6 +17,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  GripVertical,
   HelpCircle,
   History,
   Inbox,
@@ -25,8 +26,12 @@ import {
   ListPlus,
   Loader2,
   MailPlus,
+  Maximize2,
   Menu,
+  Minimize2,
   Moon,
+  Paperclip,
+  Play,
   RefreshCcw,
   Repeat2,
   Send,
@@ -524,7 +529,13 @@ function FunctionActionButton({ action }: { action: FunctionAction }) {
   );
 }
 
-function FunctionBar({ primaryActions }: { primaryActions: FunctionAction[] }) {
+function FunctionBar({
+  addTaskActions,
+  primaryActions,
+}: {
+  addTaskActions: FunctionAction[];
+  primaryActions: FunctionAction[];
+}) {
   return (
     <div
       className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0"
@@ -532,6 +543,29 @@ function FunctionBar({ primaryActions }: { primaryActions: FunctionAction[] }) {
       role="toolbar"
       aria-label="Workspace functions"
     >
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button data-testid="button-add-task-menu">
+            <ListPlus className="size-4" />
+            Add task
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-64">
+          <DropdownMenuLabel>Add task from</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {addTaskActions.map((action) => (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={action.disabled || action.loading}
+              onClick={action.onClick}
+              data-testid={`menu-add-task-${action.id}`}
+            >
+              {action.loading ? <Loader2 className="size-4 animate-spin" /> : <action.icon className="size-4" />}
+              <span>{action.label}</span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {primaryActions.map((action) => (
         <FunctionActionButton key={action.id} action={action} />
       ))}
@@ -547,6 +581,7 @@ const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
 
 function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
+  const historyRef = useRef<HTMLDivElement | null>(null);
   const chat = useMutation({
     mutationFn: async () => apiRequest("POST", "/api/chat", { message }),
     onSuccess: async () => {
@@ -554,6 +589,11 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       await invalidateWorkspace();
     },
   });
+  useEffect(() => {
+    const el = historyRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   return (
     <div
@@ -569,6 +609,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       </div>
 
       <div
+        ref={historyRef}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4"
         data-testid="panel-chat-history"
       >
@@ -709,12 +750,14 @@ function TaskRow({
   users,
   onComplete,
   onOpen,
+  onPin,
   isCompleting,
 }: {
   task: Task;
   users: User[];
   onComplete: () => void;
   onOpen: () => void;
+  onPin?: () => void;
   isCompleting: boolean;
 }) {
   const assignee = users.find((user) => user.id === task.assignedToId);
@@ -840,13 +883,34 @@ function TaskRow({
             <Eye className="size-3.5" />
             Open
           </button>
+          {onPin && !isDone && (
+            <button
+              type="button"
+              onClick={onPin}
+              className="inline-flex items-center gap-1 text-xs font-medium text-brand-green underline-offset-2 hover:underline"
+              data-testid={`button-work-task-${task.id}`}
+            >
+              <Play className="size-3.5" />
+              Work
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function TaskList({ tasks, users, viewLabel }: { tasks: Task[]; users: User[]; viewLabel?: string }) {
+function TaskList({
+  tasks,
+  users,
+  viewLabel,
+  onPinTask,
+}: {
+  tasks: Task[];
+  users: User[];
+  viewLabel?: string;
+  onPinTask?: (taskId: Id) => void;
+}) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
@@ -966,6 +1030,7 @@ function TaskList({ tasks, users, viewLabel }: { tasks: Task[]; users: User[]; v
                   isCompleting={completingId === task.id && complete.isPending}
                   onComplete={() => complete.mutate(task.id)}
                   onOpen={() => setSelectedTaskId(String(task.id))}
+                  onPin={onPinTask ? () => onPinTask(task.id) : undefined}
                 />
               ))}
             </div>
@@ -986,6 +1051,7 @@ function TaskList({ tasks, users, viewLabel }: { tasks: Task[]; users: User[]; v
                 isCompleting={false}
                 onComplete={() => undefined}
                 onOpen={() => setSelectedTaskId(String(task.id))}
+                onPin={onPinTask ? () => onPinTask(task.id) : undefined}
               />
             ))}
           </>
@@ -1361,6 +1427,167 @@ function TaskDetailDialog({
   );
 }
 
+function FloatingTaskBox({
+  task,
+  users,
+  onClose,
+}: {
+  task: Task | null;
+  users: User[];
+  onClose: () => void;
+}) {
+  const [position, setPosition] = useState(() => ({
+    x: typeof window === "undefined" ? 24 : Math.max(8, window.innerWidth - 364),
+    y: 92,
+  }));
+  const [minimized, setMinimized] = useState(false);
+  const [note, setNote] = useState("");
+  const [attachmentName, setAttachmentName] = useState("");
+  const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+
+  useEffect(() => {
+    setNote(task?.completionNotes ?? "");
+    setMinimized(false);
+  }, [task?.id]);
+
+  const saveNote = useMutation({
+    mutationFn: async () => {
+      if (!task) throw new Error("No active task.");
+      const noteText = attachmentName.trim()
+        ? `${note.trim()}\nAttachment noted: ${attachmentName.trim()}`.trim()
+        : note.trim();
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/notes`, { note: noteText || "Working update." });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      setAttachmentName("");
+      toast({ title: "Task note saved", description: "Your work update was added." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save note",
+        description: error instanceof Error ? error.message : "Try saving the work note again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  if (!task) return null;
+  const owner = users.find((user) => String(user.id) === String(task.assignedToId));
+  const maxX = typeof window === "undefined" ? 24 : Math.max(8, window.innerWidth - 360);
+  const maxY = typeof window === "undefined" ? 92 : Math.max(72, window.innerHeight - (minimized ? 76 : 420));
+  const clampedX = Math.min(Math.max(8, position.x), maxX);
+  const clampedY = Math.min(Math.max(72, position.y), maxY);
+
+  return (
+    <div
+      className="fixed z-[70] w-[min(340px,calc(100vw-1rem))] rounded-md border border-border bg-background shadow-2xl"
+      style={{ right: "auto", left: clampedX, top: clampedY }}
+      data-testid="floating-task-box"
+    >
+      <div
+        className="flex cursor-move items-center justify-between gap-2 border-b border-border px-3 py-2"
+        onPointerDown={(event) => {
+          dragRef.current = { startX: event.clientX, startY: event.clientY, originX: clampedX, originY: clampedY };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!dragRef.current) return;
+          const nextX = dragRef.current.originX + event.clientX - dragRef.current.startX;
+          const nextY = dragRef.current.originY + event.clientY - dragRef.current.startY;
+          setPosition({ x: nextX, y: nextY });
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-foreground">Working on</p>
+            <p className="truncate text-[11px] text-muted-foreground">{owner?.name ?? "Unassigned"}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={() => setMinimized((value) => !value)}
+            aria-label={minimized ? "Expand active task" : "Minimize active task"}
+            data-testid="button-floating-task-minimize"
+          >
+            {minimized ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={onClose}
+            aria-label="Close active task"
+            data-testid="button-floating-task-close"
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+      {!minimized && (
+        <div className="space-y-3 px-3 py-3">
+          <div>
+            <p className="line-clamp-2 text-sm font-medium leading-snug text-foreground">{task.title}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {task.dueDate ?? "No due date"} / {task.estimatedMinutes} min / {urgencyLabel(task.urgency)}
+            </p>
+          </div>
+          {task.description && (
+            <p className="max-h-20 overflow-y-auto rounded-md bg-muted px-2 py-2 text-xs leading-relaxed text-muted-foreground">
+              {task.description}
+            </p>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="floating-task-note" className="ui-label">
+              Work note
+            </Label>
+            <Textarea
+              id="floating-task-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Add an update, blocker, or next step."
+              className="h-24 resize-none text-xs"
+              maxLength={1000}
+              data-testid="input-floating-task-note"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="floating-task-attachment" className="ui-label">
+              Attachment note
+            </Label>
+            <Input
+              id="floating-task-attachment"
+              value={attachmentName}
+              onChange={(event) => setAttachmentName(event.target.value)}
+              placeholder="Paste file name or link for now"
+              className="h-8 text-xs"
+              data-testid="input-floating-task-attachment"
+            />
+          </div>
+          <Button
+            size="sm"
+            className="w-full"
+            onClick={() => saveNote.mutate()}
+            disabled={saveNote.isPending}
+            data-testid="button-floating-task-save"
+          >
+            {saveNote.isPending ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
+            Save update
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DueTodayPanel({ tasks }: { tasks: Task[] }) {
   const today = new Date().toISOString().slice(0, 10);
   const dueToday = tasks.filter(
@@ -1400,17 +1627,26 @@ function DueTodayPanel({ tasks }: { tasks: Task[] }) {
 
 function AgendaPanel({
   agenda,
+  excludedTaskIds,
+  approved,
   onBuild,
+  onToggleTask,
+  onApprove,
   onExport,
   isBuilding,
 }: {
   agenda: AgendaItem[];
+  excludedTaskIds: Set<string>;
+  approved: boolean;
   onBuild: () => void;
+  onToggleTask: (taskId: Id) => void;
+  onApprove: () => void;
   onExport: () => void;
   isBuilding: boolean;
 }) {
-  const totalMinutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
-  const scheduledCount = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
+  const includedAgenda = agenda.filter((item) => !excludedTaskIds.has(String(item.taskId)));
+  const totalMinutes = includedAgenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+  const scheduledCount = includedAgenda.filter((item) => item.scheduleStatus === "scheduled").length;
   return (
     <div className="panel" data-testid="panel-agenda" id="panel-agenda">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -1435,7 +1671,7 @@ function AgendaPanel({
             variant="outline"
             size="sm"
             onClick={onExport}
-            disabled={agenda.length === 0}
+            disabled={includedAgenda.length === 0 || !approved}
             data-testid="button-panel-export-agenda"
           >
             <CalendarPlus className="size-4" />
@@ -1447,11 +1683,28 @@ function AgendaPanel({
         {agenda.length === 0 ? (
           <p className="text-sm text-muted-foreground">Build an agenda after tasks are added.</p>
         ) : (
-          <ol className="space-y-2">
+          <div className="space-y-3">
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-muted-foreground">
+                  Review the batch, remove anything that should not be scheduled, then approve before export.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={onApprove}
+                  disabled={includedAgenda.length === 0 || approved}
+                  data-testid="button-approve-agenda"
+                >
+                  <Check className="size-4" />
+                  {approved ? "Approved" : "Approve agenda"}
+                </Button>
+              </div>
+            </div>
+            <ol className="space-y-2">
             {agenda.map((item) => (
               <li
                 key={`${item.taskId}-${item.order}`}
-                className={`task-row ${urgencyClass(item.urgency)}`}
+                className={`task-row ${urgencyClass(item.urgency)} ${excludedTaskIds.has(String(item.taskId)) ? "opacity-55" : ""}`}
                 data-testid={`row-agenda-${item.taskId}`}
               >
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
@@ -1463,9 +1716,18 @@ function AgendaPanel({
                     {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
                   </p>
                 </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onToggleTask(item.taskId)}
+                  data-testid={`button-agenda-toggle-${item.taskId}`}
+                >
+                  {excludedTaskIds.has(String(item.taskId)) ? "Add" : "Remove"}
+                </Button>
               </li>
             ))}
-          </ol>
+            </ol>
+          </div>
         )}
       </div>
     </div>
@@ -1545,6 +1807,111 @@ function ReportingPanel({
   );
 }
 
+function TeamViewPanel({
+  tasks,
+  users,
+  currentUserId,
+}: {
+  tasks: Task[];
+  users: User[];
+  currentUserId: Id;
+}) {
+  const currentUser = users.find((user) => String(user.id) === String(currentUserId));
+  const canViewTeam = Boolean(currentUser && ["owner", "admin", "manager"].includes(currentUser.role));
+  const teamMembers = users.filter((user) => {
+    if (!currentUser) return false;
+    if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
+    return String(user.managerId) === String(currentUserId);
+  });
+  const [selectedUserId, setSelectedUserId] = useState(String(teamMembers[0]?.id ?? ""));
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!teamMembers.some((member) => String(member.id) === selectedUserId)) {
+      setSelectedUserId(String(teamMembers[0]?.id ?? ""));
+    }
+  }, [selectedUserId, teamMembers]);
+
+  if (!canViewTeam) return null;
+  const member = teamMembers.find((user) => String(user.id) === selectedUserId) ?? teamMembers[0];
+  const memberTasks = member ? tasks.filter((task) => String(task.assignedToId) === String(member.id)) : [];
+  const active = memberTasks.filter((task) => task.status !== "completed" && task.status !== "denied");
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = active.filter((task) => task.dueDate && task.dueDate < today);
+  const completed = memberTasks.filter((task) => task.status === "completed");
+  const delegated = active.filter((task) => task.delegatedToId);
+  const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+
+  return (
+    <div className="panel" data-testid="panel-team-view">
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="display-font text-sm font-bold">Team</h3>
+            <p className="ui-label mt-1">Manager view by person</p>
+          </div>
+          <Users className="size-4 text-brand-green" />
+        </div>
+      </div>
+      <div className="space-y-3 px-4 py-3">
+        {teamMembers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No assigned team members yet.</p>
+        ) : (
+          <>
+            <select
+              value={String(member?.id ?? "")}
+              onChange={(event) => setSelectedUserId(event.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              data-testid="select-team-member"
+            >
+              {teamMembers.map((user) => (
+                <option key={String(user.id)} value={String(user.id)}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              <ReportMetric label="Open" value={String(active.length)} />
+              <ReportMetric label="Overdue" value={String(overdue.length)} />
+              <ReportMetric label="Done" value={String(completed.length)} />
+              <ReportMetric label="Deleg." value={String(delegated.length)} />
+            </div>
+            <div className="space-y-2">
+              {active.slice(0, 5).map((task) => (
+                <button
+                  key={String(task.id)}
+                  type="button"
+                  onClick={() => setSelectedTaskId(String(task.id))}
+                  className={`w-full rounded-md border border-border bg-background px-3 py-2 text-left text-xs transition hover:border-brand-green/60 ${urgencyClass(task.urgency)}`}
+                  data-testid={`button-team-task-${task.id}`}
+                >
+                  <span className="block truncate font-medium text-foreground">{task.title}</span>
+                  <span className="mt-0.5 block truncate text-muted-foreground">
+                    {task.dueDate ?? "No due date"} / {task.status} / {task.estimatedMinutes} min
+                  </span>
+                </button>
+              ))}
+              {active.length === 0 && (
+                <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-sm text-muted-foreground">
+                  No active tasks for this team member.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+      <TaskDetailDialog
+        task={selectedTask}
+        users={users}
+        open={Boolean(selectedTask)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedTaskId(null);
+        }}
+      />
+    </div>
+  );
+}
+
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2">
@@ -1579,6 +1946,14 @@ function PositionProfilesPanel({
       return new Set(JSON.parse(window.localStorage.getItem("donnit.deletedPositionProfiles") ?? "[]"));
     } catch {
       return new Set();
+    }
+  });
+  const [renamedProfileTitles, setRenamedProfileTitles] = useState<Record<string, string>>(() => {
+    try {
+      if (typeof window === "undefined") return {};
+      return JSON.parse(window.localStorage.getItem("donnit.renamedPositionProfiles") ?? "{}");
+    } catch {
+      return {};
     }
   });
   const [newProfileTitle, setNewProfileTitle] = useState("");
@@ -1624,10 +1999,12 @@ function PositionProfilesPanel({
   const repositoryProfiles = useMemo(
     () =>
       [
-        ...profiles.filter((profile) => !deletedProfileIds.has(profile.id)),
+        ...profiles
+          .filter((profile) => !deletedProfileIds.has(profile.id))
+          .map((profile) => ({ ...profile, title: renamedProfileTitles[profile.id] ?? profile.title })),
         ...customProfiles,
       ].sort((a, b) => a.title.localeCompare(b.title)),
-    [customProfiles, deletedProfileIds, profiles],
+    [customProfiles, deletedProfileIds, profiles, renamedProfileTitles],
   );
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
@@ -1670,6 +2047,23 @@ function PositionProfilesPanel({
     if (typeof window !== "undefined") {
       window.localStorage.setItem("donnit.deletedPositionProfiles", JSON.stringify(Array.from(next)));
     }
+  };
+  const persistRenamedProfiles = (next: Record<string, string>) => {
+    setRenamedProfileTitles(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("donnit.renamedPositionProfiles", JSON.stringify(next));
+    }
+  };
+  const renameProfile = (profileId: string, title: string) => {
+    const trimmed = title.trim();
+    if (trimmed.length < 2) return;
+    if (profileId.startsWith("custom-position-")) {
+      persistCustomProfiles(
+        customProfileMetas.map((profile) => (profile.id === profileId ? { ...profile, title: trimmed } : profile)),
+      );
+      return;
+    }
+    persistRenamedProfiles({ ...renamedProfileTitles, [profileId]: trimmed });
   };
   const addProfile = () => {
     const title = newProfileTitle.trim();
@@ -1956,6 +2350,28 @@ function PositionProfilesPanel({
                   <p className="text-muted-foreground">learned</p>
                 </div>
               </div>
+              {canManageProfiles && (
+                <div className="mt-3 space-y-1.5">
+                  <Label htmlFor="position-profile-rename" className="ui-label">
+                    Admin name
+                  </Label>
+                  <Input
+                    id="position-profile-rename"
+                    key={selectedProfile.id}
+                    defaultValue={selectedProfile.title}
+                    maxLength={160}
+                    onBlur={(event) => renameProfile(selectedProfile.id, event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        renameProfile(selectedProfile.id, event.currentTarget.value);
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    data-testid="input-position-profile-rename"
+                  />
+                </div>
+              )}
             </div>
 
             {selectedProfile.riskReasons.length > 0 && (
@@ -2545,11 +2961,7 @@ function NotificationCenter({
 }) {
   const highCount = notifications.filter((item) => item.severity === "high").length;
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open && notifications.length > 0) onReviewed(notifications.map((item) => item.id));
-      }}
-    >
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="icon" aria-label="Open notifications" data-testid="button-notifications">
           <span className="relative inline-flex">
@@ -2571,7 +2983,12 @@ function NotificationCenter({
           <DropdownMenuItem disabled>No task alerts right now.</DropdownMenuItem>
         ) : (
           notifications.map((item) => (
-            <DropdownMenuItem key={item.id} className="items-start gap-2">
+            <DropdownMenuItem
+              key={item.id}
+              className="items-start gap-2"
+              onClick={() => onReviewed([item.id])}
+              data-testid={`notification-item-${item.id}`}
+            >
               <span
                 className={`mt-1 size-2 shrink-0 rounded-full ${
                   item.severity === "high"
@@ -3363,6 +3780,31 @@ function WorkspaceSettingsDialog({
   const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
+  const [autoEmailScan, setAutoEmailScan] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("donnit.autoEmailScan") === "true";
+  });
+  const [autoSlackScan, setAutoSlackScan] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("donnit.autoSlackScan") === "true";
+  });
+  const [unreadDelayMinutes, setUnreadDelayMinutes] = useState(() => {
+    if (typeof window === "undefined") return 2;
+    return Number(window.localStorage.getItem("donnit.unreadDelayMinutes") ?? "2") || 2;
+  });
+  const updateAutoEmailScan = (value: boolean) => {
+    setAutoEmailScan(value);
+    if (typeof window !== "undefined") window.localStorage.setItem("donnit.autoEmailScan", String(value));
+  };
+  const updateAutoSlackScan = (value: boolean) => {
+    setAutoSlackScan(value);
+    if (typeof window !== "undefined") window.localStorage.setItem("donnit.autoSlackScan", String(value));
+  };
+  const updateUnreadDelay = (value: number) => {
+    const next = Math.min(60, Math.max(1, Math.round(value) || 2));
+    setUnreadDelayMinutes(next);
+    if (typeof window !== "undefined") window.localStorage.setItem("donnit.unreadDelayMinutes", String(next));
+  };
   const testSlack = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/integrations/slack/suggest", {
@@ -3529,6 +3971,67 @@ function WorkspaceSettingsDialog({
           </div>
 
           <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">Automation settings</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Controls for live task suggestion behavior as provider webhooks are connected.
+              </p>
+            </div>
+            <div className="grid gap-3 px-3 py-3">
+              <label className="flex items-start justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                <span>
+                  <span className="block text-sm font-medium text-foreground">Auto-suggest unread Gmail tasks</span>
+                  <span className="block text-xs text-muted-foreground">
+                    When enabled, Donnit should queue suggestions after unread messages remain unanswered.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={autoEmailScan}
+                  onChange={(event) => updateAutoEmailScan(event.target.checked)}
+                  className="mt-1"
+                  data-testid="toggle-auto-email-scan"
+                />
+              </label>
+              <label className="flex items-start justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                <span>
+                  <span className="block text-sm font-medium text-foreground">Auto-suggest unread Slack tasks</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Slack messages should wait for the unread delay before Donnit asks for task approval.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={autoSlackScan}
+                  onChange={(event) => updateAutoSlackScan(event.target.checked)}
+                  className="mt-1"
+                  data-testid="toggle-auto-slack-scan"
+                />
+              </label>
+              <div className="grid gap-1.5 rounded-md border border-border bg-background px-3 py-2 sm:grid-cols-[1fr_120px] sm:items-center">
+                <div>
+                  <Label htmlFor="automation-unread-delay" className="text-sm font-medium text-foreground">
+                    Unread delay
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Default is 2 minutes so answered messages do not create noisy prompts.
+                  </p>
+                </div>
+                <Input
+                  id="automation-unread-delay"
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={unreadDelayMinutes}
+                  onChange={(event) => updateUnreadDelay(Number(event.target.value))}
+                  className="h-9"
+                  data-testid="input-automation-unread-delay"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border">
             <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
               <p className="text-sm font-medium text-foreground">People and roles</p>
               <span className="ui-label">{managers.length} manager{managers.length === 1 ? "" : "s"}</span>
@@ -3598,6 +4101,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [agendaExcludedTaskIds, setAgendaExcludedTaskIds] = useState<Set<string>>(new Set());
+  const [agendaApproved, setAgendaApproved] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
       if (typeof window === "undefined") return new Set();
@@ -3969,6 +4475,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       return agenda;
     },
     onSuccess: (agenda) => {
+      setAgendaExcludedTaskIds(new Set());
+      setAgendaApproved(false);
       const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
       const scheduled = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
       toast({
@@ -3986,7 +4494,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const exportGoogleCalendar = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/integrations/google/calendar/export", {});
+      const res = await apiRequest("POST", "/api/integrations/google/calendar/export", {
+        excludedTaskIds: Array.from(agendaExcludedTaskIds),
+      });
       return (await res.json()) as { ok: boolean; exported: number; updated: number; skipped: number; total: number };
     },
     onSuccess: (result) => {
@@ -4045,6 +4555,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? []),
     [data?.tasks, data?.users, data?.events],
   );
+  const approvedAgenda = useMemo(
+    () => (data?.agenda ?? []).filter((item) => !agendaExcludedTaskIds.has(String(item.taskId))),
+    [agendaExcludedTaskIds, data?.agenda],
+  );
   const markNotificationsReviewed = (ids: string[]) => {
     if (ids.length === 0) return;
     setReviewedNotificationIds((current) => {
@@ -4080,16 +4594,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const oauthData = oauthStatus.data;
   const currentUser = data.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null;
+  const activeTask = data.tasks.find((task) => String(task.id) === activeTaskId) ?? null;
   const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const scrollToReporting = () => {
     document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  const dailyActions: FunctionAction[] = [
+  const addTaskActions: FunctionAction[] = [
     {
       id: "create-todo",
-      label: "Quick add",
+      label: "Chat quick add",
       icon: ListPlus,
       primary: true,
       onClick: () => {
@@ -4098,6 +4613,22 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       },
       hint: "Focus chat to dictate a new list",
     },
+    {
+      id: "import-document",
+      label: "Import doc",
+      icon: FileText,
+      onClick: () => setDocumentImportOpen(true),
+      hint: "Upload a PDF or Word document and queue task suggestions",
+    },
+    {
+      id: "assign-task",
+      label: "Assign task",
+      icon: UserPlus,
+      onClick: () => setAssignTaskOpen(true),
+      hint: "Create and assign a task",
+    },
+  ];
+  const dailyActions: FunctionAction[] = [
     {
       id: "approval-inbox",
       label: "Approval inbox",
@@ -4117,26 +4648,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         : "Scan unread Gmail and queue suggested tasks",
     },
     {
-      id: "import-document",
-      label: "Import doc",
-      icon: FileText,
-      onClick: () => setDocumentImportOpen(true),
-      hint: "Upload a PDF or Word document and queue task suggestions",
-    },
-    {
       id: "build-agenda",
       label: "Build agenda",
       icon: Workflow,
       onClick: () => buildAgenda.mutate(),
       loading: buildAgenda.isPending,
       hint: "Refresh and confirm today's priority order",
-    },
-    {
-      id: "assign-task",
-      label: "Assign task",
-      icon: UserPlus,
-      onClick: () => setAssignTaskOpen(true),
-      hint: "Create and assign a task",
     },
   ];
   const toolsSyncActions: FunctionAction[] = [
@@ -4145,7 +4662,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       label: "Export calendar",
       icon: CalendarPlus,
       onClick: () => setCalendarExportOpen(true),
-      hint: "Add the agenda to Google Calendar or download an .ics file",
+      disabled: !agendaApproved || approvedAgenda.length === 0,
+      hint: agendaApproved
+        ? "Add the approved agenda to Google Calendar or download an .ics file"
+        : "Approve the agenda before exporting",
     },
     ...(showConnectGmail
       ? [
@@ -4276,7 +4796,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       {/* Function bar */}
       <section className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
-          <FunctionBar primaryActions={dailyActions} />
+          <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="ui-label">Today · {todayLabel}</span>
             <Stat label="Open" value={metrics.open} />
@@ -4305,6 +4825,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   tasks={data.tasks}
                   users={data.users}
                   viewLabel="All workspace work"
+                  onPinTask={(taskId) => setActiveTaskId(String(taskId))}
                 />
               </div>
               {/* Narrower supporting column stack */}
@@ -4317,9 +4838,30 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 />
                 <AgendaPanel
                   agenda={data.agenda}
+                  excludedTaskIds={agendaExcludedTaskIds}
+                  approved={agendaApproved}
                   onBuild={() => buildAgenda.mutate()}
+                  onToggleTask={(taskId) => {
+                    setAgendaApproved(false);
+                    setAgendaExcludedTaskIds((current) => {
+                      const next = new Set(current);
+                      const id = String(taskId);
+                      if (next.has(id)) next.delete(id);
+                      else next.add(id);
+                      return next;
+                    });
+                  }}
+                  onApprove={() => {
+                    setAgendaApproved(true);
+                    toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
+                  }}
                   onExport={() => setCalendarExportOpen(true)}
                   isBuilding={buildAgenda.isPending}
+                />
+                <TeamViewPanel
+                  tasks={data.tasks}
+                  users={data.users}
+                  currentUserId={data.currentUserId}
                 />
                 <ReportingPanel
                   tasks={data.tasks}
@@ -4348,7 +4890,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <CalendarExportDialog
         open={calendarExportOpen}
         onOpenChange={setCalendarExportOpen}
-        agenda={data.agenda}
+        agenda={approvedAgenda}
         oauthStatus={oauthData}
         onDownload={() => downloadAgendaCalendar(data.agenda)}
         onExportGoogle={() => exportGoogleCalendar.mutate()}
@@ -4377,6 +4919,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         isConnectingGmail={connectGmail.isPending}
         isScanningEmail={scan.isPending}
       />
+      <FloatingTaskBox task={activeTask} users={data.users} onClose={() => setActiveTaskId(null)} />
 
       <footer className="border-t border-border bg-background/80">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
