@@ -13,6 +13,7 @@ import {
   buildGmailAuthUrl,
   buildManualEmailCandidate,
   exchangeGmailAuthCode,
+  GMAIL_OAUTH_SCOPE,
   GmailTokenExchangeError,
   getGmailOAuthConfig,
   getIntegrationStatus,
@@ -840,6 +841,10 @@ function calendarEventIdFromInput(input: string) {
 
 function calendarEventIdForAgendaItem(item: AgendaItem) {
   return calendarEventIdFromInput(String(item.taskId));
+}
+
+function hasOAuthScope(scope: string | null | undefined, target: string) {
+  return Boolean(scope?.split(/\s+/).includes(target));
 }
 
 function legacyCalendarEventIdForAgendaItem(item: AgendaItem) {
@@ -4269,16 +4274,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
       const account = await store.getGmailAccount();
       const connected = Boolean(account && account.status === "connected");
+      const gmailScopeConnected = Boolean(connected && hasOAuthScope(account?.scope, GMAIL_OAUTH_SCOPE));
       const calendarConnected = Boolean(connected && hasGoogleCalendarScope(account?.scope));
       const requiresReconnect = Boolean(account && account.status === "error");
+      const expiresMs = account?.expires_at ? new Date(account.expires_at).getTime() : NaN;
+      const tokenExpiresSoon = Boolean(connected && Number.isFinite(expiresMs) && expiresMs - Date.now() < 10 * 60_000);
+      const health =
+        !cfg.configured
+          ? "oauth_not_configured"
+          : !account
+            ? "not_connected"
+            : requiresReconnect || tokenExpiresSoon
+              ? "needs_reconnect"
+              : !gmailScopeConnected
+                ? "gmail_scope_missing"
+                : !calendarConnected
+                  ? "calendar_scope_missing"
+                  : "ready";
       res.json({
         configured: cfg.configured,
         authenticated: true,
         connected,
+        gmailScopeConnected,
         calendarConnected,
         calendarRequiresReconnect: connected && !calendarConnected,
         requiresReconnect,
+        tokenExpiresSoon,
+        health,
         email: account?.email ?? null,
+        connectedAt: account?.connected_at ?? null,
+        expiresAt: account?.expires_at ?? null,
         lastScannedAt: account?.last_scanned_at ?? null,
         status: account?.status ?? null,
       });

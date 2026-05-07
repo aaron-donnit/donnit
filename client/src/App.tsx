@@ -5702,6 +5702,10 @@ function ConnectedToolRow({
   action,
   loading,
   disabled,
+  secondaryActionLabel,
+  secondaryAction,
+  secondaryLoading,
+  secondaryDisabled,
 }: {
   icon: typeof Inbox;
   name: string;
@@ -5711,6 +5715,10 @@ function ConnectedToolRow({
   action: () => void;
   loading?: boolean;
   disabled?: boolean;
+  secondaryActionLabel?: string;
+  secondaryAction?: () => void;
+  secondaryLoading?: boolean;
+  secondaryDisabled?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -5726,18 +5734,32 @@ function ConnectedToolRow({
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>
         </div>
       </div>
-      <Button
-        type="button"
-        variant={status === "ready" ? "outline" : "default"}
-        size="sm"
-        onClick={action}
-        disabled={disabled || loading}
-        className="shrink-0"
-        data-testid={`button-tool-${name.toLowerCase().replace(/\s+/g, "-")}`}
-      >
-        {loading ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-        {actionLabel}
-      </Button>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        {secondaryAction && secondaryActionLabel && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={secondaryAction}
+            disabled={secondaryDisabled || secondaryLoading}
+            data-testid={`button-tool-${name.toLowerCase().replace(/\s+/g, "-")}-secondary`}
+          >
+            {secondaryLoading ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+            {secondaryActionLabel}
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant={status === "ready" ? "outline" : "default"}
+          size="sm"
+          onClick={action}
+          disabled={disabled || loading}
+          data-testid={`button-tool-${name.toLowerCase().replace(/\s+/g, "-")}`}
+        >
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+          {actionLabel}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -5753,9 +5775,11 @@ function WorkspaceSettingsDialog({
   integrations,
   oauthStatus,
   onConnectGmail,
+  onDisconnectGmail,
   onScanEmail,
   onOpenCalendarExport,
   isConnectingGmail,
+  isDisconnectingGmail,
   isScanningEmail,
 }: {
   open: boolean;
@@ -5768,9 +5792,11 @@ function WorkspaceSettingsDialog({
   integrations: Bootstrap["integrations"];
   oauthStatus?: GmailOAuthStatus;
   onConnectGmail: () => void;
+  onDisconnectGmail: () => void;
   onScanEmail: () => void;
   onOpenCalendarExport: () => void;
   isConnectingGmail: boolean;
+  isDisconnectingGmail: boolean;
   isScanningEmail: boolean;
 }) {
   const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
@@ -5778,6 +5804,19 @@ function WorkspaceSettingsDialog({
   const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
+  const gmailReady = Boolean(oauthStatus?.connected && oauthStatus.gmailScopeConnected && !oauthStatus.tokenExpiresSoon);
+  const googleHealthLabel =
+    oauthStatus?.health === "ready"
+      ? "Ready"
+      : oauthStatus?.health === "calendar_scope_missing"
+        ? "Calendar permission missing"
+        : oauthStatus?.health === "gmail_scope_missing"
+          ? "Gmail permission missing"
+          : oauthStatus?.health === "needs_reconnect"
+            ? "Reconnect required"
+            : oauthStatus?.health === "oauth_not_configured"
+              ? "OAuth not configured"
+              : "Not connected";
   const [autoEmailScan, setAutoEmailScan] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("donnit.autoEmailScan") === "true";
@@ -5880,7 +5919,7 @@ function WorkspaceSettingsDialog({
             <div className="rounded-md border border-border px-3 py-3">
               <p className="ui-label">Google</p>
               <p className="mt-1 text-sm font-medium text-foreground">
-                {oauthStatus?.connected ? "Connected" : "Not connected"}
+                {googleHealthLabel}
               </p>
             </div>
           </div>
@@ -5905,20 +5944,25 @@ function WorkspaceSettingsDialog({
               <ConnectedToolRow
                 icon={MailPlus}
                 name="Gmail"
-                status={oauthStatus?.connected ? "ready" : needsGoogleReconnect ? "warning" : "setup"}
+                status={gmailReady ? "ready" : needsGoogleReconnect || oauthStatus?.health === "gmail_scope_missing" ? "warning" : "setup"}
                 detail={
-                  oauthStatus?.connected
-                    ? `Scanning ${oauthStatus.email ?? "connected Gmail"}. Last scan: ${oauthStatus.lastScannedAt ? formatReceivedAt(oauthStatus.lastScannedAt) : "not yet scanned"}.`
+                  gmailReady
+                    ? `Scanning ${oauthStatus?.email ?? "connected Gmail"}. Last scan: ${oauthStatus?.lastScannedAt ? formatReceivedAt(oauthStatus.lastScannedAt) : "not yet scanned"}.`
                     : needsGoogleReconnect
                       ? "Google authorization needs to be refreshed before scanning email."
+                      : oauthStatus?.health === "gmail_scope_missing"
+                        ? "Reconnect Google and approve Gmail read access to scan unread messages."
                       : oauthStatus?.configured
                         ? "OAuth is configured; connect a Gmail account to scan unread messages."
                         : "Google OAuth environment variables are not configured."
                 }
-                actionLabel={oauthStatus?.connected ? "Scan email" : needsGoogleReconnect ? "Reconnect" : "Connect"}
-                action={oauthStatus?.connected ? onScanEmail : onConnectGmail}
+                actionLabel={gmailReady ? "Scan email" : needsGoogleReconnect || oauthStatus?.health === "gmail_scope_missing" ? "Reconnect" : "Connect"}
+                action={gmailReady ? onScanEmail : onConnectGmail}
                 loading={isScanningEmail || isConnectingGmail}
-                disabled={!oauthStatus?.connected && !oauthStatus?.configured}
+                disabled={!gmailReady && !oauthStatus?.configured}
+                secondaryActionLabel={oauthStatus?.connected ? "Disconnect" : undefined}
+                secondaryAction={oauthStatus?.connected ? onDisconnectGmail : undefined}
+                secondaryLoading={isDisconnectingGmail}
               />
               <ConnectedToolRow
                 icon={CalendarCheck}
@@ -5931,10 +5975,13 @@ function WorkspaceSettingsDialog({
                       ? "Reconnect Google to grant Calendar access."
                       : "Connect Google with Calendar access before direct agenda sync."
                 }
-                actionLabel={calendarReady ? "Open export" : "Connect"}
+                actionLabel={calendarReady ? "Open export" : needsGoogleReconnect ? "Reconnect" : "Connect"}
                 action={calendarReady ? onOpenCalendarExport : onConnectGmail}
                 loading={isConnectingGmail}
                 disabled={!calendarReady && !oauthStatus?.configured}
+                secondaryActionLabel={oauthStatus?.connected ? "Disconnect" : undefined}
+                secondaryAction={oauthStatus?.connected ? onDisconnectGmail : undefined}
+                secondaryLoading={isDisconnectingGmail}
               />
               <ConnectedToolRow
                 icon={Inbox}
@@ -6077,10 +6124,15 @@ type GmailOAuthStatus = {
   configured: boolean;
   authenticated: boolean;
   connected: boolean;
+  gmailScopeConnected?: boolean;
   calendarConnected?: boolean;
   calendarRequiresReconnect?: boolean;
   requiresReconnect?: boolean;
+  tokenExpiresSoon?: boolean;
+  health?: "ready" | "oauth_not_configured" | "not_connected" | "needs_reconnect" | "gmail_scope_missing" | "calendar_scope_missing";
   email?: string | null;
+  connectedAt?: string | null;
+  expiresAt?: string | null;
   lastScannedAt?: string | null;
   status?: string | null;
 };
@@ -6368,6 +6420,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
+      await invalidateWorkspace();
       toast({ title: "Gmail disconnected", description: "Donnit will no longer scan this Gmail account." });
     },
   });
@@ -6384,6 +6437,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
     onSuccess: async (result) => {
       await invalidateWorkspace();
+      await queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
       const created = result?.createdSuggestions ?? 0;
       const scanned = result?.scannedCandidates ?? 0;
       toast({
@@ -6562,6 +6616,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       return (await res.json()) as { ok: boolean; exported: number; updated: number; skipped: number; total: number };
     },
     onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
       const synced = result.exported + result.updated;
       toast({
         title: "Google Calendar updated",
@@ -7056,9 +7111,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         integrations={data.integrations}
         oauthStatus={oauthData}
         onConnectGmail={() => connectGmail.mutate()}
+        onDisconnectGmail={() => disconnectGmail.mutate()}
         onScanEmail={() => scan.mutate()}
         onOpenCalendarExport={() => setCalendarExportOpen(true)}
         isConnectingGmail={connectGmail.isPending}
+        isDisconnectingGmail={disconnectGmail.isPending}
         isScanningEmail={scan.isPending}
       />
       <TaskDetailDialog

@@ -138,6 +138,12 @@ CEO approval criteria:
 - Automatic suggestions enter the same approval inbox.
 - Source mix reporting proves which tools are creating value.
 
+Step 7.1 implementation status:
+
+- Extended Google OAuth health reporting with Gmail scope, Calendar scope, token expiry, and typed health state.
+- Added Gmail and Google Calendar reconnect/disconnect controls to Workspace settings.
+- Refreshed integration status after Gmail scan, calendar export, and disconnect events.
+
 ## Step 8: Onboarding and Pilot Readiness
 
 Goal: make the product usable by design partners with less founder explanation.
