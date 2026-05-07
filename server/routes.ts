@@ -1383,11 +1383,30 @@ function extractOutputText(response: any): string | null {
   return null;
 }
 
-async function extractChatTaskWithAi(message: string, memberLabels: string[]): Promise<AiTaskExtraction | null> {
+async function extractTaskWithAi(input: {
+  source: SuggestionSource | "chat";
+  text: string;
+  memberLabels?: string[];
+  from?: string;
+  subject?: string;
+  channel?: string;
+  fallbackTitle?: string;
+}): Promise<AiTaskExtraction | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
+  const sourceInstructions: Record<SuggestionSource | "chat", string> = {
+    chat: "Manager chat input may contain assignment commands, due dates, urgency, and time estimates.",
+    email:
+      "Email input may be a receipt, invoice, scheduling request, approval request, access notice, customer request, or FYI. Create a task only from the actionable next step implied by the email.",
+    slack:
+      "Slack input may be informal. Convert the actual request into a clean task title instead of copying the message.",
+    sms:
+      "SMS input may be short or fragmented. Infer the intended task conservatively and keep it clear.",
+    document:
+      "Document input may contain bullet points, meeting notes, policies, or project plans. Extract the clearest actionable item.",
+  };
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -1402,13 +1421,19 @@ async function extractChatTaskWithAi(message: string, memberLabels: string[]): P
           {
             role: "system",
             content:
-              "Extract one actionable task from manager input. Return only fields that fit the schema. Use null dueDate when no date is clear. Keep titles grammatical and concise.",
+              "Extract one actionable Donnit task. Return only fields that fit the schema. Use null dueDate when no date is clear. Keep titles grammatical, concise, and written as an action. Do not copy raw email, Slack, SMS, chat, or document text when a cleaner interpretation is possible.",
           },
           {
             role: "user",
             content: JSON.stringify({
-              message,
-              availableAssignees: memberLabels,
+              source: input.source,
+              guidance: sourceInstructions[input.source],
+              text: input.text,
+              from: input.from ?? null,
+              subject: input.subject ?? null,
+              channel: input.channel ?? null,
+              fallbackTitle: input.fallbackTitle ?? null,
+              availableAssignees: input.memberLabels ?? [],
               today: todayIso(),
             }),
           },
@@ -1463,6 +1488,10 @@ async function extractChatTaskWithAi(message: string, memberLabels: string[]): P
   }
 }
 
+async function extractChatTaskWithAi(message: string, memberLabels: string[]): Promise<AiTaskExtraction | null> {
+  return extractTaskWithAi({ source: "chat", text: message, memberLabels });
+}
+
 function matchAiAssignee<T extends { name?: string; email?: string; id?: string | number }>(
   hint: string | null,
   candidates: T[],
@@ -1513,6 +1542,63 @@ async function resolveDefaultIngestTarget(): Promise<IngestTarget | null> {
     rows[0];
   const assignedTo = typeof owner?.user_id === "string" ? owner.user_id : null;
   return assignedTo ? { orgId, assignedTo } : null;
+}
+
+type TaskSuggestionCandidate = {
+  fromEmail: string;
+  subject: string;
+  preview: string;
+  body: string;
+  receivedAt: string | null;
+  actionItems: string[];
+  suggestedTitle: string;
+  suggestedDueDate: string | null;
+  urgency: string;
+  estimatedMinutes?: number;
+};
+
+function applyAiToCandidate<T extends TaskSuggestionCandidate>(
+  candidate: T,
+  ai: AiTaskExtraction | null,
+  source: SuggestionSource,
+): T {
+  if (!ai) return candidate;
+  const title = titleFromMessage(ai.title) || candidate.suggestedTitle;
+  const dueDate = ai.dueDate ?? candidate.suggestedDueDate ?? null;
+  const urgency = dueDate && isPastDue(dueDate) ? "critical" : ai.urgency;
+  const actionItems = [
+    ai.description || `Complete: ${title}.`,
+    `Donnit rationale: ${ai.rationale}`,
+  ].filter(Boolean);
+  return {
+    ...candidate,
+    preview: ai.rationale || candidate.preview,
+    actionItems,
+    suggestedTitle: title,
+    suggestedDueDate: dueDate,
+    urgency,
+    estimatedMinutes: ai.estimatedMinutes,
+    body:
+      candidate.body && candidate.body.trim().length > 0
+        ? `${candidate.body}\n\nAI interpretation: ${ai.description || ai.rationale}`.slice(0, 4000)
+        : `${source.toUpperCase()} interpretation: ${ai.description || ai.rationale}`.slice(0, 4000),
+  };
+}
+
+async function enrichSuggestionCandidateWithAi<T extends TaskSuggestionCandidate>(
+  candidate: T,
+  source: SuggestionSource,
+  context?: { from?: string; channel?: string },
+): Promise<T> {
+  const ai = await extractTaskWithAi({
+    source,
+    text: `${candidate.subject}\n${candidate.preview}\n${candidate.body ?? ""}`.slice(0, 5000),
+    from: context?.from ?? candidate.fromEmail,
+    subject: candidate.subject,
+    channel: context?.channel,
+    fallbackTitle: candidate.suggestedTitle,
+  });
+  return applyAiToCandidate(candidate, ai, source);
 }
 
 function buildExternalSuggestionCandidate(input: {
@@ -1667,6 +1753,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           googleClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
           googleRedirectUri: Boolean(process.env.GOOGLE_REDIRECT_URI),
           gmailOauthStateSecret: Boolean(process.env.GMAIL_OAUTH_STATE_SECRET),
+          openAiApiKey: Boolean(process.env.OPENAI_API_KEY),
+          donnitAiModel: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
         },
       });
     } catch (err) {
@@ -2538,11 +2626,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(409).json({ message: "Workspace not bootstrapped." });
           return;
         }
-        const candidates = buildDocumentSuggestionCandidates({
-          fileName: parsed.data.fileName,
-          text,
-          assignedToId: auth.userId,
-        });
+        const candidates = await Promise.all(
+          buildDocumentSuggestionCandidates({
+            fileName: parsed.data.fileName,
+            text,
+            assignedToId: auth.userId,
+          }).map((candidate) => enrichSuggestionCandidateWithAi(candidate, "document")),
+        );
         const suggestions = [];
         for (const candidate of candidates) {
           const suggestion = await store.createEmailSuggestion(orgId, {
@@ -2582,11 +2672,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
 
-      const candidates = buildDocumentSuggestionCandidates({
-        fileName: parsed.data.fileName,
-        text,
-        assignedToId: DEMO_USER_ID,
-      });
+      const candidates = await Promise.all(
+        buildDocumentSuggestionCandidates({
+          fileName: parsed.data.fileName,
+          text,
+          assignedToId: DEMO_USER_ID,
+        }).map((candidate) => enrichSuggestionCandidateWithAi(candidate, "document")),
+      );
       const suggestions = [];
       for (const candidate of candidates) {
         const suggestion = await storage.createEmailSuggestion({
@@ -3015,7 +3107,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(status).json(payload);
       return;
     }
-    const candidates = result.candidates;
+    const candidates = await Promise.all(
+      result.candidates.map((candidate) => enrichSuggestionCandidateWithAi(candidate, "email")),
+    );
 
     if (req.donnitAuth) {
       try {
@@ -3490,7 +3584,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(400).json({ message: "Provide a subject (1–240 chars) and body (1–4000 chars)." });
       return;
     }
-    const candidate = buildManualEmailCandidate(parsed.data);
+    const candidate = await enrichSuggestionCandidateWithAi(buildManualEmailCandidate(parsed.data), "email", {
+      from: parsed.data.fromEmail,
+    });
     if (req.donnitAuth) {
       try {
         const auth = req.donnitAuth;
@@ -3540,13 +3636,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(400).json({ message: "Provide message text between 2 and 4000 characters." });
       return;
     }
-    const candidate = buildExternalSuggestionCandidate({
+    const candidate = await enrichSuggestionCandidateWithAi(
+      buildExternalSuggestionCandidate({
+        source,
+        text: parsed.data.text,
+        from: parsed.data.from,
+        channel: parsed.data.channel,
+        subject: parsed.data.subject,
+      }),
       source,
-      text: parsed.data.text,
-      from: parsed.data.from,
-      channel: parsed.data.channel,
-      subject: parsed.data.subject,
-    });
+      {
+        from: parsed.data.from,
+        channel: parsed.data.channel,
+      },
+    );
 
     if (req.donnitAuth) {
       try {
