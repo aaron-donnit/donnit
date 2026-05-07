@@ -212,6 +212,19 @@ type EmailSuggestion = {
   createdAt: string;
 };
 
+type SuggestionReplyResult = {
+  ok: boolean;
+  provider: "email" | "slack" | "sms" | "document";
+  delivery: "mailto" | "sent" | "copy";
+  target?: string;
+  subject?: string;
+  href?: string;
+  message?: string;
+  body?: string;
+  fallbackReason?: string;
+  providerMessageId?: string | null;
+};
+
 type SuggestionPatch = {
   suggestedTitle?: string;
   suggestedDueDate?: string | null;
@@ -4419,16 +4432,77 @@ function SuggestionCard({
       : fromLower.startsWith("document:")
         ? "Document"
         : "Email";
-  const canReplyByEmail = sourceLabel === "Email" && suggestion.fromEmail.includes("@");
+  const canReplyToSource = sourceLabel !== "Document" && (sourceLabel !== "Email" || suggestion.fromEmail.includes("@"));
+  const replyTarget =
+    sourceLabel === "Email"
+      ? suggestion.fromEmail
+      : sourceLabel === "Slack"
+        ? suggestion.subject.replace(/^slack:\s*/i, "") || suggestion.fromEmail
+        : suggestion.fromEmail.replace(/^sms:/i, "") || suggestion.fromEmail;
+  const replyHelp =
+    sourceLabel === "Email"
+      ? "Donnit will open your email draft with the message filled in."
+      : sourceLabel === "Slack"
+        ? "Donnit will send through Slack when the bot is connected, or prepare the reply to copy."
+        : "Donnit will send through Twilio when SMS is configured, or prepare the reply to copy.";
+  const sendReply = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/suggestions/${suggestion.id}/reply`, {
+        message: replyBody.trim(),
+      });
+      return (await res.json()) as SuggestionReplyResult;
+    },
+    onSuccess: async (result) => {
+      if (result.delivery === "mailto" && result.href) {
+        window.location.href = result.href;
+        setReplyOpen(false);
+        toast({
+          title: "Email draft opened",
+          description: "Review and send it from your mail app.",
+        });
+        return;
+      }
+      if (result.delivery === "sent") {
+        setReplyOpen(false);
+        setReplyBody("");
+        toast({
+          title: "Reply sent",
+          description: result.message ?? "Donnit sent the response.",
+        });
+        return;
+      }
+      const copyText = result.body ?? replyBody.trim();
+      try {
+        await navigator.clipboard?.writeText(copyText);
+        toast({
+          title: "Reply copied",
+          description: result.message ?? "Paste it into the source tool to send.",
+        });
+      } catch {
+        toast({
+          title: "Reply ready",
+          description: result.message ?? "Copy the message from this popup and send it in the source tool.",
+        });
+      }
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not prepare reply",
+        description: apiErrorMessage(error, "Try that reply again."),
+        variant: "destructive",
+      });
+    },
+  });
   useEffect(() => {
     setDraftTitle(suggestion.suggestedTitle);
     setDraftDueDate(suggestion.suggestedDueDate ?? "");
     setDraftUrgency(
       ["low", "normal", "high", "critical"].includes(suggestion.urgency)
         ? (suggestion.urgency as "low" | "normal" | "high" | "critical")
-        : "normal",
+      : "normal",
     );
     setDraftPreview(suggestion.preview ?? "");
+    setReplyBody("");
   }, [suggestion.id, suggestion.preview, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
   const saveEdits = () => {
     if (!onSaveEdits || draftTitle.trim().length < 2) return;
@@ -4439,13 +4513,6 @@ function SuggestionCard({
       preview: draftPreview.trim() || suggestion.preview,
     });
     setEditing(false);
-  };
-  const openEmailDraft = () => {
-    const subject = suggestion.subject.toLowerCase().startsWith("re:")
-      ? suggestion.subject
-      : `Re: ${suggestion.subject}`;
-    window.location.href = `mailto:${encodeURIComponent(suggestion.fromEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(replyBody)}`;
-    setReplyOpen(false);
   };
   return (
     <>
@@ -4626,7 +4693,7 @@ function SuggestionCard({
         >
           <X className="size-4" /> Dismiss
         </Button>
-        {canReplyByEmail && (
+        {canReplyToSource && (
           <Button
             size="sm"
             variant="outline"
@@ -4643,7 +4710,7 @@ function SuggestionCard({
           <DialogHeader className={dialogHeaderClass}>
             <DialogTitle>Reply to source</DialogTitle>
             <DialogDescription>
-              Draft a response to {suggestion.fromEmail}. Donnit will open your email client with the message filled in.
+              Draft a response to {replyTarget}. {replyHelp}
             </DialogDescription>
           </DialogHeader>
           <div className={dialogBodyClass}>
@@ -4657,12 +4724,12 @@ function SuggestionCard({
             />
           </div>
           <DialogFooter className={dialogFooterClass}>
-            <Button variant="outline" onClick={() => setReplyOpen(false)}>
+            <Button variant="outline" onClick={() => setReplyOpen(false)} disabled={sendReply.isPending}>
               Cancel
             </Button>
-            <Button onClick={openEmailDraft} disabled={replyBody.trim().length < 2}>
-              <Send className="size-4" />
-              Open email draft
+            <Button onClick={() => sendReply.mutate()} disabled={replyBody.trim().length < 2 || sendReply.isPending}>
+              {sendReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+              {sourceLabel === "Email" ? "Open draft" : "Send reply"}
             </Button>
           </DialogFooter>
         </DialogContent>

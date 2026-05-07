@@ -1827,6 +1827,10 @@ const suggestionPatchSchema = z.object({
   assignedToId: z.union([z.string().min(1), z.number()]).nullable().optional(),
 });
 
+const suggestionReplySchema = z.object({
+  message: z.string().trim().min(2).max(4000),
+});
+
 function extractOutputText(response: any): string | null {
   if (typeof response?.output_text === "string") return response.output_text;
   const output = Array.isArray(response?.output) ? response.output : [];
@@ -2024,6 +2028,71 @@ function sourceFromSuggestion(input: { fromEmail: string; subject: string }): Su
   if (marker.includes("sms:") || marker.includes("text message") || marker.includes("sms")) return "sms";
   if (marker.includes("document:") || marker.includes("document upload")) return "document";
   return "email";
+}
+
+function normalizeReplySubject(subject: string) {
+  const trimmed = subject.trim() || "Donnit task follow-up";
+  return trimmed.toLowerCase().startsWith("re:") ? trimmed : `Re: ${trimmed}`;
+}
+
+function parseSlackChannelFromSuggestion(suggestion: Pick<DonnitEmailSuggestion, "subject" | "from_email">) {
+  const subjectChannel = suggestion.subject.match(/^slack:\s*(.+)$/i)?.[1]?.trim();
+  if (subjectChannel) return subjectChannel;
+  const fromChannel = suggestion.from_email.match(/^slack:\s*(C[A-Z0-9]+|G[A-Z0-9]+|D[A-Z0-9]+)/i)?.[1]?.trim();
+  return fromChannel || null;
+}
+
+function parseSmsPhoneFromSuggestion(suggestion: Pick<DonnitEmailSuggestion, "from_email">) {
+  const raw = suggestion.from_email.replace(/^sms:/i, "").trim();
+  const phone = raw.match(/\+?[0-9][0-9\s().-]{7,}[0-9]/)?.[0]?.replace(/[^\d+]/g, "");
+  if (!phone) return null;
+  return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+async function sendSlackReply(input: { channel: string; message: string }) {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, reason: "missing_slack_bot_token" };
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: input.channel,
+      text: input.message,
+    }),
+  });
+  if (!response.ok) return { ok: false, reason: `slack_http_${response.status}` };
+  const payload = (await response.json()) as { ok?: boolean; error?: string; ts?: string };
+  return payload.ok
+    ? { ok: true, providerMessageId: payload.ts ?? null }
+    : { ok: false, reason: payload.error ?? "slack_send_failed" };
+}
+
+async function sendSmsReply(input: { to: string; message: string }) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  if (!accountSid || !authToken || !from) return { ok: false, reason: "missing_twilio_config" };
+  const body = new URLSearchParams({
+    To: input.to,
+    From: from,
+    Body: input.message,
+  });
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+  if (!response.ok) return { ok: false, reason: `twilio_http_${response.status}` };
+  const payload = (await response.json()) as { sid?: string; error_message?: string };
+  return payload.sid
+    ? { ok: true, providerMessageId: payload.sid }
+    : { ok: false, reason: payload.error_message ?? "twilio_send_failed" };
 }
 
 async function resolveDefaultIngestTarget(): Promise<IngestTarget | null> {
@@ -3929,6 +3998,169 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return;
     }
     res.json(suggestion);
+  });
+
+  app.post("/api/suggestions/:id/reply", async (req: Request, res: Response) => {
+    const parsed = suggestionReplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Write a reply before sending." });
+      return;
+    }
+
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const suggestion = await store.getEmailSuggestion(String(req.params.id));
+        if (!suggestion) {
+          res.status(404).json({ message: "Suggestion not found." });
+          return;
+        }
+
+        const message = parsed.data.message;
+        const source = sourceFromSuggestion({
+          fromEmail: suggestion.from_email,
+          subject: suggestion.subject,
+        });
+
+        if (source === "email") {
+          if (!suggestion.from_email.includes("@")) {
+            res.status(422).json({ message: "This suggestion does not have a replyable email address." });
+            return;
+          }
+          const subject = normalizeReplySubject(suggestion.subject);
+          res.json({
+            ok: true,
+            provider: "email",
+            delivery: "mailto",
+            target: suggestion.from_email,
+            subject,
+            href: `mailto:${encodeURIComponent(suggestion.from_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`,
+            message: "Open your email draft to finish sending.",
+          });
+          return;
+        }
+
+        if (source === "slack") {
+          const channel = parseSlackChannelFromSuggestion(suggestion);
+          if (channel) {
+            const sent = await sendSlackReply({ channel, message });
+            if (sent.ok) {
+              res.json({
+                ok: true,
+                provider: "slack",
+                delivery: "sent",
+                target: channel,
+                providerMessageId: sent.providerMessageId,
+                message: "Slack reply sent.",
+              });
+              return;
+            }
+            res.json({
+              ok: true,
+              provider: "slack",
+              delivery: "copy",
+              target: channel,
+              fallbackReason: sent.reason,
+              message: "Slack direct send is not available yet. The reply was prepared to copy.",
+              body: parsed.data.message,
+            });
+            return;
+          }
+          res.json({
+            ok: true,
+            provider: "slack",
+            delivery: "copy",
+            target: suggestion.from_email,
+            fallbackReason: "missing_slack_channel",
+            message: "Donnit could not identify the Slack channel. The reply was prepared to copy.",
+            body: parsed.data.message,
+          });
+          return;
+        }
+
+        if (source === "sms") {
+          const phone = parseSmsPhoneFromSuggestion(suggestion);
+          if (phone) {
+            const sent = await sendSmsReply({ to: phone, message });
+            if (sent.ok) {
+              res.json({
+                ok: true,
+                provider: "sms",
+                delivery: "sent",
+                target: phone,
+                providerMessageId: sent.providerMessageId,
+                message: "SMS reply sent.",
+              });
+              return;
+            }
+            res.json({
+              ok: true,
+              provider: "sms",
+              delivery: "copy",
+              target: phone,
+              fallbackReason: sent.reason,
+              message: "SMS direct send is not configured yet. The reply was prepared to copy.",
+              body: parsed.data.message,
+            });
+            return;
+          }
+          res.json({
+            ok: true,
+            provider: "sms",
+            delivery: "copy",
+            target: suggestion.from_email,
+            fallbackReason: "missing_sms_phone",
+            message: "Donnit could not identify the SMS phone number. The reply was prepared to copy.",
+            body: parsed.data.message,
+          });
+          return;
+        }
+
+        res.status(422).json({ message: "Document suggestions do not support outbound replies." });
+        return;
+      } catch (error) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ message: "Suggestion id is invalid." });
+      return;
+    }
+    const suggestions = await storage.listEmailSuggestions();
+    const suggestion = suggestions.find((item) => item.id === id);
+    if (!suggestion) {
+      res.status(404).json({ message: "Suggestion not found." });
+      return;
+    }
+    const source = sourceFromSuggestion({
+      fromEmail: suggestion.fromEmail,
+      subject: suggestion.subject,
+    });
+    if (source === "email" && suggestion.fromEmail.includes("@")) {
+      const subject = normalizeReplySubject(suggestion.subject);
+      res.json({
+        ok: true,
+        provider: "email",
+        delivery: "mailto",
+        target: suggestion.fromEmail,
+        subject,
+        href: `mailto:${encodeURIComponent(suggestion.fromEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(parsed.data.message)}`,
+        message: "Open your email draft to finish sending.",
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      provider: source,
+      delivery: "copy",
+      target: suggestion.fromEmail,
+      message: "The reply was prepared to copy.",
+      body: parsed.data.message,
+    });
   });
 
   // ------------------------------------------------------------------

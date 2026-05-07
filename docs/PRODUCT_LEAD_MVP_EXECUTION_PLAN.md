@@ -159,6 +159,14 @@ Step 7.3 implementation status:
 - Added optional Twilio signature verification and configurable default assignee routing.
 - Surfaced SMS inbound bridge and routing status in Workspace settings.
 
+Step 7.4 implementation status:
+
+- Added provider-aware outbound replies from approval suggestions.
+- Email replies open a prefilled mail draft without requiring expanded Gmail send permissions.
+- Slack replies send through `SLACK_BOT_TOKEN` when a source channel is available, with copy fallback.
+- SMS replies send through Twilio when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` are configured, with copy fallback.
+- Reused the approval inbox Reply popup so users can answer source messages without leaving the Donnit workflow.
+
 ## Step 8: Onboarding and Pilot Readiness
 
 Goal: make the product usable by design partners with less founder explanation.
