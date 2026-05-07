@@ -2704,12 +2704,16 @@ function ReportingPanel({
 
 function TeamViewPanel({
   tasks,
+  suggestions,
+  events,
   users,
   subtasks = [],
   authenticated = false,
   currentUserId,
 }: {
   tasks: Task[];
+  suggestions: EmailSuggestion[];
+  events: TaskEvent[];
   users: User[];
   subtasks?: TaskSubtask[];
   authenticated?: boolean;
@@ -2724,6 +2728,9 @@ function TeamViewPanel({
   });
   const [selectedUserId, setSelectedUserId] = useState(String(teamMembers[0]?.id ?? ""));
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [timeframe, setTimeframe] = useState<"7d" | "30d" | "all">("30d");
+  const urgencyRankClient = (urgency: string) =>
+    urgency === "critical" ? 0 : urgency === "high" ? 1 : urgency === "normal" || urgency === "medium" ? 2 : 3;
 
   useEffect(() => {
     if (!teamMembers.some((member) => String(member.id) === selectedUserId)) {
@@ -2736,9 +2743,72 @@ function TeamViewPanel({
   const memberTasks = member ? tasks.filter((task) => String(task.assignedToId) === String(member.id)) : [];
   const active = memberTasks.filter((task) => task.status !== "completed" && task.status !== "denied");
   const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 2);
+  const soonIso = soon.toISOString().slice(0, 10);
+  const sinceDate = (() => {
+    if (timeframe === "all") return null;
+    const days = timeframe === "7d" ? 7 : 30;
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toISOString().slice(0, 10);
+  })();
+  const inTimeframe = (iso: string | null | undefined) => {
+    if (!sinceDate || !iso) return true;
+    return iso.slice(0, 10) >= sinceDate;
+  };
   const overdue = active.filter((task) => task.dueDate && task.dueDate < today);
+  const dueSoon = active.filter((task) => task.dueDate && task.dueDate >= today && task.dueDate <= soonIso);
   const completed = memberTasks.filter((task) => task.status === "completed");
+  const completedInRange = completed.filter((task) => inTimeframe(task.completedAt ?? task.createdAt));
   const delegated = active.filter((task) => task.delegatedToId);
+  const pendingAcceptance = active.filter((task) => task.status === "pending_acceptance");
+  const workloadMinutes = active.reduce((sum, task) => sum + task.estimatedMinutes, 0);
+  const reviewedSuggestions = suggestions.filter(
+    (suggestion) =>
+      suggestion.status !== "pending" &&
+      (!member || String(suggestion.assignedToId ?? "") === String(member.id)) &&
+      inTimeframe(suggestion.createdAt),
+  );
+  const approvedSuggestions = reviewedSuggestions.filter((suggestion) => suggestion.status === "approved");
+  const approvalRate =
+    reviewedSuggestions.length > 0
+      ? Math.round((approvedSuggestions.length / reviewedSuggestions.length) * 100)
+      : null;
+  const sourceMix = memberTasks.reduce<Record<string, number>>((acc, task) => {
+    acc[task.source] = (acc[task.source] ?? 0) + 1;
+    return acc;
+  }, {});
+  const sourceTotal = Math.max(1, Object.values(sourceMix).reduce((sum, count) => sum + count, 0));
+  const teamStats = teamMembers.map((user) => {
+    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
+    const open = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
+    const userOverdue = open.filter((task) => task.dueDate && task.dueDate < today);
+    const userDueSoon = open.filter((task) => task.dueDate && task.dueDate >= today && task.dueDate <= soonIso);
+    const userWorkload = open.reduce((sum, task) => sum + task.estimatedMinutes, 0);
+    const attention = userOverdue.length * 3 + userDueSoon.length + open.filter((task) => task.urgency === "critical" || task.urgency === "high").length * 2;
+    return { user, open, overdue: userOverdue, dueSoon: userDueSoon, workload: userWorkload, attention };
+  });
+  const teamOpen = teamStats.reduce((sum, item) => sum + item.open.length, 0);
+  const teamOverdue = teamStats.reduce((sum, item) => sum + item.overdue.length, 0);
+  const teamDueSoon = teamStats.reduce((sum, item) => sum + item.dueSoon.length, 0);
+  const attentionQueue = active
+    .filter(
+      (task) =>
+        (task.dueDate && task.dueDate <= soonIso) ||
+        task.urgency === "critical" ||
+        task.urgency === "high" ||
+        task.status === "pending_acceptance",
+    )
+    .sort((a, b) => {
+      const aOverdue = a.dueDate && a.dueDate < today ? 0 : 1;
+      const bOverdue = b.dueDate && b.dueDate < today ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+      const urgencyDiff = (urgencyRankClient(a.urgency) - urgencyRankClient(b.urgency));
+      if (urgencyDiff !== 0) return urgencyDiff;
+      return (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31");
+    });
+  const visibleTasks = attentionQueue.length > 0 ? attentionQueue : active;
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
 
   return (
@@ -2747,7 +2817,7 @@ function TeamViewPanel({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="display-font text-sm font-bold">Team</h3>
-            <p className="ui-label mt-1">Manager view by person</p>
+            <p className="ui-label mt-1">Support, coverage, attention</p>
           </div>
           <Users className="size-4 text-brand-green" />
         </div>
@@ -2769,27 +2839,151 @@ function TeamViewPanel({
                 </option>
               ))}
             </select>
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
-              <ReportMetric label="Open" value={String(active.length)} />
-              <ReportMetric label="Overdue" value={String(overdue.length)} />
-              <ReportMetric label="Done" value={String(completed.length)} />
-              <ReportMetric label="Deleg." value={String(delegated.length)} />
+
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <ReportMetric label="Team open" value={String(teamOpen)} />
+              <ReportMetric label="Overdue" value={String(teamOverdue)} />
+              <ReportMetric label="Due soon" value={String(teamDueSoon)} />
             </div>
-            <div className="space-y-2">
-              {active.slice(0, 5).map((task) => (
-                <button
-                  key={String(task.id)}
-                  type="button"
-                  onClick={() => setSelectedTaskId(String(task.id))}
-                  className={`w-full rounded-md border border-border bg-background px-3 py-2 text-left text-xs transition hover:border-brand-green/60 ${urgencyClass(task.urgency)}`}
-                  data-testid={`button-team-task-${task.id}`}
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="ui-label">Team workload</p>
+                <select
+                  value={timeframe}
+                  onChange={(event) => setTimeframe(event.target.value as "7d" | "30d" | "all")}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                  data-testid="select-team-timeframe"
                 >
-                  <span className="block truncate font-medium text-foreground">{task.title}</span>
-                  <span className="mt-0.5 block truncate text-muted-foreground">
-                    {task.dueDate ?? "No due date"} / {task.status} / {task.estimatedMinutes} min
+                  <option value="7d">7 days</option>
+                  <option value="30d">30 days</option>
+                  <option value="all">All time</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                {teamStats
+                  .sort((a, b) => b.attention - a.attention || b.workload - a.workload)
+                  .slice(0, 5)
+                  .map((item) => {
+                    const selected = String(item.user.id) === String(member?.id);
+                    return (
+                      <button
+                        key={String(item.user.id)}
+                        type="button"
+                        onClick={() => setSelectedUserId(String(item.user.id))}
+                        className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-xs transition ${
+                          selected ? "border-brand-green bg-brand-green/5" : "border-border bg-background hover:border-brand-green/60"
+                        }`}
+                        data-testid={`button-team-member-${item.user.id}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium text-foreground">{item.user.name}</span>
+                          <span className="block truncate text-muted-foreground">
+                            {item.open.length} open / {Math.round(item.workload / 60)}h planned
+                          </span>
+                        </span>
+                        <span className={`rounded-md px-2 py-1 text-[10px] font-semibold ${
+                          item.overdue.length > 0
+                            ? "bg-destructive/10 text-destructive"
+                            : item.dueSoon.length > 0
+                              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                              : "bg-muted text-muted-foreground"
+                        }`}>
+                          {item.overdue.length > 0 ? `${item.overdue.length} overdue` : `${item.dueSoon.length} soon`}
+                        </span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-center text-xs">
+              <ReportMetric label="Open" value={String(active.length)} />
+              <ReportMetric label="Past due" value={String(overdue.length)} />
+              <ReportMetric label="Done" value={String(completedInRange.length)} />
+              <ReportMetric label="Delegated" value={String(delegated.length)} />
+              <ReportMetric label="Pending" value={String(pendingAcceptance.length)} />
+              <ReportMetric label="AI accepted" value={approvalRate === null ? "N/A" : `${approvalRate}%`} />
+            </div>
+
+            {member && (
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground">{member.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {workloadMinutes < 60 ? `${workloadMinutes} min` : `${(workloadMinutes / 60).toFixed(1)}h`} active workload / {completedInRange.length} completed in view
+                    </p>
+                  </div>
+                  <span className="rounded-md bg-muted px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                    {member.role}
                   </span>
-                </button>
-              ))}
+                </div>
+              </div>
+            )}
+
+            {Object.keys(sourceMix).length > 0 && (
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <p className="ui-label mb-2">Source mix</p>
+                <div className="space-y-2">
+                  {Object.entries(sourceMix)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([source, count]) => (
+                      <div key={source} className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="capitalize text-foreground">{source}</span>
+                          <span className="text-muted-foreground">{count}</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-brand-green"
+                            style={{ width: `${Math.max(8, Math.round((count / sourceTotal) * 100))}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="ui-label">Needs attention</p>
+                <span className="text-xs text-muted-foreground">{visibleTasks.length} item{visibleTasks.length === 1 ? "" : "s"}</span>
+              </div>
+              {visibleTasks.slice(0, 7).map((task) => {
+                const taskSubtasks = subtasks.filter((subtask) => String(subtask.taskId) === String(task.id));
+                const doneSubtasks = taskSubtasks.filter((subtask) => subtask.done).length;
+                const lastEvent = events.find((event) => String(event.taskId) === String(task.id));
+                return (
+                  <button
+                    key={String(task.id)}
+                    type="button"
+                    onClick={() => setSelectedTaskId(String(task.id))}
+                    className={`w-full rounded-md border border-border bg-background px-3 py-2 text-left text-xs transition hover:border-brand-green/60 ${urgencyClass(task.urgency)}`}
+                    data-testid={`button-team-task-${task.id}`}
+                  >
+                    <span className="flex items-start justify-between gap-2">
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-foreground">{task.title}</span>
+                        <span className="mt-0.5 block truncate text-muted-foreground">
+                          {task.dueDate ?? "No due date"} / {urgencyLabel(task.urgency)} / {task.estimatedMinutes} min
+                        </span>
+                      </span>
+                      <span className="shrink-0 rounded-md bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                        {statusLabels[task.status] ?? task.status}
+                      </span>
+                    </span>
+                    {(task.description || task.completionNotes || taskSubtasks.length > 0 || lastEvent) && (
+                      <span className="mt-1 block truncate text-muted-foreground">
+                        {taskSubtasks.length > 0
+                          ? `${doneSubtasks}/${taskSubtasks.length} subtasks`
+                          : task.completionNotes || task.description || lastEvent?.note}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
               {active.length === 0 && (
                 <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-sm text-muted-foreground">
                   No active tasks for this team member.
@@ -4262,6 +4456,8 @@ function SupportRail({
       {view === "team" && (
         <TeamViewPanel
           tasks={tasks}
+          suggestions={suggestions}
+          events={events}
           users={users}
           subtasks={subtasks}
           authenticated={authenticated}
