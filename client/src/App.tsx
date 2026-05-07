@@ -1627,6 +1627,7 @@ function TaskList({
         task={selectedTask}
         users={users}
         subtasks={subtasks}
+        events={[]}
         authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
@@ -1641,6 +1642,7 @@ function TaskDetailDialog({
   task,
   users,
   subtasks: persistedSubtasks = [],
+  events = [],
   authenticated = false,
   open,
   onOpenChange,
@@ -1648,6 +1650,7 @@ function TaskDetailDialog({
   task: Task | null;
   users: User[];
   subtasks?: TaskSubtask[];
+  events?: TaskEvent[];
   authenticated?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1905,6 +1908,11 @@ function TaskDetailDialog({
     }
     persistSubtasks(subtasks.filter((item) => String(item.id) !== String(subtaskId)));
   };
+  const taskEvents = task
+    ? events
+        .filter((event) => String(event.taskId) === String(task.id))
+        .slice(0, 8)
+    : [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2079,6 +2087,35 @@ function TaskDetailDialog({
               )}
             </div>
           </div>
+          {taskEvents.length > 0 && (
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Progress history</p>
+                  <p className="text-xs text-muted-foreground">Recent updates, requests, and status changes</p>
+                </div>
+                <History className="size-4 text-muted-foreground" />
+              </div>
+              <ul className="space-y-2">
+                {taskEvents.map((event) => {
+                  const actor = users.find((user) => String(user.id) === String(event.actorId));
+                  return (
+                    <li key={String(event.id)} className="rounded-md bg-muted/40 px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium capitalize text-foreground">{event.type.replace(/_/g, " ")}</span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {new Date(event.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">
+                        {actor?.name ?? "Unknown"} - {event.note || "No note added."}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
           </div>
         </div>
         <DialogFooter className="flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
@@ -2827,6 +2864,26 @@ function TeamViewPanel({
       });
     },
   });
+  const requestUpdate = useMutation({
+    mutationFn: async ({ task, owner }: { task: Task; owner?: User }) =>
+      apiRequest("POST", `/api/tasks/${task.id}/request-update`, {
+        note: `Please add a status update for ${task.title}${owner ? `, ${owner.name}` : ""}.`,
+      }),
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "Update requested",
+        description: "The request was added to the task history.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not request update",
+        description: apiErrorMessage(error, "Try requesting the update again."),
+        variant: "destructive",
+      });
+    },
+  });
 
   return (
     <div className="panel" data-testid="panel-team-view">
@@ -2988,14 +3045,27 @@ function TeamViewPanel({
                 const taskSubtasks = subtasks.filter((subtask) => String(subtask.taskId) === String(task.id));
                 const doneSubtasks = taskSubtasks.filter((subtask) => subtask.done).length;
                 const lastEvent = events.find((event) => String(event.taskId) === String(task.id));
+                const progressPct =
+                  taskSubtasks.length > 0
+                    ? Math.round((doneSubtasks / taskSubtasks.length) * 100)
+                    : task.status === "completed"
+                      ? 100
+                      : task.status === "accepted"
+                        ? 35
+                        : task.status === "pending_acceptance"
+                          ? 10
+                          : 20;
                 return (
-                  <button
+                  <div
                     key={String(task.id)}
-                    type="button"
-                    onClick={() => setSelectedTaskId(String(task.id))}
                     className={`w-full rounded-md border border-border bg-background px-3 py-2 text-left text-xs transition hover:border-brand-green/60 ${urgencyClass(task.urgency)}`}
                     data-testid={`button-team-task-${task.id}`}
                   >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTaskId(String(task.id))}
+                      className="block w-full text-left"
+                    >
                     <span className="flex items-start justify-between gap-2">
                       <span className="min-w-0">
                         <span className="block truncate font-medium text-foreground">{task.title}</span>
@@ -3007,6 +3077,12 @@ function TeamViewPanel({
                         {statusLabels[task.status] ?? task.status}
                       </span>
                     </span>
+                    <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-muted">
+                      <span
+                        className="block h-full rounded-full bg-brand-green"
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </span>
                     {(task.description || task.completionNotes || taskSubtasks.length > 0 || lastEvent) && (
                       <span className="mt-1 block truncate text-muted-foreground">
                         {taskSubtasks.length > 0
@@ -3014,7 +3090,25 @@ function TeamViewPanel({
                           : task.completionNotes || task.description || lastEvent?.note}
                       </span>
                     )}
-                  </button>
+                    </button>
+                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+                      <span className="text-[11px] text-muted-foreground">
+                        {lastEvent ? `Last: ${lastEvent.type.replace(/_/g, " ")}` : "No updates yet"}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => requestUpdate.mutate({ task, owner: member ?? undefined })}
+                        disabled={requestUpdate.isPending}
+                        data-testid={`button-team-request-update-${task.id}`}
+                      >
+                        {requestUpdate.isPending ? <Loader2 className="size-3 animate-spin" /> : <Send className="size-3" />}
+                        Request update
+                      </Button>
+                    </div>
+                  </div>
                 );
               })}
               {active.length === 0 && (
@@ -3030,6 +3124,7 @@ function TeamViewPanel({
         task={selectedTask}
         users={users}
         subtasks={subtasks}
+        events={events}
         authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {

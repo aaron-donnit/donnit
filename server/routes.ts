@@ -2998,7 +2998,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function handleTaskAction(
     req: Request,
     res: Response,
-    action: "complete" | "accept" | "deny" | "note",
+    action: "complete" | "accept" | "deny" | "note" | "request_update",
   ) {
     const note = noteRequestSchema.safeParse(req.body);
 
@@ -3048,6 +3048,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             eventType = "note_added";
             eventNote = note.data.note;
             break;
+          case "request_update": {
+            const requestedNote = note.success
+              ? note.data.note
+              : "Please add a quick status update on this task.";
+            const stamped = `Manager requested update: ${requestedNote}`;
+            patch = {
+              completion_notes: existing.completion_notes
+                ? `${existing.completion_notes}\n\n${stamped}`
+                : stamped,
+            };
+            eventType = "update_requested";
+            eventNote = requestedNote;
+            break;
+          }
         }
         const updated = await store.updateTask(taskId, patch);
         if (!updated) {
@@ -3069,6 +3083,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const id = Number(req.params.id);
+    const existingTask = (await storage.listTasks()).find((task) => task.id === id);
+    if (!existingTask) {
+      res.status(404).json({ message: "Task not found." });
+      return;
+    }
     let patch: Partial<Task> = {};
     let eventType = "";
     let eventNote = "";
@@ -3105,6 +3124,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         eventType = "note_added";
         eventNote = note.data.note;
         break;
+      case "request_update": {
+        const requestedNote = note.success
+          ? note.data.note
+          : "Please add a quick status update on this task.";
+        const stamped = `Manager requested update: ${requestedNote}`;
+        patch = {
+          completionNotes: existingTask.completionNotes
+            ? `${existingTask.completionNotes}\n\n${stamped}`
+            : stamped,
+        };
+        eventType = "update_requested";
+        eventNote = requestedNote;
+        break;
+      }
     }
     const task = await storage.updateTask(id, patch);
     if (!task) {
@@ -3117,6 +3150,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/tasks/:id/complete", (req, res) => handleTaskAction(req, res, "complete"));
   app.post("/api/tasks/:id/notes", (req, res) => handleTaskAction(req, res, "note"));
+  app.post("/api/tasks/:id/request-update", (req, res) => handleTaskAction(req, res, "request_update"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
 
