@@ -327,6 +327,44 @@ function serializeSupabaseError(error: unknown): { message: string; code?: strin
   return { message: "Unknown error" };
 }
 
+function sendTaskSubtaskError(res: Response, action: "create" | "update" | "delete", error: unknown) {
+  const described = describeSupabaseError(error);
+  const reason = classifySupabaseError(described, { schema: DONNIT_SCHEMA, table: "task_subtasks" });
+  const status =
+    reason === "missing_table" || reason === "invalid_column" || reason === "schema_not_exposed"
+      ? 409
+      : reason === "rls_denied" || reason === "permission_denied_grants_missing"
+        ? 403
+        : 500;
+  const message =
+    reason === "missing_table"
+      ? "Subtasks are not available yet. Apply Supabase migration 0010_document_source_and_future_task_primitives.sql, then redeploy."
+      : reason === "schema_not_exposed"
+        ? "Subtasks table is not exposed through Supabase. Add the donnit schema to Supabase API exposed schemas."
+        : reason === "invalid_column"
+          ? "Subtasks schema is stale. Re-apply migration 0010 and the latest workspace state migration."
+          : reason === "rls_denied"
+            ? "Supabase blocked this subtask write. Apply migration 20260507154714_user_workspace_state.sql so task owners, delegates, and collaborators can manage subtasks."
+            : reason === "permission_denied_grants_missing"
+              ? "Supabase table grants are missing for subtasks. Re-apply migration 0010 and confirm authenticated/service_role grants exist."
+              : described.message ?? `Could not ${action} subtask.`;
+  console.error(`[donnit] task_subtask ${action} failed`, {
+    reason,
+    code: described.code,
+    message: described.message,
+    details: described.details,
+    hint: described.hint,
+  });
+  res.status(status).json({
+    ok: false,
+    reason: `task_subtasks_${reason}`,
+    message,
+    code: described.code,
+    details: described.details,
+    hint: described.hint,
+  });
+}
+
 const urgencyRank: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -900,6 +938,26 @@ function toClientWorkspaceState(input: {
 function hasTaskRelationshipColumns(task: DonnitTask) {
   return Object.prototype.hasOwnProperty.call(task, "delegated_to")
     && Object.prototype.hasOwnProperty.call(task, "collaborator_ids");
+}
+
+function canManageTaskSubtasks(
+  task: DonnitTask,
+  actorId: string,
+  member: { role?: string | null } | null | undefined,
+) {
+  const collaboratorIds = Array.isArray(task.collaborator_ids) ? task.collaborator_ids : [];
+  return (
+    task.assigned_to === actorId ||
+    task.assigned_by === actorId ||
+    task.delegated_to === actorId ||
+    collaboratorIds.includes(actorId) ||
+    ["owner", "admin", "manager"].includes(String(member?.role ?? ""))
+  );
+}
+
+function createSubtaskWriteStore(auth: NonNullable<Request["donnitAuth"]>) {
+  const admin = createSupabaseAdminClient();
+  return new DonnitStore(admin ?? auth.client, auth.userId);
 }
 
 function relationshipEventNote(input: {
@@ -2538,14 +2596,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Task not found." });
         return;
       }
-      const subtask = await store.createTaskSubtask(orgId, {
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!canManageTaskSubtasks(task, auth.userId, actor)) {
+        res.status(403).json({ message: "Only the task owner, assigner, delegate, collaborators, or managers can add subtasks." });
+        return;
+      }
+      const writeStore = createSubtaskWriteStore(auth);
+      const subtask = await writeStore.createTaskSubtask(orgId, {
         task_id: taskId,
         title: parsed.data.title,
         position: parsed.data.position,
       });
       res.status(201).json(toClientTaskSubtask(subtask));
     } catch (error) {
-      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+      sendTaskSubtaskError(res, "create", error);
     }
   });
 
@@ -2569,6 +2634,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Task not found." });
         return;
       }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!canManageTaskSubtasks(task, auth.userId, actor)) {
+        res.status(403).json({ message: "Only the task owner, assigner, delegate, collaborators, or managers can update subtasks." });
+        return;
+      }
       const patch: Partial<Pick<DonnitTaskSubtask, "title" | "status" | "position" | "completed_at">> = {};
       if (parsed.data.title !== undefined) patch.title = parsed.data.title;
       if (parsed.data.position !== undefined) patch.position = parsed.data.position;
@@ -2580,14 +2651,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(400).json({ message: "No subtask changes were provided." });
         return;
       }
-      const subtask = await store.updateTaskSubtask(orgId, taskId, String(req.params.subtaskId), patch);
+      const writeStore = createSubtaskWriteStore(auth);
+      const subtask = await writeStore.updateTaskSubtask(orgId, taskId, String(req.params.subtaskId), patch);
       if (!subtask) {
         res.status(404).json({ message: "Subtask not found." });
         return;
       }
       res.json(toClientTaskSubtask(subtask));
     } catch (error) {
-      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+      sendTaskSubtaskError(res, "update", error);
     }
   });
 
@@ -2606,10 +2678,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Task not found." });
         return;
       }
-      await store.deleteTaskSubtask(orgId, taskId, String(req.params.subtaskId));
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!canManageTaskSubtasks(task, auth.userId, actor)) {
+        res.status(403).json({ message: "Only the task owner, assigner, delegate, collaborators, or managers can delete subtasks." });
+        return;
+      }
+      const writeStore = createSubtaskWriteStore(auth);
+      await writeStore.deleteTaskSubtask(orgId, taskId, String(req.params.subtaskId));
       res.json({ ok: true });
     } catch (error) {
-      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+      sendTaskSubtaskError(res, "delete", error);
     }
   });
 

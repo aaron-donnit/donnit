@@ -308,6 +308,20 @@ function normalizeLocalSubtasks(taskId: Id, value: unknown): LocalSubtask[] {
     .filter((item): item is LocalSubtask => item !== null);
 }
 
+function apiErrorMessage(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const sep = raw.indexOf(": ");
+  if (sep > -1) {
+    try {
+      const parsed = JSON.parse(raw.slice(sep + 2)) as { message?: unknown };
+      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+    } catch {
+      // Keep the raw message below.
+    }
+  }
+  return raw || fallback;
+}
+
 function titleCase(value: string) {
   return value
     .replace(/[_-]+/g, " ")
@@ -1764,7 +1778,7 @@ function TaskDetailDialog({
     onError: (error: unknown) => {
       toast({
         title: "Could not add subtask",
-        description: error instanceof Error ? error.message : "Apply migration 0010 and try again.",
+        description: apiErrorMessage(error, "Apply migration 0010 and try again."),
         variant: "destructive",
       });
     },
@@ -1780,7 +1794,7 @@ function TaskDetailDialog({
     onError: (error: unknown) => {
       toast({
         title: "Could not update subtask",
-        description: error instanceof Error ? error.message : "Try that subtask again.",
+        description: apiErrorMessage(error, "Try that subtask again."),
         variant: "destructive",
       });
     },
@@ -1795,7 +1809,7 @@ function TaskDetailDialog({
     onError: (error: unknown) => {
       toast({
         title: "Could not delete subtask",
-        description: error instanceof Error ? error.message : "Try deleting it again.",
+        description: apiErrorMessage(error, "Try deleting it again."),
         variant: "destructive",
       });
     },
