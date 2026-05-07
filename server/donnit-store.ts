@@ -50,6 +50,18 @@ function isTimestampSyntaxError(error: unknown) {
   );
 }
 
+function isMissingRelationError(error: unknown) {
+  const raw = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(raw?.code ?? "").toUpperCase();
+  const haystack = `${String(raw?.message ?? "")} ${String(raw?.details ?? "")}`.toLowerCase();
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    haystack.includes("could not find the table") ||
+    (haystack.includes("relation") && haystack.includes("does not exist"))
+  );
+}
+
 export type DonnitProfile = {
   id: string;
   full_name: string;
@@ -140,6 +152,38 @@ export type DonnitGmailAccount = {
   connected_at: string;
   last_scanned_at: string | null;
   status: "connected" | "revoked" | "error";
+};
+
+export type DonnitPositionProfile = {
+  id: string;
+  org_id: string;
+  title: string;
+  status: "active" | "vacant" | "covered";
+  current_owner_id: string | null;
+  direct_manager_id: string | null;
+  temporary_owner_id: string | null;
+  delegate_user_id: string | null;
+  delegate_until: string | null;
+  auto_update_rules: Record<string, unknown>;
+  institutional_memory: Record<string, unknown>;
+  risk_score: number;
+  risk_summary: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DonnitPositionProfileAssignment = {
+  id: string;
+  org_id: string;
+  position_profile_id: string | null;
+  from_user_id: string | null;
+  to_user_id: string | null;
+  actor_id: string | null;
+  mode: "transfer" | "temporary_cover" | "delegate";
+  starts_at: string;
+  ends_at: string | null;
+  notes: string;
+  created_at: string;
 };
 
 export class DonnitStore {
@@ -395,5 +439,104 @@ export class DonnitStore {
       .delete()
       .eq("user_id", this.userId);
     if (error) throw wrapSupabaseError("delete gmail_account failed", error);
+  }
+
+  // ---- position_profiles (admin continuity repository) ------------------
+
+  async listPositionProfiles(orgId: string): Promise<DonnitPositionProfile[]> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfiles)
+      .select("*")
+      .eq("org_id", orgId)
+      .order("title", { ascending: true });
+    if (error) {
+      if (isMissingRelationError(error)) return [];
+      throw wrapSupabaseError("list position_profiles failed", error);
+    }
+    return (data ?? []) as DonnitPositionProfile[];
+  }
+
+  async createPositionProfile(
+    orgId: string,
+    input: Pick<DonnitPositionProfile, "title" | "status"> &
+      Partial<
+        Pick<
+          DonnitPositionProfile,
+          | "current_owner_id"
+          | "direct_manager_id"
+          | "temporary_owner_id"
+          | "delegate_user_id"
+          | "delegate_until"
+          | "auto_update_rules"
+          | "institutional_memory"
+          | "risk_score"
+          | "risk_summary"
+        >
+      >,
+  ): Promise<DonnitPositionProfile> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfiles)
+      .insert({ ...input, org_id: orgId })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create position_profile failed", error);
+    return data as DonnitPositionProfile;
+  }
+
+  async updatePositionProfile(
+    orgId: string,
+    id: string,
+    patch: Partial<
+      Pick<
+        DonnitPositionProfile,
+        | "title"
+        | "status"
+        | "current_owner_id"
+        | "direct_manager_id"
+        | "temporary_owner_id"
+        | "delegate_user_id"
+        | "delegate_until"
+        | "auto_update_rules"
+        | "institutional_memory"
+        | "risk_score"
+        | "risk_summary"
+      >
+    >,
+  ): Promise<DonnitPositionProfile | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfiles)
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("org_id", orgId)
+      .eq("id", id)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("update position_profile failed", error);
+    return (data as DonnitPositionProfile | null) ?? null;
+  }
+
+  async deletePositionProfile(orgId: string, id: string): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.positionProfiles)
+      .delete()
+      .eq("org_id", orgId)
+      .eq("id", id);
+    if (error) throw wrapSupabaseError("delete position_profile failed", error);
+  }
+
+  async createPositionProfileAssignment(
+    orgId: string,
+    input: Omit<DonnitPositionProfileAssignment, "id" | "org_id" | "starts_at" | "created_at"> &
+      Partial<Pick<DonnitPositionProfileAssignment, "starts_at">>,
+  ): Promise<DonnitPositionProfileAssignment | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileAssignments)
+      .insert({ ...input, org_id: orgId })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error)) return null;
+      throw wrapSupabaseError("create position_profile_assignment failed", error);
+    }
+    return data as DonnitPositionProfileAssignment;
   }
 }

@@ -21,6 +21,9 @@ export const DONNIT_TABLES = {
   emailSuggestions: "email_suggestions",
   reminderPreferences: "reminder_preferences",
   gmailAccounts: "gmail_accounts",
+  positionProfiles: "position_profiles",
+  positionProfileAssignments: "position_profile_assignments",
+  positionProfileKnowledge: "position_profile_knowledge",
 } as const;
 
 export function getSupabaseConfig() {

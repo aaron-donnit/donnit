@@ -29,7 +29,7 @@ import {
   createSupabaseAdminClient,
   requireDonnitAuth,
 } from "./auth-supabase";
-import { DonnitStore, type DonnitTask } from "./donnit-store";
+import { DonnitStore, type DonnitPositionProfile, type DonnitTask } from "./donnit-store";
 import { DONNIT_SCHEMA, isSupabaseConfigured } from "./supabase";
 
 const DEMO_USER_ID = 1;
@@ -834,6 +834,25 @@ function toClientTask(task: DonnitTask) {
   };
 }
 
+function toClientPositionProfile(profile: DonnitPositionProfile) {
+  return {
+    id: profile.id,
+    title: profile.title,
+    status: profile.status,
+    currentOwnerId: profile.current_owner_id,
+    directManagerId: profile.direct_manager_id,
+    temporaryOwnerId: profile.temporary_owner_id,
+    delegateUserId: profile.delegate_user_id,
+    delegateUntil: profile.delegate_until,
+    autoUpdateRules: profile.auto_update_rules ?? {},
+    institutionalMemory: profile.institutional_memory ?? {},
+    riskScore: profile.risk_score,
+    riskSummary: profile.risk_summary,
+    createdAt: profile.created_at,
+    updatedAt: profile.updated_at,
+  };
+}
+
 type ClientTaskShape = ReturnType<typeof toClientTask>;
 
 function hasTaskRelationshipColumns(task: DonnitTask) {
@@ -1149,12 +1168,13 @@ async function buildAuthenticatedBootstrap(req: Request) {
     };
   }
   const orgId = profile.default_org_id;
-  const [members, tasks, events, messages, suggestions] = await Promise.all([
+  const [members, tasks, events, messages, suggestions, positionProfiles] = await Promise.all([
     store.listOrgMembers(orgId),
     store.listTasks(orgId),
     store.listEvents(orgId),
     store.listChatMessages(orgId),
     store.listEmailSuggestions(orgId),
+    store.listPositionProfiles(orgId),
   ]);
   const users = members.map((m) => ({
     id: m.user_id,
@@ -1205,6 +1225,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
       assignedToId: s.assigned_to,
       createdAt: s.created_at,
     })),
+    positionProfiles: positionProfiles.map(toClientPositionProfile),
     agenda: buildClientAgenda(
       clientTasks,
       calendarContext?.busyByDate,
@@ -1279,6 +1300,7 @@ async function buildDemoBootstrap() {
         suggestedTitle: demo.suggestedTitle,
       };
     }),
+    positionProfiles: [],
     agenda: buildAgenda(demoTasks),
     integrations: getIntegrationStatus(),
   };
@@ -1333,11 +1355,30 @@ const documentSuggestRequestSchema = z.object({
 });
 
 const positionProfileAssignSchema = z.object({
+  profileId: z.string().trim().min(1).optional(),
   fromUserId: z.union([z.string().min(1), z.number()]),
   toUserId: z.union([z.string().min(1), z.number()]),
   mode: z.enum(["transfer", "delegate"]),
   delegateUntil: z.string().trim().max(20).nullable().optional(),
   profileTitle: z.string().trim().max(160).optional(),
+});
+
+const positionProfileCreateSchema = z.object({
+  title: z.string().trim().min(2).max(160),
+  ownerId: z.string().trim().min(1).nullable().optional(),
+  managerId: z.string().trim().min(1).nullable().optional(),
+  status: z.enum(["active", "vacant", "covered"]).optional(),
+});
+
+const positionProfileUpdateSchema = z.object({
+  title: z.string().trim().min(2).max(160).optional(),
+  status: z.enum(["active", "vacant", "covered"]).optional(),
+  currentOwnerId: z.string().trim().min(1).nullable().optional(),
+  directManagerId: z.string().trim().min(1).nullable().optional(),
+  temporaryOwnerId: z.string().trim().min(1).nullable().optional(),
+  delegateUserId: z.string().trim().min(1).nullable().optional(),
+  delegateUntil: z.string().trim().max(20).nullable().optional(),
+  riskSummary: z.string().trim().max(500).optional(),
 });
 
 type IngestTarget = {
@@ -2494,8 +2535,124 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
 
   // ------------------------------------------------------------------
-  // Position profile assignment
+  // Position profiles
   // ------------------------------------------------------------------
+  app.post("/api/position-profiles", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = positionProfileCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Position profile details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only admins can create position profiles." });
+        return;
+      }
+      const ownerId = parsed.data.ownerId ?? null;
+      if (ownerId && !members.some((member) => member.user_id === ownerId)) {
+        res.status(404).json({ message: "Profile owner is not a workspace member." });
+        return;
+      }
+      const managerId = parsed.data.managerId ?? null;
+      if (managerId && !members.some((member) => member.user_id === managerId)) {
+        res.status(404).json({ message: "Direct manager is not a workspace member." });
+        return;
+      }
+      const created = await store.createPositionProfile(orgId, {
+        title: parsed.data.title,
+        status: parsed.data.status ?? (ownerId ? "active" : "vacant"),
+        current_owner_id: ownerId,
+        direct_manager_id: managerId,
+        risk_summary: "Created by admin. Donnit will enrich this profile from task history.",
+      });
+      res.status(201).json(toClientPositionProfile(created));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.patch("/api/position-profiles/:id", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = positionProfileUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Position profile update details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only admins can update position profiles." });
+        return;
+      }
+      const ensureMember = (id: string | null | undefined, label: string) => {
+        if (!id) return null;
+        if (!members.some((member) => member.user_id === id)) {
+          throw new Error(`${label} is not a workspace member.`);
+        }
+        return id;
+      };
+      const patch: Partial<DonnitPositionProfile> = {};
+      if (parsed.data.title !== undefined) patch.title = parsed.data.title;
+      if (parsed.data.status !== undefined) patch.status = parsed.data.status;
+      if (parsed.data.currentOwnerId !== undefined) patch.current_owner_id = ensureMember(parsed.data.currentOwnerId, "Current owner");
+      if (parsed.data.directManagerId !== undefined) patch.direct_manager_id = ensureMember(parsed.data.directManagerId, "Direct manager");
+      if (parsed.data.temporaryOwnerId !== undefined) patch.temporary_owner_id = ensureMember(parsed.data.temporaryOwnerId, "Temporary owner");
+      if (parsed.data.delegateUserId !== undefined) patch.delegate_user_id = ensureMember(parsed.data.delegateUserId, "Delegate");
+      if (parsed.data.delegateUntil !== undefined) patch.delegate_until = parsed.data.delegateUntil || null;
+      if (parsed.data.riskSummary !== undefined) patch.risk_summary = parsed.data.riskSummary;
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({ message: "No position profile changes were supplied." });
+        return;
+      }
+      const updated = await store.updatePositionProfile(orgId, String(req.params.id), patch);
+      if (!updated) {
+        res.status(404).json({ message: "Position profile not found." });
+        return;
+      }
+      res.json(toClientPositionProfile(updated));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.delete("/api/position-profiles/:id", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only admins can delete position profiles." });
+        return;
+      }
+      await store.deletePositionProfile(orgId, String(req.params.id));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/position-profiles/assign", async (req: Request, res: Response) => {
     const parsed = positionProfileAssignSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2560,7 +2717,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             }),
           });
         }
-        res.json({ ok: true, mode, updated: updatedCount });
+        let profile = null;
+        if (parsed.data.profileId) {
+          const delegateUntilDate = delegateUntil || null;
+          const updatedProfile = await store.updatePositionProfile(orgId, parsed.data.profileId, {
+            status: mode === "transfer" ? "active" : "covered",
+            current_owner_id: mode === "transfer" ? toUserId : fromUserId,
+            temporary_owner_id: mode === "transfer" ? null : toUserId,
+            delegate_user_id: mode === "transfer" ? null : toUserId,
+            delegate_until: mode === "transfer" ? null : delegateUntilDate,
+            risk_summary:
+              mode === "transfer"
+                ? `Transferred from ${fromUserId} to ${toUserId}. ${updatedCount} active task${updatedCount === 1 ? "" : "s"} moved.`
+                : `Coverage delegated to ${toUserId}. ${updatedCount} active task${updatedCount === 1 ? "" : "s"} remain owned by the profile owner.`,
+          });
+          if (updatedProfile) {
+            profile = toClientPositionProfile(updatedProfile);
+            await store.createPositionProfileAssignment(orgId, {
+              position_profile_id: updatedProfile.id,
+              from_user_id: fromUserId,
+              to_user_id: toUserId,
+              actor_id: auth.userId,
+              mode: mode === "transfer" ? "transfer" : "delegate",
+              ends_at: delegateUntilDate ? `${delegateUntilDate}T23:59:59.000Z` : null,
+              notes: profileTitle,
+            });
+          }
+        }
+        res.json({ ok: true, mode, updated: updatedCount, profile });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });

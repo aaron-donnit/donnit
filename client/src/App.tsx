@@ -178,6 +178,7 @@ type Bootstrap = {
   events: TaskEvent[];
   messages: ChatMessage[];
   suggestions: EmailSuggestion[];
+  positionProfiles?: PersistedPositionProfile[];
   agenda: AgendaItem[];
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };
@@ -191,8 +192,13 @@ type Bootstrap = {
 
 type PositionProfile = {
   id: string;
+  persisted: boolean;
   title: string;
   owner: User;
+  directManagerId: Id | null;
+  temporaryOwnerId: Id | null;
+  delegateUserId: Id | null;
+  delegateUntil: string | null;
   status: "active" | "vacant" | "covered";
   currentIncompleteTasks: Task[];
   recurringTasks: Task[];
@@ -206,6 +212,23 @@ type PositionProfile = {
   riskReasons: string[];
   transitionChecklist: string[];
   lastUpdatedAt: string | null;
+};
+
+type PersistedPositionProfile = {
+  id: string;
+  title: string;
+  status: "active" | "vacant" | "covered";
+  currentOwnerId: Id | null;
+  directManagerId: Id | null;
+  temporaryOwnerId: Id | null;
+  delegateUserId: Id | null;
+  delegateUntil: string | null;
+  autoUpdateRules: Record<string, unknown>;
+  institutionalMemory: Record<string, unknown>;
+  riskScore: number;
+  riskSummary: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type UrgencyClass = "urgency-high" | "urgency-medium" | "urgency-low";
@@ -292,9 +315,95 @@ function inferToolsFromTasks(tasks: Task[]) {
   return tools.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
 }
 
-function buildPositionProfiles(tasks: Task[], users: User[], events: TaskEvent[]): PositionProfile[] {
+function memoryStringArray(memory: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = memory[key];
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  return [];
+}
+
+function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionProfile): PositionProfile {
+  const memory = record.institutionalMemory ?? {};
+  const howTo = Array.from(new Set([...memoryStringArray(memory, ["howTo", "howToNotes"]), ...profile.howTo])).slice(0, 6);
+  const tools = Array.from(new Set([...memoryStringArray(memory, ["tools", "toolAccess"]), ...profile.tools])).slice(0, 8);
+  const stakeholders = Array.from(new Set([...memoryStringArray(memory, ["stakeholders", "contacts"]), ...profile.stakeholders])).slice(0, 8);
+  const criticalDates = Array.from(new Set([...memoryStringArray(memory, ["criticalDates"]), ...profile.criticalDates])).slice(0, 6);
+  const transitionChecklist = Array.from(
+    new Set([...memoryStringArray(memory, ["transitionChecklist"]), ...profile.transitionChecklist]),
+  ).slice(0, 7);
+  const riskReasons = Array.from(
+    new Set([record.riskSummary, ...profile.riskReasons].filter((item): item is string => Boolean(item))),
+  ).slice(0, 5);
+  const riskScore = Math.max(record.riskScore ?? 0, profile.riskScore);
+
+  return {
+    ...profile,
+    id: record.id,
+    persisted: true,
+    title: record.title || profile.title,
+    status: record.status || profile.status,
+    directManagerId: record.directManagerId,
+    temporaryOwnerId: record.temporaryOwnerId,
+    delegateUserId: record.delegateUserId,
+    delegateUntil: record.delegateUntil,
+    howTo,
+    tools,
+    stakeholders,
+    criticalDates,
+    transitionChecklist,
+    riskScore,
+    riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
+    riskReasons,
+    lastUpdatedAt: record.updatedAt ?? profile.lastUpdatedAt,
+  };
+}
+
+function buildEmptyPositionProfile(record: PersistedPositionProfile, users: User[]): PositionProfile | null {
+  const owner =
+    users.find((user) => String(user.id) === String(record.currentOwnerId)) ??
+    users[0] ??
+    null;
+  if (!owner) return null;
+  const base: PositionProfile = {
+    id: record.id,
+    persisted: true,
+    title: record.title,
+    owner,
+    directManagerId: record.directManagerId,
+    temporaryOwnerId: record.temporaryOwnerId,
+    delegateUserId: record.delegateUserId,
+    delegateUntil: record.delegateUntil,
+    status: record.status,
+    currentIncompleteTasks: [],
+    recurringTasks: [],
+    completedTasks: [],
+    criticalDates: [],
+    howTo: [],
+    tools: [],
+    stakeholders: [],
+    riskScore: record.riskScore ?? 0,
+    riskLevel: (record.riskScore ?? 0) >= 60 ? "high" : (record.riskScore ?? 0) >= 30 ? "medium" : "low",
+    riskReasons: record.riskSummary ? [record.riskSummary] : [],
+    transitionChecklist: [
+      "Assign or confirm the current owner for this job title.",
+      "Add recurring responsibilities as they are discovered.",
+      "Attach tool access and account ownership details.",
+      "Review current open work before handoff.",
+    ],
+    lastUpdatedAt: record.updatedAt ?? record.createdAt,
+  };
+  return mergeProfileRecord(base, record);
+}
+
+function buildPositionProfiles(
+  tasks: Task[],
+  users: User[],
+  events: TaskEvent[],
+  persistedProfiles: PersistedPositionProfile[] = [],
+): PositionProfile[] {
   const today = new Date().toISOString().slice(0, 10);
-  return users.map((user) => {
+  const derivedProfiles: PositionProfile[] = users.map((user) => {
     const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
     const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
     const completedTasks = owned.filter((task) => task.status === "completed");
@@ -349,8 +458,13 @@ function buildPositionProfiles(tasks: Task[], users: User[], events: TaskEvent[]
     const title = positionTitleForUser(user);
     return {
       id: `position-${String(user.id)}`,
+      persisted: false,
       title,
       owner: user,
+      directManagerId: user.managerId,
+      temporaryOwnerId: null,
+      delegateUserId: null,
+      delegateUntil: null,
       status: currentIncompleteTasks.some((task) => task.delegatedToId) ? "covered" : "active",
       currentIncompleteTasks,
       recurringTasks,
@@ -372,8 +486,22 @@ function buildPositionProfiles(tasks: Task[], users: User[], events: TaskEvent[]
         "Assign the profile owner or set a delegate coverage period.",
       ],
       lastUpdatedAt: recentEvents ?? owned.map((task) => task.createdAt).sort().at(-1) ?? null,
-    };
+    } satisfies PositionProfile;
   });
+
+  const usedRecordIds = new Set<string>();
+  const merged = derivedProfiles.map((profile) => {
+    const record = persistedProfiles.find((item) => String(item.currentOwnerId) === String(profile.owner.id));
+    if (!record) return profile;
+    usedRecordIds.add(record.id);
+    return mergeProfileRecord(profile, record);
+  });
+  for (const record of persistedProfiles) {
+    if (usedRecordIds.has(record.id)) continue;
+    const profile = buildEmptyPositionProfile(record, users);
+    if (profile) merged.push(profile);
+  }
+  return merged.sort((a, b) => a.title.localeCompare(b.title));
 }
 
 function canAdministerProfiles(user: User | null | undefined) {
@@ -2516,10 +2644,12 @@ function PositionProfilesPanel({
   profiles,
   users,
   currentUserId,
+  authenticated,
 }: {
   profiles: PositionProfile[];
   users: User[];
   currentUserId: Id;
+  authenticated: boolean;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canManageProfiles = canAdministerProfiles(currentUser);
@@ -2561,6 +2691,7 @@ function PositionProfilesPanel({
           const base = profiles.find((profile) => String(profile.owner.id) === String(owner.id));
           return {
             ...(base ?? {
+              persisted: false,
               currentIncompleteTasks: [],
               recurringTasks: [],
               completedTasks: [],
@@ -2578,6 +2709,10 @@ function PositionProfilesPanel({
               ],
               lastUpdatedAt: null,
               status: "active" as const,
+              directManagerId: owner.managerId,
+              temporaryOwnerId: null,
+              delegateUserId: null,
+              delegateUntil: null,
             }),
             id: meta.id,
             title: meta.title,
@@ -2588,14 +2723,16 @@ function PositionProfilesPanel({
     [customProfileMetas, profiles, users],
   );
   const repositoryProfiles = useMemo(
-    () =>
-      [
+    () => {
+      if (authenticated) return [...profiles].sort((a, b) => a.title.localeCompare(b.title));
+      return [
         ...profiles
           .filter((profile) => !deletedProfileIds.has(profile.id))
           .map((profile) => ({ ...profile, title: renamedProfileTitles[profile.id] ?? profile.title })),
         ...customProfiles,
-      ].sort((a, b) => a.title.localeCompare(b.title)),
-    [customProfiles, deletedProfileIds, profiles, renamedProfileTitles],
+      ].sort((a, b) => a.title.localeCompare(b.title));
+    },
+    [authenticated, customProfiles, deletedProfileIds, profiles, renamedProfileTitles],
   );
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
@@ -2627,6 +2764,66 @@ function PositionProfilesPanel({
     setTargetUserId(fallback ? String(fallback.id) : "");
   }, [selectedProfile?.id, currentUserId, targetUsers]);
 
+  const createProfile = useMutation({
+    mutationFn: async (input: { title: string; ownerId: Id | null; status?: "active" | "vacant" | "covered" }) => {
+      const res = await apiRequest("POST", "/api/position-profiles", {
+        title: input.title,
+        ownerId: input.ownerId === null ? null : String(input.ownerId),
+        status: input.status,
+      });
+      return (await res.json()) as PersistedPositionProfile;
+    },
+    onSuccess: async (profile) => {
+      await invalidateWorkspace();
+      setSelectedProfileId(profile.id);
+      setViewMode("detail");
+      toast({ title: "Position Profile saved", description: `${profile.title} is now a durable admin record.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save Position Profile",
+        description: error instanceof Error ? error.message : "Apply the Position Profiles migration and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateProfile = useMutation({
+    mutationFn: async (input: { id: string; patch: Record<string, unknown> }) => {
+      const res = await apiRequest("PATCH", `/api/position-profiles/${input.id}`, input.patch);
+      return (await res.json()) as PersistedPositionProfile;
+    },
+    onSuccess: async (profile) => {
+      await invalidateWorkspace();
+      setSelectedProfileId(profile.id);
+      toast({ title: "Position Profile updated", description: `${profile.title} was saved.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update Position Profile",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deletePersistedProfile = useMutation({
+    mutationFn: async (profileId: string) => apiRequest("DELETE", `/api/position-profiles/${profileId}`),
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      setSelectedProfileId("");
+      setViewMode("list");
+      toast({ title: "Position Profile deleted", description: "The saved admin record was removed." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not delete Position Profile",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const persistCustomProfiles = (next: Array<{ id: string; title: string; ownerId: string }>) => {
     setCustomProfileMetas(next);
     if (typeof window !== "undefined") {
@@ -2648,6 +2845,16 @@ function PositionProfilesPanel({
   const renameProfile = (profileId: string, title: string) => {
     const trimmed = title.trim();
     if (trimmed.length < 2) return;
+    if (authenticated) {
+      const profile = repositoryProfiles.find((item) => item.id === profileId);
+      if (!profile) return;
+      if (profile.persisted) {
+        updateProfile.mutate({ id: profile.id, patch: { title: trimmed } });
+      } else {
+        createProfile.mutate({ title: trimmed, ownerId: profile.owner.id, status: profile.status });
+      }
+      return;
+    }
     if (profileId.startsWith("custom-position-")) {
       persistCustomProfiles(
         customProfileMetas.map((profile) => (profile.id === profileId ? { ...profile, title: trimmed } : profile)),
@@ -2658,7 +2865,18 @@ function PositionProfilesPanel({
   };
   const addProfile = () => {
     const title = newProfileTitle.trim();
-    if (!title || !newProfileOwnerId) return;
+    if (!title) return;
+    if (authenticated) {
+      createProfile.mutate({
+        title,
+        ownerId: newProfileOwnerId || null,
+        status: newProfileOwnerId ? "active" : "vacant",
+      });
+      setNewProfileTitle("");
+      setCreateOpen(false);
+      return;
+    }
+    if (!newProfileOwnerId) return;
     const id = `custom-position-${Date.now()}`;
     persistCustomProfiles([...customProfileMetas, { id, title, ownerId: newProfileOwnerId }]);
     setSelectedProfileId(id);
@@ -2668,6 +2886,17 @@ function PositionProfilesPanel({
   };
   const deleteProfile = () => {
     if (!selectedProfile) return;
+    if (authenticated) {
+      if (!selectedProfile.persisted) {
+        toast({
+          title: "Generated profile cannot be deleted",
+          description: "This profile is generated from active task history. Rename or create it first to save an admin record.",
+        });
+        return;
+      }
+      deletePersistedProfile.mutate(selectedProfile.id);
+      return;
+    }
     if (selectedProfile.id.startsWith("custom-position-")) {
       persistCustomProfiles(customProfileMetas.filter((profile) => profile.id !== selectedProfile.id));
     } else {
@@ -2698,17 +2927,29 @@ function PositionProfilesPanel({
   const assign = useMutation({
     mutationFn: async () => {
       if (!selectedProfile || !targetUserId) throw new Error("Choose a profile and target user.");
+      let profileId = selectedProfile.persisted ? selectedProfile.id : undefined;
+      if (authenticated && !profileId) {
+        const createRes = await apiRequest("POST", "/api/position-profiles", {
+          title: selectedProfile.title,
+          ownerId: String(selectedProfile.owner.id),
+          status: selectedProfile.status,
+        });
+        const created = (await createRes.json()) as PersistedPositionProfile;
+        profileId = created.id;
+      }
       const res = await apiRequest("POST", "/api/position-profiles/assign", {
+        profileId,
         fromUserId: selectedProfile.owner.id,
         toUserId: targetUserId,
         mode,
         delegateUntil: delegateUntil || null,
         profileTitle: selectedProfile.title,
       });
-      return (await res.json()) as { ok: boolean; updated: number; mode: string };
+      return (await res.json()) as { ok: boolean; updated: number; mode: string; profile?: PersistedPositionProfile | null };
     },
     onSuccess: async (result) => {
       await invalidateWorkspace();
+      if (result.profile?.id) setSelectedProfileId(result.profile.id);
       toast({
         title: mode === "transfer" ? "Profile transferred" : "Coverage delegated",
         description: `${result.updated} active task${result.updated === 1 ? "" : "s"} updated for ${selectedProfile?.title ?? "the profile"}.`,
@@ -2791,6 +3032,7 @@ function PositionProfilesPanel({
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 data-testid="select-position-profile-owner"
               >
+                {authenticated && <option value="">Vacant / no current owner</option>}
                 {users.map((user) => (
                   <option key={String(user.id)} value={String(user.id)}>
                     {user.name}
@@ -2800,10 +3042,10 @@ function PositionProfilesPanel({
               <Button
                 size="sm"
                 onClick={addProfile}
-                disabled={newProfileTitle.trim().length < 2}
+                disabled={newProfileTitle.trim().length < 2 || createProfile.isPending}
                 data-testid="button-position-profile-add"
               >
-                <ListPlus className="size-4" />
+                {createProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <ListPlus className="size-4" />}
                 Add profile
               </Button>
             </div>
@@ -2836,20 +3078,25 @@ function PositionProfilesPanel({
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-foreground">{profile.title}</p>
                         <p className="truncate text-xs text-muted-foreground">
-                          Owner: {profile.owner.name} - {profile.status}
+                          {profile.status === "vacant" ? "Vacant" : `Owner: ${profile.owner.name}`} - {profile.status}
                         </p>
                       </div>
-                      <span
-                        className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
-                          profile.riskLevel === "high"
-                            ? "bg-destructive/10 text-destructive"
-                            : profile.riskLevel === "medium"
-                              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                              : "bg-brand-green/10 text-brand-green"
-                        }`}
-                      >
-                        Risk {profile.riskScore}
-                      </span>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span
+                          className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
+                            profile.riskLevel === "high"
+                              ? "bg-destructive/10 text-destructive"
+                              : profile.riskLevel === "medium"
+                                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                : "bg-brand-green/10 text-brand-green"
+                          }`}
+                        >
+                          Risk {profile.riskScore}
+                        </span>
+                        <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
+                          {profile.persisted ? "Saved" : "Generated"}
+                        </span>
+                      </div>
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-5">
                       <span className="rounded-md bg-muted px-2 py-2">
@@ -2897,10 +3144,10 @@ function PositionProfilesPanel({
                 variant="outline"
                 size="sm"
                 onClick={deleteProfile}
-                disabled={!canManageProfiles}
+                disabled={!canManageProfiles || deletePersistedProfile.isPending || (authenticated && !selectedProfile.persisted)}
                 data-testid="button-position-profile-delete"
               >
-                <X className="size-4" />
+                {deletePersistedProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
                 Delete
               </Button>
             </div>
@@ -2910,7 +3157,8 @@ function PositionProfilesPanel({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    Owner: {selectedProfile.owner.name} - {selectedProfile.status}
+                    {selectedProfile.status === "vacant" ? "Vacant profile" : `Owner: ${selectedProfile.owner.name}`} - {selectedProfile.status} -{" "}
+                    {selectedProfile.persisted ? "saved admin record" : "generated from task history"}
                   </p>
                 </div>
                 <span
@@ -2951,6 +3199,7 @@ function PositionProfilesPanel({
                     key={selectedProfile.id}
                     defaultValue={selectedProfile.title}
                     maxLength={160}
+                    disabled={updateProfile.isPending || createProfile.isPending}
                     onBlur={(event) => renameProfile(selectedProfile.id, event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -2961,6 +3210,70 @@ function PositionProfilesPanel({
                     }}
                     data-testid="input-position-profile-rename"
                   />
+                </div>
+              )}
+              {canManageProfiles && authenticated && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {!selectedProfile.persisted ? (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        createProfile.mutate({
+                          title: selectedProfile.title,
+                          ownerId: selectedProfile.owner.id,
+                          status: selectedProfile.status,
+                        })
+                      }
+                      disabled={createProfile.isPending}
+                      data-testid="button-position-profile-save-generated"
+                    >
+                      {createProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+                      Save admin record
+                    </Button>
+                  ) : (
+                    <>
+                      <select
+                        value={selectedProfile.status}
+                        onChange={(event) =>
+                          updateProfile.mutate({
+                            id: selectedProfile.id,
+                            patch: {
+                              status: event.target.value,
+                              currentOwnerId: event.target.value === "vacant" ? null : selectedProfile.owner.id,
+                            },
+                          })
+                        }
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        data-testid="select-position-profile-status"
+                      >
+                        <option value="active">Active</option>
+                        <option value="vacant">Vacant</option>
+                        <option value="covered">Covered temporarily</option>
+                      </select>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          updateProfile.mutate({
+                            id: selectedProfile.id,
+                            patch: {
+                              status: "vacant",
+                              currentOwnerId: null,
+                              temporaryOwnerId: null,
+                              delegateUserId: null,
+                              delegateUntil: null,
+                              riskSummary: "Marked vacant by admin. Use delegate access or transfer when coverage is assigned.",
+                            },
+                          })
+                        }
+                        disabled={updateProfile.isPending}
+                        data-testid="button-position-profile-vacant"
+                      >
+                        {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <AlertTriangle className="size-4" />}
+                        Mark vacant
+                      </Button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -4494,6 +4807,7 @@ function WorkspaceSettingsDialog({
   open,
   onOpenChange,
   currentUser,
+  authenticated,
   users,
   positionProfiles,
   currentUserId,
@@ -4508,6 +4822,7 @@ function WorkspaceSettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentUser: User | null;
+  authenticated: boolean;
   users: User[];
   positionProfiles: PositionProfile[];
   currentUserId: Id;
@@ -4636,6 +4951,7 @@ function WorkspaceSettingsDialog({
               profiles={positionProfiles}
               users={users}
               currentUserId={currentUserId}
+              authenticated={authenticated}
             />
           )}
 
@@ -5306,8 +5622,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     [rawNotifications, reviewedNotificationIds],
   );
   const positionProfiles = useMemo(
-    () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? []),
-    [data?.tasks, data?.users, data?.events],
+    () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? [], data?.positionProfiles ?? []),
+    [data?.tasks, data?.users, data?.events, data?.positionProfiles],
   );
   const approvedAgenda = useMemo(
     () => (data?.agenda ?? []).filter((item) => !agendaExcludedTaskIds.has(String(item.taskId))),
@@ -5704,6 +6020,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         open={workspaceSettingsOpen}
         onOpenChange={setWorkspaceSettingsOpen}
         currentUser={currentUser}
+        authenticated={Boolean(data.authenticated)}
         users={data.users}
         positionProfiles={positionProfiles}
         currentUserId={data.currentUserId}
