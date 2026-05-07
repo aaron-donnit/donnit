@@ -29,7 +29,13 @@ import {
   createSupabaseAdminClient,
   requireDonnitAuth,
 } from "./auth-supabase";
-import { DonnitStore, type DonnitPositionProfile, type DonnitTask } from "./donnit-store";
+import {
+  DonnitStore,
+  type DonnitPositionProfile,
+  type DonnitTask,
+  type DonnitTaskSubtask,
+  type DonnitUserWorkspaceState,
+} from "./donnit-store";
 import { DONNIT_SCHEMA, isSupabaseConfigured } from "./supabase";
 
 const DEMO_USER_ID = 1;
@@ -834,6 +840,18 @@ function toClientTask(task: DonnitTask) {
   };
 }
 
+function toClientTaskSubtask(subtask: DonnitTaskSubtask) {
+  return {
+    id: subtask.id,
+    taskId: subtask.task_id,
+    title: subtask.title,
+    done: subtask.status === "completed",
+    position: subtask.position,
+    completedAt: subtask.completed_at,
+    createdAt: subtask.created_at,
+  };
+}
+
 function toClientPositionProfile(profile: DonnitPositionProfile) {
   return {
     id: profile.id,
@@ -854,6 +872,30 @@ function toClientPositionProfile(profile: DonnitPositionProfile) {
 }
 
 type ClientTaskShape = ReturnType<typeof toClientTask>;
+
+function cleanStringArray(value: unknown, maxItems = 300) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item))
+    .filter((item) => item.length > 0 && item.length <= 240)
+    .slice(-maxItems);
+}
+
+function toClientWorkspaceState(input: {
+  reviewed?: DonnitUserWorkspaceState | null;
+  agenda?: DonnitUserWorkspaceState | null;
+}) {
+  const reviewedValue = (input.reviewed?.value ?? {}) as Record<string, unknown>;
+  const agendaValue = (input.agenda?.value ?? {}) as Record<string, unknown>;
+  return {
+    reviewedNotificationIds: cleanStringArray(reviewedValue.ids, 200),
+    agenda: {
+      excludedTaskIds: cleanStringArray(agendaValue.excludedTaskIds, 500),
+      approved: agendaValue.approved === true,
+      approvedAt: typeof agendaValue.approvedAt === "string" ? agendaValue.approvedAt : null,
+    },
+  };
+}
 
 function hasTaskRelationshipColumns(task: DonnitTask) {
   return Object.prototype.hasOwnProperty.call(task, "delegated_to")
@@ -1168,13 +1210,26 @@ async function buildAuthenticatedBootstrap(req: Request) {
     };
   }
   const orgId = profile.default_org_id;
-  const [members, tasks, events, messages, suggestions, positionProfiles] = await Promise.all([
+  const [
+    members,
+    tasks,
+    events,
+    messages,
+    suggestions,
+    positionProfiles,
+    subtasks,
+    reviewedState,
+    agendaState,
+  ] = await Promise.all([
     store.listOrgMembers(orgId),
     store.listTasks(orgId),
     store.listEvents(orgId),
     store.listChatMessages(orgId),
     store.listEmailSuggestions(orgId),
     store.listPositionProfiles(orgId),
+    store.listTaskSubtasks(orgId),
+    store.getWorkspaceState(orgId, "reviewed_notifications"),
+    store.getWorkspaceState(orgId, "agenda_state"),
   ]);
   const users = members.map((m) => ({
     id: m.user_id,
@@ -1226,6 +1281,8 @@ async function buildAuthenticatedBootstrap(req: Request) {
       createdAt: s.created_at,
     })),
     positionProfiles: positionProfiles.map(toClientPositionProfile),
+    subtasks: subtasks.map(toClientTaskSubtask),
+    workspaceState: toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState }),
     agenda: buildClientAgenda(
       clientTasks,
       calendarContext?.busyByDate,
@@ -1301,6 +1358,8 @@ async function buildDemoBootstrap() {
       };
     }),
     positionProfiles: [],
+    subtasks: [],
+    workspaceState: toClientWorkspaceState({}),
     agenda: buildAgenda(demoTasks),
     integrations: getIntegrationStatus(),
   };
@@ -1353,6 +1412,34 @@ const documentSuggestRequestSchema = z.object({
   mimeType: z.string().trim().max(160).optional(),
   dataBase64: z.string().min(16).max(12_000_000),
 });
+
+const taskSubtaskCreateSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  position: z.number().int().min(0).max(1000).optional(),
+});
+
+const taskSubtaskUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  done: z.boolean().optional(),
+  position: z.number().int().min(0).max(1000).optional(),
+});
+
+const workspaceStateSchema = z.discriminatedUnion("key", [
+  z.object({
+    key: z.literal("reviewed_notifications"),
+    value: z.object({
+      ids: z.array(z.string().trim().min(1).max(240)).max(200),
+    }),
+  }),
+  z.object({
+    key: z.literal("agenda_state"),
+    value: z.object({
+      excludedTaskIds: z.array(z.union([z.string(), z.number()])).max(500).transform((items) => items.map(String)),
+      approved: z.boolean(),
+      approvedAt: z.string().datetime().nullable().optional(),
+    }),
+  }),
+]);
 
 const positionProfileAssignSchema = z.object({
   profileId: z.string().trim().min(1).optional(),
@@ -2071,6 +2158,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(await buildDemoBootstrap());
   });
 
+  app.patch("/api/workspace-state", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = workspaceStateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Workspace state payload is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const stateKey = parsed.data.key as DonnitUserWorkspaceState["state_key"];
+      const state = await store.upsertWorkspaceState(orgId, stateKey, parsed.data.value);
+      res.json({ ok: true, state });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   // ------------------------------------------------------------------
   // Chat
   // ------------------------------------------------------------------
@@ -2407,6 +2516,101 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : data.note || "Task details updated.",
     });
     res.json(toClientDemoTask(task));
+  });
+
+  app.post("/api/tasks/:id/subtasks", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskSubtaskCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Subtask title is required." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const taskId = String(req.params.id);
+      const task = await store.getTask(taskId);
+      if (!task || task.org_id !== orgId) {
+        res.status(404).json({ message: "Task not found." });
+        return;
+      }
+      const subtask = await store.createTaskSubtask(orgId, {
+        task_id: taskId,
+        title: parsed.data.title,
+        position: parsed.data.position,
+      });
+      res.status(201).json(toClientTaskSubtask(subtask));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.patch("/api/tasks/:taskId/subtasks/:subtaskId", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskSubtaskUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Subtask update is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const taskId = String(req.params.taskId);
+      const task = await store.getTask(taskId);
+      if (!task || task.org_id !== orgId) {
+        res.status(404).json({ message: "Task not found." });
+        return;
+      }
+      const patch: Partial<Pick<DonnitTaskSubtask, "title" | "status" | "position" | "completed_at">> = {};
+      if (parsed.data.title !== undefined) patch.title = parsed.data.title;
+      if (parsed.data.position !== undefined) patch.position = parsed.data.position;
+      if (parsed.data.done !== undefined) {
+        patch.status = parsed.data.done ? "completed" : "open";
+        patch.completed_at = parsed.data.done ? new Date().toISOString() : null;
+      }
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({ message: "No subtask changes were provided." });
+        return;
+      }
+      const subtask = await store.updateTaskSubtask(orgId, taskId, String(req.params.subtaskId), patch);
+      if (!subtask) {
+        res.status(404).json({ message: "Subtask not found." });
+        return;
+      }
+      res.json(toClientTaskSubtask(subtask));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.delete("/api/tasks/:taskId/subtasks/:subtaskId", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const taskId = String(req.params.taskId);
+      const task = await store.getTask(taskId);
+      if (!task || task.org_id !== orgId) {
+        res.status(404).json({ message: "Task not found." });
+        return;
+      }
+      await store.deleteTaskSubtask(orgId, taskId, String(req.params.subtaskId));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   async function handleTaskAction(

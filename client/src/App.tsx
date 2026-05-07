@@ -138,9 +138,23 @@ type TaskEvent = {
 
 type LocalSubtask = {
   id: string;
+  taskId: Id;
   title: string;
   done: boolean;
+  position: number;
+  completedAt: string | null;
   createdAt: string;
+};
+
+type TaskSubtask = LocalSubtask;
+
+type WorkspaceState = {
+  reviewedNotificationIds: string[];
+  agenda: {
+    excludedTaskIds: string[];
+    approved: boolean;
+    approvedAt: string | null;
+  };
 };
 
 type ChatMessage = {
@@ -179,6 +193,8 @@ type Bootstrap = {
   messages: ChatMessage[];
   suggestions: EmailSuggestion[];
   positionProfiles?: PersistedPositionProfile[];
+  subtasks?: TaskSubtask[];
+  workspaceState?: WorkspaceState;
   agenda: AgendaItem[];
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };
@@ -260,6 +276,36 @@ function useBootstrap() {
 
 function invalidateWorkspace() {
   return queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
+}
+
+function sortSubtasks(subtasks: TaskSubtask[]) {
+  return [...subtasks].sort((a, b) => {
+    if (a.position !== b.position) return a.position - b.position;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+}
+
+function normalizeLocalSubtasks(taskId: Id, value: unknown): LocalSubtask[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index): LocalSubtask | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id : `subtask-${Date.now()}-${index}`;
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      if (!title) return null;
+      const done = record.done === true;
+      return {
+        id,
+        taskId,
+        title,
+        done,
+        position: typeof record.position === "number" ? record.position : index,
+        completedAt: typeof record.completedAt === "string" ? record.completedAt : null,
+        createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
+      };
+    })
+    .filter((item): item is LocalSubtask => item !== null);
 }
 
 function titleCase(value: string) {
@@ -1397,11 +1443,15 @@ function TaskRow({
 function TaskList({
   tasks,
   users,
+  subtasks = [],
+  authenticated = false,
   viewLabel,
   onPinTask,
 }: {
   tasks: Task[];
   users: User[];
+  subtasks?: TaskSubtask[];
+  authenticated?: boolean;
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
 }) {
@@ -1554,6 +1604,8 @@ function TaskList({
       <TaskDetailDialog
         task={selectedTask}
         users={users}
+        subtasks={subtasks}
+        authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
           if (!open) setSelectedTaskId(null);
@@ -1566,11 +1618,15 @@ function TaskList({
 function TaskDetailDialog({
   task,
   users,
+  subtasks: persistedSubtasks = [],
+  authenticated = false,
   open,
   onOpenChange,
 }: {
   task: Task | null;
   users: User[];
+  subtasks?: TaskSubtask[];
+  authenticated?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -1584,7 +1640,7 @@ function TaskDetailDialog({
   const [delegatedToId, setDelegatedToId] = useState("");
   const [collaboratorIds, setCollaboratorIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
-  const [subtasks, setSubtasks] = useState<LocalSubtask[]>([]);
+  const [localSubtasks, setLocalSubtasks] = useState<LocalSubtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
 
   useEffect(() => {
@@ -1600,16 +1656,22 @@ function TaskDetailDialog({
     setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
     setNewSubtaskTitle("");
+    if (authenticated) {
+      setLocalSubtasks([]);
+      return;
+    }
     try {
       if (typeof window === "undefined") {
-        setSubtasks([]);
+        setLocalSubtasks([]);
       } else {
-        setSubtasks(JSON.parse(window.localStorage.getItem(`donnit.subtasks.${task.id}`) ?? "[]"));
+        setLocalSubtasks(
+          normalizeLocalSubtasks(task.id, JSON.parse(window.localStorage.getItem(`donnit.subtasks.${task.id}`) ?? "[]")),
+        );
       }
     } catch {
-      setSubtasks([]);
+      setLocalSubtasks([]);
     }
-  }, [task]);
+  }, [authenticated, task]);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -1689,6 +1751,56 @@ function TaskDetailDialog({
     },
   });
 
+  const createSubtask = useMutation({
+    mutationFn: async (input: { title: string; position: number }) => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/subtasks`, input);
+      return (await res.json()) as TaskSubtask;
+    },
+    onSuccess: async () => {
+      setNewSubtaskTitle("");
+      await invalidateWorkspace();
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not add subtask",
+        description: error instanceof Error ? error.message : "Apply migration 0010 and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateSubtask = useMutation({
+    mutationFn: async (input: { subtaskId: Id; done: boolean }) => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("PATCH", `/api/tasks/${task.id}/subtasks/${input.subtaskId}`, { done: input.done });
+      return (await res.json()) as TaskSubtask;
+    },
+    onSuccess: invalidateWorkspace,
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update subtask",
+        description: error instanceof Error ? error.message : "Try that subtask again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const removeSubtask = useMutation({
+    mutationFn: async (subtaskId: Id) => {
+      if (!task) throw new Error("No task selected.");
+      await apiRequest("DELETE", `/api/tasks/${task.id}/subtasks/${subtaskId}`);
+    },
+    onSuccess: invalidateWorkspace,
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not delete subtask",
+        description: error instanceof Error ? error.message : "Try deleting it again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   if (!task) return null;
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
@@ -1722,25 +1834,54 @@ function TaskDetailDialog({
     updateRelationships.mutate({ assignedToId, delegatedToId: userId, collaboratorIds });
   };
   const persistSubtasks = (next: LocalSubtask[]) => {
-    setSubtasks(next);
+    setLocalSubtasks(next);
     if (task && typeof window !== "undefined") {
       window.localStorage.setItem(`donnit.subtasks.${task.id}`, JSON.stringify(next));
     }
   };
+  const subtasks = authenticated
+    ? sortSubtasks(persistedSubtasks.filter((item) => String(item.taskId) === String(task.id)))
+    : sortSubtasks(localSubtasks);
   const addSubtask = () => {
     const titleText = newSubtaskTitle.trim();
     if (!titleText) return;
+    if (authenticated) {
+      createSubtask.mutate({ title: titleText, position: subtasks.length });
+      return;
+    }
     persistSubtasks([
       ...subtasks,
-      { id: `subtask-${Date.now()}`, title: titleText, done: false, createdAt: new Date().toISOString() },
+      {
+        id: `subtask-${Date.now()}`,
+        taskId: task.id,
+        title: titleText,
+        done: false,
+        position: subtasks.length,
+        completedAt: null,
+        createdAt: new Date().toISOString(),
+      },
     ]);
     setNewSubtaskTitle("");
   };
-  const toggleSubtask = (subtaskId: string) => {
-    persistSubtasks(subtasks.map((item) => (item.id === subtaskId ? { ...item, done: !item.done } : item)));
+  const toggleSubtask = (subtask: TaskSubtask) => {
+    if (authenticated) {
+      updateSubtask.mutate({ subtaskId: subtask.id, done: !subtask.done });
+      return;
+    }
+    persistSubtasks(
+      subtasks.map((item) =>
+        item.id === subtask.id
+          ? { ...item, done: !item.done, completedAt: !item.done ? new Date().toISOString() : null }
+          : item,
+      ),
+    );
   };
-  const deleteSubtask = (subtaskId: string) => {
-    persistSubtasks(subtasks.filter((item) => item.id !== subtaskId));
+  const deleteSubtask = (subtaskId: Id) => {
+    if (authenticated) {
+      removeSubtask.mutate(subtaskId);
+      return;
+    }
+    persistSubtasks(subtasks.filter((item) => String(item.id) !== String(subtaskId)));
   };
 
   return (
@@ -1868,8 +2009,13 @@ function TaskDetailDialog({
                 maxLength={160}
                 data-testid="input-new-subtask"
               />
-              <Button type="button" variant="outline" onClick={addSubtask} disabled={!newSubtaskTitle.trim()}>
-                <ListPlus className="size-4" />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addSubtask}
+                disabled={!newSubtaskTitle.trim() || createSubtask.isPending}
+              >
+                {createSubtask.isPending ? <Loader2 className="size-4 animate-spin" /> : <ListPlus className="size-4" />}
                 Add
               </Button>
             </div>
@@ -1883,7 +2029,8 @@ function TaskDetailDialog({
                   <div key={subtask.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-2">
                     <button
                       type="button"
-                      onClick={() => toggleSubtask(subtask.id)}
+                      onClick={() => toggleSubtask(subtask)}
+                      disabled={updateSubtask.isPending}
                       className={`flex size-6 shrink-0 items-center justify-center rounded-md border ${
                         subtask.done ? "border-brand-green bg-brand-green text-white" : "border-border bg-muted"
                       }`}
@@ -1900,6 +2047,7 @@ function TaskDetailDialog({
                       size="icon"
                       className="size-7"
                       onClick={() => deleteSubtask(subtask.id)}
+                      disabled={removeSubtask.isPending}
                       aria-label="Delete subtask"
                     >
                       <X className="size-3.5" />
@@ -2356,6 +2504,8 @@ function AgendaWorkDialog({
   agenda,
   tasks,
   users,
+  subtasks = [],
+  authenticated = false,
   onPinTask,
 }: {
   open: boolean;
@@ -2363,6 +2513,8 @@ function AgendaWorkDialog({
   agenda: AgendaItem[];
   tasks: Task[];
   users: User[];
+  subtasks?: TaskSubtask[];
+  authenticated?: boolean;
   onPinTask: (taskId: Id) => void;
 }) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -2444,6 +2596,8 @@ function AgendaWorkDialog({
       <TaskDetailDialog
         task={selectedTask}
         users={users}
+        subtasks={subtasks}
+        authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setSelectedTaskId(null);
@@ -2529,10 +2683,14 @@ function ReportingPanel({
 function TeamViewPanel({
   tasks,
   users,
+  subtasks = [],
+  authenticated = false,
   currentUserId,
 }: {
   tasks: Task[];
   users: User[];
+  subtasks?: TaskSubtask[];
+  authenticated?: boolean;
   currentUserId: Id;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
@@ -2622,6 +2780,8 @@ function TeamViewPanel({
       <TaskDetailDialog
         task={selectedTask}
         users={users}
+        subtasks={subtasks}
+        authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
           if (!open) setSelectedTaskId(null);
@@ -3801,6 +3961,8 @@ function SupportRail({
   tasks,
   suggestions,
   users,
+  subtasks = [],
+  authenticated = false,
   currentUserId,
   events,
   agenda,
@@ -3819,6 +3981,8 @@ function SupportRail({
   tasks: Task[];
   suggestions: EmailSuggestion[];
   users: User[];
+  subtasks?: TaskSubtask[];
+  authenticated?: boolean;
   currentUserId: Id;
   events: TaskEvent[];
   agenda: AgendaItem[];
@@ -3917,7 +4081,13 @@ function SupportRail({
       )}
 
       {view === "team" && (
-        <TeamViewPanel tasks={tasks} users={users} currentUserId={currentUserId} />
+        <TeamViewPanel
+          tasks={tasks}
+          users={users}
+          subtasks={subtasks}
+          authenticated={authenticated}
+          currentUserId={currentUserId}
+        />
       )}
 
       {view === "reports" && (
@@ -5184,6 +5354,42 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
   const showDebugTools = import.meta.env.DEV;
+  const persistedReviewedNotificationIds = data?.workspaceState?.reviewedNotificationIds.join("|") ?? "";
+  const persistedAgendaExcludedTaskIds = data?.workspaceState?.agenda.excludedTaskIds.join("|") ?? "";
+  const persistedAgendaApproved = data?.workspaceState?.agenda.approved ?? false;
+
+  const persistWorkspaceState = (input: { key: "reviewed_notifications" | "agenda_state"; value: Record<string, unknown> }) => {
+    if (!data?.authenticated) return;
+    apiRequest("PATCH", "/api/workspace-state", input).catch((error: unknown) => {
+      console.warn("[donnit] workspace state persistence failed", error);
+    });
+  };
+
+  const persistAgendaState = (excludedTaskIds: Set<string>, approved: boolean, approvedAt: string | null = null) => {
+    persistWorkspaceState({
+      key: "agenda_state",
+      value: {
+        excludedTaskIds: Array.from(excludedTaskIds),
+        approved,
+        approvedAt,
+      },
+    });
+  };
+
+  useEffect(() => {
+    if (!data?.authenticated || !data.workspaceState) return;
+    const ids = data.workspaceState.reviewedNotificationIds;
+    setReviewedNotificationIds(new Set(ids));
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("donnit.reviewedNotifications", JSON.stringify(ids.slice(-200)));
+    }
+  }, [data?.authenticated, persistedReviewedNotificationIds]);
+
+  useEffect(() => {
+    if (!data?.authenticated || !data.workspaceState) return;
+    setAgendaExcludedTaskIds(new Set(data.workspaceState.agenda.excludedTaskIds));
+    setAgendaApproved(data.workspaceState.agenda.approved);
+  }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds]);
 
   // The Gmail OAuth callback redirects to "/?gmail=<reason>" after Google
   // sends the user back. Detect that on mount, surface a typed toast, and
@@ -5547,6 +5753,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     onSuccess: (agenda) => {
       setAgendaExcludedTaskIds(new Set());
       setAgendaApproved(false);
+      persistAgendaState(new Set(), false);
       const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
       const scheduled = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
       toast({
@@ -5634,9 +5841,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setReviewedNotificationIds((current) => {
       const next = new Set(current);
       ids.forEach((id) => next.add(id));
+      const nextIds = Array.from(next).slice(-200);
       if (typeof window !== "undefined") {
-        window.localStorage.setItem("donnit.reviewedNotifications", JSON.stringify(Array.from(next).slice(-200)));
+        window.localStorage.setItem("donnit.reviewedNotifications", JSON.stringify(nextIds));
       }
+      persistWorkspaceState({ key: "reviewed_notifications", value: { ids: nextIds } });
       return next;
     });
   };
@@ -5936,6 +6145,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 <TaskList
                   tasks={data.tasks}
                   users={data.users}
+                  subtasks={data.subtasks ?? []}
+                  authenticated={Boolean(data.authenticated)}
                   viewLabel="All workspace work"
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 />
@@ -5948,6 +6159,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   tasks={data.tasks}
                   suggestions={data.suggestions}
                   users={data.users}
+                  subtasks={data.subtasks ?? []}
+                  authenticated={Boolean(data.authenticated)}
                   currentUserId={data.currentUserId}
                   events={data.events}
                   agenda={data.agenda}
@@ -5962,11 +6175,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                       const id = String(taskId);
                       if (next.has(id)) next.delete(id);
                       else next.add(id);
+                      persistAgendaState(next, false);
                       return next;
                     });
                   }}
                   onApproveAgenda={() => {
                     setAgendaApproved(true);
+                    persistAgendaState(agendaExcludedTaskIds, true, new Date().toISOString());
                     toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
                   }}
                   onOpenAgendaWork={() => setAgendaWorkOpen(true)}
@@ -5997,6 +6212,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         agenda={approvedAgenda}
         tasks={data.tasks}
         users={data.users}
+        subtasks={data.subtasks ?? []}
+        authenticated={Boolean(data.authenticated)}
         onPinTask={(taskId) => setActiveWorkTask(taskId)}
       />
       <CalendarExportDialog
@@ -6035,6 +6252,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <TaskDetailDialog
         task={notificationTask}
         users={data.users}
+        subtasks={data.subtasks ?? []}
+        authenticated={Boolean(data.authenticated)}
         open={Boolean(notificationTask)}
         onOpenChange={(open) => {
           if (!open) setNotificationTaskId(null);

@@ -102,6 +102,17 @@ export type DonnitTask = {
   created_at: string;
 };
 
+export type DonnitTaskSubtask = {
+  id: string;
+  task_id: string;
+  org_id: string;
+  title: string;
+  status: "open" | "completed";
+  position: number;
+  completed_at: string | null;
+  created_at: string;
+};
+
 export type DonnitTaskEvent = {
   id: string;
   org_id: string;
@@ -184,6 +195,16 @@ export type DonnitPositionProfileAssignment = {
   ends_at: string | null;
   notes: string;
   created_at: string;
+};
+
+export type DonnitUserWorkspaceState = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  state_key: "reviewed_notifications" | "agenda_state";
+  value: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 };
 
 export class DonnitStore {
@@ -294,6 +315,67 @@ export class DonnitStore {
       .maybeSingle();
     if (error) throw error;
     return (data as DonnitTask | null) ?? null;
+  }
+
+  async listTaskSubtasks(orgId: string): Promise<DonnitTaskSubtask[]> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskSubtasks)
+      .select("*")
+      .eq("org_id", orgId)
+      .order("task_id", { ascending: true })
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) {
+      if (isMissingRelationError(error)) return [];
+      throw wrapSupabaseError("list task_subtasks failed", error);
+    }
+    return (data ?? []) as DonnitTaskSubtask[];
+  }
+
+  async createTaskSubtask(
+    orgId: string,
+    input: Pick<DonnitTaskSubtask, "task_id" | "title"> & Partial<Pick<DonnitTaskSubtask, "position">>,
+  ): Promise<DonnitTaskSubtask> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskSubtasks)
+      .insert({
+        org_id: orgId,
+        task_id: input.task_id,
+        title: input.title,
+        position: input.position ?? 0,
+      })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create task_subtask failed", error);
+    return data as DonnitTaskSubtask;
+  }
+
+  async updateTaskSubtask(
+    orgId: string,
+    taskId: string,
+    subtaskId: string,
+    patch: Partial<Pick<DonnitTaskSubtask, "title" | "status" | "position" | "completed_at">>,
+  ): Promise<DonnitTaskSubtask | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskSubtasks)
+      .update(patch)
+      .eq("org_id", orgId)
+      .eq("task_id", taskId)
+      .eq("id", subtaskId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("update task_subtask failed", error);
+    return (data as DonnitTaskSubtask | null) ?? null;
+  }
+
+  async deleteTaskSubtask(orgId: string, taskId: string, subtaskId: string): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.taskSubtasks)
+      .delete()
+      .eq("org_id", orgId)
+      .eq("task_id", taskId)
+      .eq("id", subtaskId);
+    if (error) throw wrapSupabaseError("delete task_subtask failed", error);
   }
 
   async addEvent(orgId: string, input: Omit<DonnitTaskEvent, "id" | "org_id" | "created_at">): Promise<DonnitTaskEvent> {
@@ -439,6 +521,49 @@ export class DonnitStore {
       .delete()
       .eq("user_id", this.userId);
     if (error) throw wrapSupabaseError("delete gmail_account failed", error);
+  }
+
+  // ---- user_workspace_state (durable per-user UI/workflow state) -------
+
+  async getWorkspaceState(
+    orgId: string,
+    stateKey: DonnitUserWorkspaceState["state_key"],
+  ): Promise<DonnitUserWorkspaceState | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.userWorkspaceState)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("user_id", this.userId)
+      .eq("state_key", stateKey)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error)) return null;
+      throw wrapSupabaseError("get user_workspace_state failed", error);
+    }
+    return (data as DonnitUserWorkspaceState | null) ?? null;
+  }
+
+  async upsertWorkspaceState(
+    orgId: string,
+    stateKey: DonnitUserWorkspaceState["state_key"],
+    value: Record<string, unknown>,
+  ): Promise<DonnitUserWorkspaceState> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.userWorkspaceState)
+      .upsert(
+        {
+          org_id: orgId,
+          user_id: this.userId,
+          state_key: stateKey,
+          value,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "org_id,user_id,state_key" },
+      )
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("upsert user_workspace_state failed", error);
+    return data as DonnitUserWorkspaceState;
   }
 
   // ---- position_profiles (admin continuity repository) ------------------

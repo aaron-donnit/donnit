@@ -17,6 +17,7 @@ export const DONNIT_TABLES = {
   organizationMembers: "organization_members",
   tasks: "tasks",
   taskEvents: "task_events",
+  taskSubtasks: "task_subtasks",
   chatMessages: "chat_messages",
   emailSuggestions: "email_suggestions",
   reminderPreferences: "reminder_preferences",
@@ -24,6 +25,7 @@ export const DONNIT_TABLES = {
   positionProfiles: "position_profiles",
   positionProfileAssignments: "position_profile_assignments",
   positionProfileKnowledge: "position_profile_knowledge",
+  userWorkspaceState: "user_workspace_state",
 } as const;
 
 export function getSupabaseConfig() {
