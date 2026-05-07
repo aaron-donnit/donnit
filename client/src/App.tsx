@@ -535,6 +535,8 @@ type MenuActionGroup = {
   actions: FunctionAction[];
 };
 
+type SupportRailView = "today" | "agenda" | "team" | "reports";
+
 function FunctionActionButton({ action }: { action: FunctionAction }) {
   return (
     <button
@@ -2367,7 +2369,7 @@ function ReportingPanel({
   }, {});
 
   return (
-    <div className="panel" data-testid="panel-reporting">
+    <div className="panel" data-testid="panel-reporting" id="panel-reporting">
       <div className="border-b border-border px-4 py-3">
         <h3 className="display-font text-sm font-bold">Manager report</h3>
         <p className="ui-label mt-1">Completion, overdue, delegated</p>
@@ -3476,6 +3478,141 @@ function DoneLogPanel({
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+function SupportRail({
+  view,
+  onViewChange,
+  tasks,
+  suggestions,
+  users,
+  currentUserId,
+  events,
+  agenda,
+  excludedTaskIds,
+  agendaApproved,
+  onOpenInbox,
+  onBuildAgenda,
+  onToggleAgendaTask,
+  onApproveAgenda,
+  onOpenAgendaWork,
+  onExportAgenda,
+  isBuildingAgenda,
+}: {
+  view: SupportRailView;
+  onViewChange: (view: SupportRailView) => void;
+  tasks: Task[];
+  suggestions: EmailSuggestion[];
+  users: User[];
+  currentUserId: Id;
+  events: TaskEvent[];
+  agenda: AgendaItem[];
+  excludedTaskIds: Set<string>;
+  agendaApproved: boolean;
+  onOpenInbox: () => void;
+  onBuildAgenda: () => void;
+  onToggleAgendaTask: (taskId: Id) => void;
+  onApproveAgenda: () => void;
+  onOpenAgendaWork: () => void;
+  onExportAgenda: () => void;
+  isBuildingAgenda: boolean;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const dueTodayCount = tasks.filter(
+    (task) => task.dueDate === today && task.status !== "completed" && task.status !== "denied",
+  ).length;
+  const approvalCount =
+    tasks.filter((task) => task.status === "pending_acceptance").length +
+    suggestions.filter((suggestion) => suggestion.status === "pending").length;
+  const activeTeamCount = tasks.filter(
+    (task) => String(task.assignedToId) !== String(currentUserId) && task.status !== "completed" && task.status !== "denied",
+  ).length;
+  const incompleteCount = tasks.filter((task) => task.status !== "completed" && task.status !== "denied").length;
+  const tabs: Array<{
+    id: SupportRailView;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    count: number;
+  }> = [
+    { id: "today", label: "Today", icon: CheckCircle2, count: dueTodayCount + approvalCount },
+    { id: "agenda", label: "Agenda", icon: CalendarClock, count: agenda.length },
+    { id: "team", label: "Team", icon: Users, count: activeTeamCount },
+    { id: "reports", label: "Reports", icon: BarChart3, count: incompleteCount },
+  ];
+
+  return (
+    <div className="space-y-3" data-testid="rail-support">
+      <div
+        className="grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/40 p-1 sm:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4"
+        role="tablist"
+        aria-label="Command rail"
+      >
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const selected = tab.id === view;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onViewChange(tab.id)}
+              className={`flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-2 text-xs font-medium transition ${
+                selected
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+              }`}
+              data-testid={`button-rail-${tab.id}`}
+            >
+              <Icon className="size-3.5 shrink-0" />
+              <span className="truncate">{tab.label}</span>
+              {tab.count > 0 && (
+                <span
+                  className={`ml-0.5 inline-flex min-w-5 justify-center rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                    selected ? "bg-brand-green-pale text-brand-green" : "bg-background text-muted-foreground"
+                  }`}
+                >
+                  {tab.count > 99 ? "99+" : tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {view === "today" && (
+        <div className="space-y-3" data-testid="rail-panel-today">
+          <DueTodayPanel tasks={tasks} />
+          <AcceptancePanel tasks={tasks} suggestions={suggestions} onOpenInbox={onOpenInbox} />
+        </div>
+      )}
+
+      {view === "agenda" && (
+        <AgendaPanel
+          agenda={agenda}
+          excludedTaskIds={excludedTaskIds}
+          approved={agendaApproved}
+          onBuild={onBuildAgenda}
+          onToggleTask={onToggleAgendaTask}
+          onApprove={onApproveAgenda}
+          onOpenWork={onOpenAgendaWork}
+          onExport={onExportAgenda}
+          isBuilding={isBuildingAgenda}
+        />
+      )}
+
+      {view === "team" && (
+        <TeamViewPanel tasks={tasks} users={users} currentUserId={currentUserId} />
+      )}
+
+      {view === "reports" && (
+        <div className="space-y-3" data-testid="rail-panel-reports">
+          <ReportingPanel tasks={tasks} suggestions={suggestions} currentUserId={currentUserId} />
+          <DoneLogPanel events={events} tasks={tasks} users={users} />
+        </div>
+      )}
     </div>
   );
 }
@@ -4720,6 +4857,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
   const [agendaExcludedTaskIds, setAgendaExcludedTaskIds] = useState<Set<string>>(new Set());
   const [agendaApproved, setAgendaApproved] = useState(false);
+  const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
       if (typeof window === "undefined") return new Set();
@@ -5230,7 +5368,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const scrollToReporting = () => {
-    document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setSupportView("reports");
+    window.setTimeout(() => {
+      document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
   const goHome = () => {
     setManualImportOpen(false);
@@ -5241,6 +5382,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setApprovalInboxOpen(false);
     setAgendaWorkOpen(false);
     setNotificationTaskId(null);
+    setSupportView("today");
     window.location.hash = "/app";
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -5294,7 +5436,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       id: "build-agenda",
       label: "Build agenda",
       icon: Workflow,
-      onClick: () => buildAgenda.mutate(),
+      onClick: () => {
+        setSupportView("agenda");
+        buildAgenda.mutate();
+      },
       loading: buildAgenda.isPending,
       hint: "Refresh and confirm today's priority order",
     },
@@ -5461,7 +5606,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
               <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                <span className="ui-label">Today · {todayLabel}</span>
+                <span className="ui-label">Today - {todayLabel}</span>
                 <Stat label="Open" value={metrics.open} />
                 <Stat label="Due today" value={metrics.dueToday} />
                 <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
@@ -5479,20 +5624,22 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 />
               </div>
-              {/* Narrower supporting column stack */}
-              <div className="flex flex-col gap-4 xl:col-span-4">
-                <DueTodayPanel tasks={data.tasks} />
-                <AcceptancePanel
+              {/* Focused command rail */}
+              <div className="xl:col-span-4">
+                <SupportRail
+                  view={supportView}
+                  onViewChange={setSupportView}
                   tasks={data.tasks}
                   suggestions={data.suggestions}
-                  onOpenInbox={() => setApprovalInboxOpen(true)}
-                />
-                <AgendaPanel
+                  users={data.users}
+                  currentUserId={data.currentUserId}
+                  events={data.events}
                   agenda={data.agenda}
                   excludedTaskIds={agendaExcludedTaskIds}
-                  approved={agendaApproved}
-                  onBuild={() => buildAgenda.mutate()}
-                  onToggleTask={(taskId) => {
+                  agendaApproved={agendaApproved}
+                  onOpenInbox={() => setApprovalInboxOpen(true)}
+                  onBuildAgenda={() => buildAgenda.mutate()}
+                  onToggleAgendaTask={(taskId) => {
                     setAgendaApproved(false);
                     setAgendaExcludedTaskIds((current) => {
                       const next = new Set(current);
@@ -5502,25 +5649,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                       return next;
                     });
                   }}
-                  onApprove={() => {
+                  onApproveAgenda={() => {
                     setAgendaApproved(true);
                     toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
                   }}
-                  onOpenWork={() => setAgendaWorkOpen(true)}
-                  onExport={() => setCalendarExportOpen(true)}
-                  isBuilding={buildAgenda.isPending}
+                  onOpenAgendaWork={() => setAgendaWorkOpen(true)}
+                  onExportAgenda={() => setCalendarExportOpen(true)}
+                  isBuildingAgenda={buildAgenda.isPending}
                 />
-                <TeamViewPanel
-                  tasks={data.tasks}
-                  users={data.users}
-                  currentUserId={data.currentUserId}
-                />
-                <ReportingPanel
-                  tasks={data.tasks}
-                  suggestions={data.suggestions}
-                  currentUserId={data.currentUserId}
-                />
-                <DoneLogPanel events={data.events} tasks={data.tasks} users={data.users} />
               </div>
             </div>
           </div>
