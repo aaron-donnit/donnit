@@ -37,7 +37,7 @@ import {
   type DonnitTaskSubtask,
   type DonnitUserWorkspaceState,
 } from "./donnit-store";
-import { DONNIT_SCHEMA, isSupabaseConfigured } from "./supabase";
+import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 
 const DEMO_USER_ID = 1;
 
@@ -1529,6 +1529,84 @@ const positionProfileUpdateSchema = z.object({
   riskSummary: z.string().trim().max(500).optional(),
 });
 
+const demoTeamMembers = [
+  {
+    key: "maya",
+    name: "Maya Chen",
+    persona: "operations",
+    role: "manager" as const,
+    canAssign: true,
+    tasks: [
+      {
+        title: "Confirm Friday client coverage plan",
+        description: "Review open client work and confirm who owns the Friday coverage notes before the end of day.",
+        urgency: "high" as const,
+        dueOffset: 0,
+        estimatedMinutes: 45,
+        source: "chat" as const,
+      },
+      {
+        title: "Review unread vendor renewal request",
+        description: "Vendor renewal came through email and needs a quick decision before the contract rolls over.",
+        urgency: "normal" as const,
+        dueOffset: 2,
+        estimatedMinutes: 30,
+        source: "email" as const,
+      },
+    ],
+  },
+  {
+    key: "jordan",
+    name: "Jordan Lee",
+    persona: "client-success",
+    role: "member" as const,
+    canAssign: false,
+    tasks: [
+      {
+        title: "Follow up on ACME renewal blockers",
+        description: "Slack thread flagged renewal blockers. Summarize next steps and update the manager before the account review.",
+        urgency: "critical" as const,
+        dueOffset: -1,
+        estimatedMinutes: 60,
+        source: "slack" as const,
+      },
+      {
+        title: "Prepare onboarding notes for replacement coverage",
+        description: "Add how-to context for recurring account handoff steps so another person can cover the role if needed.",
+        urgency: "normal" as const,
+        dueOffset: 4,
+        estimatedMinutes: 50,
+        source: "document" as const,
+      },
+    ],
+  },
+  {
+    key: "nina",
+    name: "Nina Patel",
+    persona: "finance",
+    role: "member" as const,
+    canAssign: false,
+    tasks: [
+      {
+        title: "Reconcile ChatGPT expense receipt",
+        description: "Receipt was captured from Gmail. Confirm the amount, category, and whether it should be attached to May expenses.",
+        urgency: "normal" as const,
+        dueOffset: 1,
+        estimatedMinutes: 15,
+        source: "email" as const,
+      },
+      {
+        title: "Respond to payroll access text",
+        description: "Inbound SMS mentioned payroll access. Confirm whether the employee still needs help and document the resolution.",
+        urgency: "high" as const,
+        dueOffset: 0,
+        estimatedMinutes: 20,
+        source: "sms" as const,
+      },
+    ],
+  },
+];
+
 type IngestTarget = {
   orgId: string;
   assignedTo: string;
@@ -2336,6 +2414,130 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ ok: true, state });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/admin/seed-demo-team", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const userStore = new DonnitStore(auth.client, auth.userId);
+      const orgId = await userStore.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await userStore.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only workspace admins can add demo team members." });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({
+          message: "Demo team seeding needs SUPABASE_SERVICE_ROLE_KEY in Vercel.",
+        });
+        return;
+      }
+      const store = new DonnitStore(admin, auth.userId);
+      const seededUsers: Array<{ id: string; name: string; email: string }> = [];
+      let createdTasks = 0;
+      const existingTasks = await store.listTasks(orgId);
+      const dateForOffset = (days: number) => {
+        const date = new Date();
+        date.setDate(date.getDate() + days);
+        return date.toISOString().slice(0, 10);
+      };
+
+      for (const seed of demoTeamMembers) {
+        const email = `demo-${seed.key}-${orgId.slice(0, 8)}@example.invalid`;
+        const { data: existingProfile, error: profileLookupError } = await admin
+          .from(DONNIT_TABLES.profiles)
+          .select("*")
+          .eq("email", email)
+          .maybeSingle();
+        if (profileLookupError) throw profileLookupError;
+
+        let userId = typeof existingProfile?.id === "string" ? existingProfile.id : null;
+        if (!userId) {
+          const created = await admin.auth.admin.createUser({
+            email,
+            password: crypto.randomBytes(18).toString("base64url"),
+            email_confirm: true,
+            user_metadata: {
+              full_name: seed.name,
+              donnit_demo_team: true,
+            },
+          });
+          if (created.error || !created.data.user?.id) throw created.error ?? new Error("Could not create demo user.");
+          userId = created.data.user.id;
+        }
+
+        const { error: profileError } = await admin
+          .from(DONNIT_TABLES.profiles)
+          .upsert(
+            {
+              id: userId,
+              full_name: seed.name,
+              email,
+              default_org_id: orgId,
+              persona: seed.persona,
+            },
+            { onConflict: "id" },
+          );
+        if (profileError) throw profileError;
+
+        const { error: memberError } = await admin
+          .from(DONNIT_TABLES.organizationMembers)
+          .upsert(
+            {
+              org_id: orgId,
+              user_id: userId,
+              role: seed.role,
+              manager_id: seed.role === "manager" ? null : auth.userId,
+              can_assign: seed.canAssign,
+            },
+            { onConflict: "org_id,user_id" },
+          );
+        if (memberError) throw memberError;
+
+        seededUsers.push({ id: userId, name: seed.name, email });
+
+        for (const taskSeed of seed.tasks) {
+          const alreadyExists = existingTasks.some(
+            (task) => task.assigned_to === userId && task.title === taskSeed.title,
+          );
+          if (alreadyExists) continue;
+          await store.createTask(orgId, {
+            title: taskSeed.title,
+            description: taskSeed.description,
+            status: taskSeed.source === "chat" ? "pending_acceptance" : "open",
+            urgency: taskSeed.urgency,
+            due_date: dateForOffset(taskSeed.dueOffset),
+            estimated_minutes: taskSeed.estimatedMinutes,
+            assigned_to: userId,
+            assigned_by: auth.userId,
+            source: taskSeed.source,
+            recurrence: "none",
+            reminder_days_before: 0,
+          });
+          createdTasks += 1;
+        }
+      }
+
+      res.status(201).json({
+        ok: true,
+        users: seededUsers.length,
+        tasks: createdTasks,
+        message:
+          createdTasks > 0
+            ? "Demo team added. Refresh the Team view to test manager reporting."
+            : "Demo team was already present.",
+      });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] seed demo team failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
     }
   });
 

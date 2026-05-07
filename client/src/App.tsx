@@ -2810,6 +2810,23 @@ function TeamViewPanel({
     });
   const visibleTasks = attentionQueue.length > 0 ? attentionQueue : active;
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+  const seedDemoTeam = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/admin/seed-demo-team"),
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "Demo team added",
+        description: "The Team dashboard now has sample members and tasks to test.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not add demo team",
+        description: apiErrorMessage(error, "Confirm you are an admin and SUPABASE_SERVICE_ROLE_KEY is set."),
+        variant: "destructive",
+      });
+    },
+  });
 
   return (
     <div className="panel" data-testid="panel-team-view">
@@ -2824,7 +2841,23 @@ function TeamViewPanel({
       </div>
       <div className="space-y-3 px-4 py-3">
         {teamMembers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No assigned team members yet.</p>
+          <div className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-4 text-center">
+            <Users className="mx-auto size-6 text-brand-green" />
+            <p className="mt-2 text-sm font-medium text-foreground">No team members yet.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Add sample members to test manager reporting before inviting real users.
+            </p>
+            <Button
+              size="sm"
+              className="mt-3"
+              onClick={() => seedDemoTeam.mutate()}
+              disabled={seedDemoTeam.isPending}
+              data-testid="button-seed-demo-team"
+            >
+              {seedDemoTeam.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+              Add demo team
+            </Button>
+          </div>
         ) : (
           <>
             <select
