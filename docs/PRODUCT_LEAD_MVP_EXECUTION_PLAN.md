@@ -113,6 +113,13 @@ CEO approval criteria:
 - Agenda output feels like a real day plan, not just a sorted to-do list.
 - Calendar export creates timed events unless the task is truly all-day.
 
+Implementation status:
+
+- Added persistent agenda preferences and manual ordering.
+- Added approval-safe remove/reorder controls before export.
+- Updated calendar export to use the approved agenda preferences and task order.
+- Added an agenda work screen with an up-next block and task progress context.
+
 ## Step 7: Complete Outside Tool Integrations Individually
 
 Goal: make automatic capture reliable after the core work loop is trustworthy.

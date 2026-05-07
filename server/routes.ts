@@ -693,9 +693,106 @@ type CalendarBusyBlock = {
 };
 
 const DEFAULT_CALENDAR_TIME_ZONE = "America/New_York";
-const WORKDAY_START_MINUTE = 9 * 60;
-const WORKDAY_END_MINUTE = 17 * 60;
 const SCHEDULE_HORIZON_DAYS = 14;
+
+type AgendaPreference = "deep_work" | "communications" | "mixed";
+
+type AgendaPreferences = {
+  workdayStart: string;
+  workdayEnd: string;
+  lunchStart: string;
+  lunchMinutes: number;
+  meetingBufferMinutes: number;
+  minimumBlockMinutes: number;
+  focusBlockMinutes: number;
+  morningPreference: AgendaPreference;
+  afternoonPreference: AgendaPreference;
+};
+
+const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
+  workdayStart: "09:00",
+  workdayEnd: "17:00",
+  lunchStart: "12:00",
+  lunchMinutes: 30,
+  meetingBufferMinutes: 10,
+  minimumBlockMinutes: 15,
+  focusBlockMinutes: 90,
+  morningPreference: "deep_work",
+  afternoonPreference: "communications",
+};
+
+function parseClockMinute(value: unknown, fallback: string) {
+  const raw = typeof value === "string" ? value : fallback;
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return parseClockMinute(fallback, "09:00");
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return parseClockMinute(fallback, "09:00");
+  }
+  return hour * 60 + minute;
+}
+
+function formatClockMinute(minute: number) {
+  const clamped = Math.min(Math.max(Math.round(minute), 0), 23 * 60 + 59);
+  return `${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(Math.round(number), min), max);
+}
+
+function cleanAgendaPreference(value: unknown, fallback: AgendaPreference): AgendaPreference {
+  return value === "deep_work" || value === "communications" || value === "mixed" ? value : fallback;
+}
+
+function cleanAgendaPreferences(value: unknown): AgendaPreferences {
+  const input = (value ?? {}) as Record<string, unknown>;
+  const workdayStartMinute = parseClockMinute(input.workdayStart, DEFAULT_AGENDA_PREFERENCES.workdayStart);
+  const fallbackEndMinute = parseClockMinute(DEFAULT_AGENDA_PREFERENCES.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
+  const rawEndMinute = parseClockMinute(input.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
+  const workdayEndMinute = rawEndMinute > workdayStartMinute + 60 ? rawEndMinute : fallbackEndMinute;
+  return {
+    workdayStart: formatClockMinute(workdayStartMinute),
+    workdayEnd: formatClockMinute(workdayEndMinute),
+    lunchStart: formatClockMinute(parseClockMinute(input.lunchStart, DEFAULT_AGENDA_PREFERENCES.lunchStart)),
+    lunchMinutes: clampNumber(input.lunchMinutes, DEFAULT_AGENDA_PREFERENCES.lunchMinutes, 0, 120),
+    meetingBufferMinutes: clampNumber(input.meetingBufferMinutes, DEFAULT_AGENDA_PREFERENCES.meetingBufferMinutes, 0, 45),
+    minimumBlockMinutes: clampNumber(input.minimumBlockMinutes, DEFAULT_AGENDA_PREFERENCES.minimumBlockMinutes, 5, 60),
+    focusBlockMinutes: clampNumber(input.focusBlockMinutes, DEFAULT_AGENDA_PREFERENCES.focusBlockMinutes, 30, 180),
+    morningPreference: cleanAgendaPreference(input.morningPreference, DEFAULT_AGENDA_PREFERENCES.morningPreference),
+    afternoonPreference: cleanAgendaPreference(input.afternoonPreference, DEFAULT_AGENDA_PREFERENCES.afternoonPreference),
+  };
+}
+
+function inferAgendaMode(task: { title: string; estimatedMinutes: number }, preferences: AgendaPreferences): AgendaPreference {
+  const title = task.title.toLowerCase();
+  if (/(email|reply|follow[- ]?up|call|slack|message|inbox|check in|respond)/i.test(title)) {
+    return "communications";
+  }
+  if (task.estimatedMinutes >= preferences.focusBlockMinutes || /(draft|review|plan|roadmap|report|contract|analysis|build|prepare)/i.test(title)) {
+    return "deep_work";
+  }
+  return "mixed";
+}
+
+function scoreAgendaSlot(
+  task: { title: string; estimatedMinutes: number; urgency: string },
+  slot: { startMinute: number; endMinute: number },
+  preferences: AgendaPreferences,
+) {
+  const mode = inferAgendaMode(task, preferences);
+  const half = slot.startMinute < 12 * 60 ? "morning" : "afternoon";
+  const preferred = half === "morning" ? preferences.morningPreference : preferences.afternoonPreference;
+  let score = 0;
+  if (preferred === mode) score += 30;
+  if (preferred === "mixed") score += 10;
+  if ((urgencyRank[task.urgency] ?? 2) <= 1) score += Math.max(0, 18 - Math.floor((slot.startMinute - 8 * 60) / 30));
+  score += Math.max(0, 8 - Math.floor((slot.endMinute - slot.startMinute - task.estimatedMinutes) / 30));
+  return score;
+}
 
 function addOneDayIso(date: string) {
   const parsed = new Date(`${date}T00:00:00`);
@@ -758,24 +855,31 @@ function cloneBusyByDate(busyByDate: Map<string, CalendarBusyBlock[]>) {
   );
 }
 
-function getFreeSlotsForDate(date: string, busyByDate: Map<string, CalendarBusyBlock[]>) {
-  const busy = [...(busyByDate.get(date) ?? [])]
+function getFreeSlotsForDate(date: string, busyByDate: Map<string, CalendarBusyBlock[]>, preferences = DEFAULT_AGENDA_PREFERENCES) {
+  const workdayStartMinute = parseClockMinute(preferences.workdayStart, DEFAULT_AGENDA_PREFERENCES.workdayStart);
+  const workdayEndMinute = parseClockMinute(preferences.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
+  const buffer = preferences.meetingBufferMinutes;
+  const lunchStartMinute = parseClockMinute(preferences.lunchStart, DEFAULT_AGENDA_PREFERENCES.lunchStart);
+  const syntheticBusy: CalendarBusyBlock[] = preferences.lunchMinutes > 0
+    ? [{ date, startMinute: lunchStartMinute, endMinute: lunchStartMinute + preferences.lunchMinutes }]
+    : [];
+  const busy = [...(busyByDate.get(date) ?? []), ...syntheticBusy]
     .map((block) => ({
-      startMinute: Math.max(WORKDAY_START_MINUTE, block.startMinute),
-      endMinute: Math.min(WORKDAY_END_MINUTE, block.endMinute),
+      startMinute: Math.max(workdayStartMinute, block.startMinute - buffer),
+      endMinute: Math.min(workdayEndMinute, block.endMinute + buffer),
     }))
-    .filter((block) => block.endMinute > WORKDAY_START_MINUTE && block.startMinute < WORKDAY_END_MINUTE)
+    .filter((block) => block.endMinute > workdayStartMinute && block.startMinute < workdayEndMinute)
     .sort((a, b) => a.startMinute - b.startMinute);
   const slots: Array<{ startMinute: number; endMinute: number }> = [];
-  let cursor = WORKDAY_START_MINUTE;
+  let cursor = workdayStartMinute;
   for (const block of busy) {
     if (block.startMinute > cursor) {
       slots.push({ startMinute: cursor, endMinute: block.startMinute });
     }
     cursor = Math.max(cursor, block.endMinute);
   }
-  if (cursor < WORKDAY_END_MINUTE) {
-    slots.push({ startMinute: cursor, endMinute: WORKDAY_END_MINUTE });
+  if (cursor < workdayEndMinute) {
+    slots.push({ startMinute: cursor, endMinute: workdayEndMinute });
   }
   return slots;
 }
@@ -790,21 +894,27 @@ function scheduleTasks<T extends {
 }>(
   tasks: T[],
   busyByDate: Map<string, CalendarBusyBlock[]> = new Map(),
-  options: { timeZone?: string; today?: string } = {},
+  options: { timeZone?: string; today?: string; preferences?: AgendaPreferences; presorted?: boolean } = {},
 ): AgendaItem[] {
   const timeZone = options.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE;
+  const preferences = cleanAgendaPreferences(options.preferences ?? DEFAULT_AGENDA_PREFERENCES);
   const today = options.today ?? getZonedParts(new Date(), timeZone).date;
   const mutableBusy = cloneBusyByDate(busyByDate);
-  const candidates = sortTasks(tasks).filter((task) => task.status !== "completed" && task.status !== "denied");
+  const candidates = (options.presorted ? [...tasks] : sortTasks(tasks)).filter(
+    (task) => task.status !== "completed" && task.status !== "denied",
+  );
+  const workdayStartMinute = parseClockMinute(preferences.workdayStart, DEFAULT_AGENDA_PREFERENCES.workdayStart);
+  const workdayEndMinute = parseClockMinute(preferences.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
+  const workdayMinutes = Math.max(workdayEndMinute - workdayStartMinute, 60);
 
   return candidates.map((task, index) => {
-    const estimate = Math.min(Math.max(task.estimatedMinutes, 5), WORKDAY_END_MINUTE - WORKDAY_START_MINUTE);
+    const estimate = Math.min(Math.max(task.estimatedMinutes, preferences.minimumBlockMinutes, 5), workdayMinutes);
     const firstDate = task.dueDate && task.dueDate >= today ? task.dueDate : today;
     for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
       const date = addDaysIso(firstDate, offset);
-      const slot = getFreeSlotsForDate(date, mutableBusy).find(
-        (free) => free.endMinute - free.startMinute >= estimate,
-      );
+      const slot = getFreeSlotsForDate(date, mutableBusy, preferences)
+        .filter((free) => free.endMinute - free.startMinute >= estimate)
+        .sort((a, b) => scoreAgendaSlot({ ...task, estimatedMinutes: estimate }, b, preferences) - scoreAgendaSlot({ ...task, estimatedMinutes: estimate }, a, preferences))[0];
       if (!slot) continue;
       const startMinute = slot.startMinute;
       const endMinute = startMinute + estimate;
@@ -814,7 +924,7 @@ function scheduleTasks<T extends {
         taskId: task.id,
         order: index + 1,
         title: task.title,
-        estimatedMinutes: task.estimatedMinutes,
+        estimatedMinutes: estimate,
         dueDate: task.dueDate,
         urgency: task.urgency,
         startAt: formatDateTimeLocal(date, startMinute),
@@ -827,7 +937,7 @@ function scheduleTasks<T extends {
       taskId: task.id,
       order: index + 1,
       title: task.title,
-      estimatedMinutes: task.estimatedMinutes,
+      estimatedMinutes: estimate,
       dueDate: task.dueDate,
       urgency: task.urgency,
       startAt: null,
@@ -845,8 +955,8 @@ function buildAgenda<T extends {
   dueDate: string | null;
   urgency: string;
   status: string;
-}>(tasks: T[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE): AgendaItem[] {
-  return scheduleTasks(tasks, busyByDate, { timeZone });
+}>(tasks: T[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE, preferences = DEFAULT_AGENDA_PREFERENCES): AgendaItem[] {
+  return scheduleTasks(tasks, busyByDate, { timeZone, preferences });
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +1030,17 @@ function cleanStringArray(value: unknown, maxItems = 300) {
     .slice(-maxItems);
 }
 
+function applyAgendaTaskOrder<T extends { id: string | number }>(tasks: T[], taskOrder: string[]) {
+  if (taskOrder.length === 0) return tasks;
+  const indexById = new Map(taskOrder.map((id, index) => [id, index]));
+  return [...tasks].sort((a, b) => {
+    const aIndex = indexById.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER;
+    const bIndex = indexById.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    return 0;
+  });
+}
+
 function toClientWorkspaceState(input: {
   reviewed?: DonnitUserWorkspaceState | null;
   agenda?: DonnitUserWorkspaceState | null;
@@ -932,6 +1053,8 @@ function toClientWorkspaceState(input: {
       excludedTaskIds: cleanStringArray(agendaValue.excludedTaskIds, 500),
       approved: agendaValue.approved === true,
       approvedAt: typeof agendaValue.approvedAt === "string" ? agendaValue.approvedAt : null,
+      preferences: cleanAgendaPreferences(agendaValue.preferences),
+      taskOrder: cleanStringArray(agendaValue.taskOrder, 500),
     },
   };
 }
@@ -1093,8 +1216,11 @@ function buildClientAgenda(
   tasks: SupabaseTaskShape[],
   busyByDate: Map<string, CalendarBusyBlock[]> = new Map(),
   timeZone = DEFAULT_CALENDAR_TIME_ZONE,
+  preferences = DEFAULT_AGENDA_PREFERENCES,
+  taskOrder: string[] = [],
 ): AgendaItem[] {
-  return scheduleTasks(sortClientTasks(tasks), busyByDate, { timeZone });
+  const ordered = applyAgendaTaskOrder(sortClientTasks(tasks), taskOrder);
+  return scheduleTasks(ordered, busyByDate, { timeZone, preferences, presorted: true });
 }
 
 type GoogleCalendarContext = {
@@ -1303,6 +1429,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
   }));
   const clientTasks = sortClientTasks(applyRelationshipEvents(tasks.map(toClientTask), events));
   const calendarContext = await tryBuildGoogleCalendarContext(store);
+  const workspaceState = toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState });
   return {
     authenticated: true,
     bootstrapped: true,
@@ -1343,11 +1470,13 @@ async function buildAuthenticatedBootstrap(req: Request) {
     })),
     positionProfiles: positionProfiles.map(toClientPositionProfile),
     subtasks: subtasks.map(toClientTaskSubtask),
-    workspaceState: toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState }),
+    workspaceState,
     agenda: buildClientAgenda(
       clientTasks,
       calendarContext?.busyByDate,
       calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
+      workspaceState.agenda.preferences,
+      workspaceState.agenda.taskOrder,
     ),
     integrations: getIntegrationStatus(),
   };
@@ -1498,6 +1627,21 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
       excludedTaskIds: z.array(z.union([z.string(), z.number()])).max(500).transform((items) => items.map(String)),
       approved: z.boolean(),
       approvedAt: z.string().datetime().nullable().optional(),
+      preferences: z
+        .object({
+          workdayStart: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+          workdayEnd: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+          lunchStart: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+          lunchMinutes: z.number().int().min(0).max(120).optional(),
+          meetingBufferMinutes: z.number().int().min(0).max(45).optional(),
+          minimumBlockMinutes: z.number().int().min(5).max(60).optional(),
+          focusBlockMinutes: z.number().int().min(30).max(180).optional(),
+          morningPreference: z.enum(["deep_work", "communications", "mixed"]).optional(),
+          afternoonPreference: z.enum(["deep_work", "communications", "mixed"]).optional(),
+        })
+        .optional()
+        .transform((value) => cleanAgendaPreferences(value)),
+      taskOrder: z.array(z.union([z.string(), z.number()])).max(500).optional().transform((items) => (items ?? []).map(String)),
     }),
   }),
 ]);
@@ -3674,12 +3818,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const tasks = await store.listTasks(orgId);
+        const agendaState = await store.getWorkspaceState(orgId, "agenda_state");
+        const workspaceState = toClientWorkspaceState({ agenda: agendaState });
         const calendarContext = await tryBuildGoogleCalendarContext(store);
         res.json(
           buildClientAgenda(
             tasks.map(toClientTask),
             calendarContext?.busyByDate,
             calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
+            workspaceState.agenda.preferences,
+            workspaceState.agenda.taskOrder,
           ),
         );
         return;
@@ -3717,10 +3865,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const excludedTaskIds = Array.isArray(req.body?.excludedTaskIds)
         ? new Set(req.body.excludedTaskIds.map((id: unknown) => String(id)))
         : new Set<string>();
+      const preferences = cleanAgendaPreferences(req.body?.preferences);
+      const taskOrder = cleanStringArray(req.body?.taskOrder, 500);
       const agenda = buildClientAgenda(
         tasks.map(toClientTask),
         calendarContext.busyByDate,
         calendarContext.timeZone,
+        preferences,
+        taskOrder,
       ).filter((item) => !excludedTaskIds.has(String(item.taskId)));
       let exported = 0;
       let skipped = 0;

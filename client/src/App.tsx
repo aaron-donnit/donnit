@@ -4,8 +4,10 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Archive,
+  ArrowDown,
   AlertTriangle,
   ArrowRight,
+  ArrowUp,
   BarChart3,
   Bell,
   BriefcaseBusiness,
@@ -96,6 +98,32 @@ type AgendaItem = {
   scheduleStatus: "scheduled" | "unscheduled";
 };
 
+type AgendaPreference = "deep_work" | "communications" | "mixed";
+
+type AgendaPreferences = {
+  workdayStart: string;
+  workdayEnd: string;
+  lunchStart: string;
+  lunchMinutes: number;
+  meetingBufferMinutes: number;
+  minimumBlockMinutes: number;
+  focusBlockMinutes: number;
+  morningPreference: AgendaPreference;
+  afternoonPreference: AgendaPreference;
+};
+
+const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
+  workdayStart: "09:00",
+  workdayEnd: "17:00",
+  lunchStart: "12:00",
+  lunchMinutes: 30,
+  meetingBufferMinutes: 10,
+  minimumBlockMinutes: 15,
+  focusBlockMinutes: 90,
+  morningPreference: "deep_work",
+  afternoonPreference: "communications",
+};
+
 type User = {
   id: Id;
   name: string;
@@ -155,6 +183,8 @@ type WorkspaceState = {
     excludedTaskIds: string[];
     approved: boolean;
     approvedAt: string | null;
+    preferences: AgendaPreferences;
+    taskOrder: string[];
   };
 };
 
@@ -604,6 +634,28 @@ function formatAgendaSlot(item: AgendaItem) {
     return "Needs an open calendar slot";
   }
   return `${item.startAt.slice(0, 10)} / ${formatAgendaTime(item.startAt)}-${formatAgendaTime(item.endAt)}`;
+}
+
+function normalizeAgendaPreferences(input?: Partial<AgendaPreferences> | null): AgendaPreferences {
+  return {
+    ...DEFAULT_AGENDA_PREFERENCES,
+    ...(input ?? {}),
+    lunchMinutes: Number(input?.lunchMinutes ?? DEFAULT_AGENDA_PREFERENCES.lunchMinutes),
+    meetingBufferMinutes: Number(input?.meetingBufferMinutes ?? DEFAULT_AGENDA_PREFERENCES.meetingBufferMinutes),
+    minimumBlockMinutes: Number(input?.minimumBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.minimumBlockMinutes),
+    focusBlockMinutes: Number(input?.focusBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.focusBlockMinutes),
+  };
+}
+
+function orderAgendaItems(agenda: AgendaItem[], taskOrder: string[]) {
+  if (taskOrder.length === 0) return agenda;
+  const indexById = new Map(taskOrder.map((id, index) => [id, index]));
+  return [...agenda].sort((a, b) => {
+    const aIndex = indexById.get(String(a.taskId)) ?? Number.MAX_SAFE_INTEGER;
+    const bIndex = indexById.get(String(b.taskId)) ?? Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    return a.order - b.order;
+  });
 }
 
 function downloadAgendaCalendar(agenda: AgendaItem[]) {
@@ -2437,8 +2489,11 @@ function AgendaPanel({
   agenda,
   excludedTaskIds,
   approved,
+  preferences,
   onBuild,
   onToggleTask,
+  onMoveTask,
+  onPreferencesChange,
   onApprove,
   onOpenWork,
   onExport,
@@ -2447,8 +2502,11 @@ function AgendaPanel({
   agenda: AgendaItem[];
   excludedTaskIds: Set<string>;
   approved: boolean;
+  preferences: AgendaPreferences;
   onBuild: () => void;
   onToggleTask: (taskId: Id) => void;
+  onMoveTask: (taskId: Id, direction: "up" | "down") => void;
+  onPreferencesChange: (preferences: AgendaPreferences) => void;
   onApprove: () => void;
   onOpenWork: () => void;
   onExport: () => void;
@@ -2457,6 +2515,9 @@ function AgendaPanel({
   const includedAgenda = agenda.filter((item) => !excludedTaskIds.has(String(item.taskId)));
   const totalMinutes = includedAgenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
   const scheduledCount = includedAgenda.filter((item) => item.scheduleStatus === "scheduled").length;
+  const updatePreference = <K extends keyof AgendaPreferences>(key: K, value: AgendaPreferences[K]) => {
+    onPreferencesChange({ ...preferences, [key]: value });
+  };
   return (
     <div className="panel overflow-hidden" data-testid="panel-agenda" id="panel-agenda">
       <div className="flex flex-col gap-3 border-b border-border px-4 py-3">
@@ -2507,10 +2568,122 @@ function AgendaPanel({
           <p className="text-sm text-muted-foreground">Build an agenda after tasks are added.</p>
         ) : (
           <div className="space-y-3">
+            <details className="rounded-md border border-border bg-background px-3 py-2">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-foreground">
+                <span className="inline-flex items-center gap-2">
+                  <SlidersHorizontal className="size-4 text-brand-green" />
+                  Schedule preferences
+                </span>
+                <span className="text-xs font-normal text-muted-foreground">
+                  {preferences.workdayStart}-{preferences.workdayEnd}
+                </span>
+              </summary>
+              <div className="mt-3 grid gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[11px]">Start</Label>
+                    <Input
+                      type="time"
+                      value={preferences.workdayStart}
+                      onChange={(event) => updatePreference("workdayStart", event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">End</Label>
+                    <Input
+                      type="time"
+                      value={preferences.workdayEnd}
+                      onChange={(event) => updatePreference("workdayEnd", event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[11px]">Lunch</Label>
+                    <Input
+                      type="time"
+                      value={preferences.lunchStart}
+                      onChange={(event) => updatePreference("lunchStart", event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">Lunch min</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={120}
+                      value={preferences.lunchMinutes}
+                      onChange={(event) => updatePreference("lunchMinutes", Number(event.target.value))}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <Label className="text-[11px]">Buffer</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={45}
+                      value={preferences.meetingBufferMinutes}
+                      onChange={(event) => updatePreference("meetingBufferMinutes", Number(event.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">Min block</Label>
+                    <Input
+                      type="number"
+                      min={5}
+                      max={60}
+                      value={preferences.minimumBlockMinutes}
+                      onChange={(event) => updatePreference("minimumBlockMinutes", Number(event.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">Focus</Label>
+                    <Input
+                      type="number"
+                      min={30}
+                      max={180}
+                      value={preferences.focusBlockMinutes}
+                      onChange={(event) => updatePreference("focusBlockMinutes", Number(event.target.value))}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[11px]">Morning</Label>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={preferences.morningPreference}
+                      onChange={(event) => updatePreference("morningPreference", event.target.value as AgendaPreference)}
+                    >
+                      <option value="deep_work">Deep work</option>
+                      <option value="communications">Messages</option>
+                      <option value="mixed">Mixed</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">Afternoon</Label>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={preferences.afternoonPreference}
+                      onChange={(event) => updatePreference("afternoonPreference", event.target.value as AgendaPreference)}
+                    >
+                      <option value="deep_work">Deep work</option>
+                      <option value="communications">Messages</option>
+                      <option value="mixed">Mixed</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Rebuild after changing preferences so Donnit can repair the schedule against your calendar.
+                </p>
+              </div>
+            </details>
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Review the batch, remove anything that should not be scheduled, then approve before export.
+                  Review, reorder, remove anything that should not be scheduled, then approve before export.
                 </p>
                 <Button
                   size="sm"
@@ -2524,31 +2697,56 @@ function AgendaPanel({
               </div>
             </div>
             <ol className="space-y-2">
-            {agenda.map((item) => (
-              <li
-                key={`${item.taskId}-${item.order}`}
-                className={`task-row ${urgencyClass(item.urgency)} ${excludedTaskIds.has(String(item.taskId)) ? "opacity-55" : ""}`}
-                data-testid={`row-agenda-${item.taskId}`}
-              >
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
-                  {item.order}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onToggleTask(item.taskId)}
-                  data-testid={`button-agenda-toggle-${item.taskId}`}
-                >
-                  {excludedTaskIds.has(String(item.taskId)) ? "Add" : "Remove"}
-                </Button>
-              </li>
-            ))}
+              {agenda.map((item, index) => {
+                const excluded = excludedTaskIds.has(String(item.taskId));
+                return (
+                  <li
+                    key={`${item.taskId}-${item.order}`}
+                    className={`task-row ${urgencyClass(item.urgency)} ${excluded ? "opacity-55" : ""}`}
+                    data-testid={`row-agenda-${item.taskId}`}
+                  >
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="size-8 p-0"
+                        aria-label="Move task earlier"
+                        onClick={() => onMoveTask(item.taskId, "up")}
+                        disabled={index === 0}
+                      >
+                        <ArrowUp className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="size-8 p-0"
+                        aria-label="Move task later"
+                        onClick={() => onMoveTask(item.taskId, "down")}
+                        disabled={index === agenda.length - 1}
+                      >
+                        <ArrowDown className="size-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onToggleTask(item.taskId)}
+                        data-testid={`button-agenda-toggle-${item.taskId}`}
+                      >
+                        {excluded ? "Add" : "Remove"}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           </div>
         )}
@@ -2579,6 +2777,9 @@ function AgendaWorkDialog({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
   const totalMinutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
+  const scheduledCount = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
+  const nextItem = agenda.find((item) => item.scheduleStatus === "scheduled") ?? agenda[0] ?? null;
+  const nextTask = nextItem ? tasks.find((task) => String(task.id) === String(nextItem.taskId)) ?? null : null;
 
   useEffect(() => {
     if (!open) setSelectedTaskId(null);
@@ -2596,7 +2797,7 @@ function AgendaWorkDialog({
         <div className={`${dialogBodyClass} space-y-3`}>
           <div className="grid gap-2 sm:grid-cols-3">
             <ReportMetric label="Agenda items" value={String(agenda.length)} />
-            <ReportMetric label="Scheduled" value={String(agenda.filter((item) => item.scheduleStatus === "scheduled").length)} />
+            <ReportMetric label="Scheduled" value={String(scheduledCount)} />
             <ReportMetric label="Total time" value={`${totalMinutes}m`} />
           </div>
           {agenda.length === 0 ? (
@@ -2604,19 +2805,67 @@ function AgendaWorkDialog({
               Build and approve an agenda before opening the work screen.
             </p>
           ) : (
-            <ol className="space-y-2">
-              {agenda.map((item) => {
+            <div className="space-y-3">
+              {nextItem && (
+                <div className="rounded-md border border-brand-green/30 bg-brand-green-pale/40 px-3 py-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="ui-label">Up next</p>
+                      <h4 className="mt-1 truncate text-sm font-semibold text-foreground">{nextItem.title}</h4>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {formatAgendaSlot(nextItem)} / {nextItem.estimatedMinutes} min
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => nextTask && setSelectedTaskId(String(nextTask.id))}
+                        disabled={!nextTask}
+                      >
+                        <Eye className="size-4" />
+                        Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          onPinTask(nextItem.taskId);
+                          toast({ title: "Task pinned", description: "The work box is ready for notes." });
+                        }}
+                      >
+                        <Play className="size-4" />
+                        Work
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <ol className="space-y-2">
+              {agenda.map((item, index) => {
                 const task = tasks.find((candidate) => String(candidate.id) === String(item.taskId));
+                const taskSubtasks = subtasks.filter((subtask) => String(subtask.taskId) === String(item.taskId));
+                const doneSubtasks = taskSubtasks.filter((subtask) => subtask.done).length;
+                const progressPct =
+                  taskSubtasks.length > 0
+                    ? Math.round((doneSubtasks / taskSubtasks.length) * 100)
+                    : task?.status === "completed"
+                      ? 100
+                      : task?.status === "accepted"
+                        ? 20
+                        : 0;
                 return (
                   <li key={`${item.taskId}-${item.order}`} className={`task-row ${urgencyClass(item.urgency)}`}>
                     <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
-                      {item.order}
+                      {index + 1}
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
                       </p>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-brand-green" style={{ width: `${progressPct}%` }} />
+                      </div>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
                       <Button
@@ -2643,7 +2892,8 @@ function AgendaWorkDialog({
                   </li>
                 );
               })}
-            </ol>
+              </ol>
+            </div>
           )}
         </div>
         <DialogFooter className={dialogFooterClass}>
@@ -4469,9 +4719,12 @@ function SupportRail({
   agenda,
   excludedTaskIds,
   agendaApproved,
+  agendaPreferences,
   onOpenInbox,
   onBuildAgenda,
   onToggleAgendaTask,
+  onMoveAgendaTask,
+  onUpdateAgendaPreferences,
   onApproveAgenda,
   onOpenAgendaWork,
   onExportAgenda,
@@ -4489,9 +4742,12 @@ function SupportRail({
   agenda: AgendaItem[];
   excludedTaskIds: Set<string>;
   agendaApproved: boolean;
+  agendaPreferences: AgendaPreferences;
   onOpenInbox: () => void;
   onBuildAgenda: () => void;
   onToggleAgendaTask: (taskId: Id) => void;
+  onMoveAgendaTask: (taskId: Id, direction: "up" | "down") => void;
+  onUpdateAgendaPreferences: (preferences: AgendaPreferences) => void;
   onApproveAgenda: () => void;
   onOpenAgendaWork: () => void;
   onExportAgenda: () => void;
@@ -4572,8 +4828,11 @@ function SupportRail({
           agenda={agenda}
           excludedTaskIds={excludedTaskIds}
           approved={agendaApproved}
+          preferences={agendaPreferences}
           onBuild={onBuildAgenda}
           onToggleTask={onToggleAgendaTask}
+          onMoveTask={onMoveAgendaTask}
+          onPreferencesChange={onUpdateAgendaPreferences}
           onApprove={onApproveAgenda}
           onOpenWork={onOpenAgendaWork}
           onExport={onExportAgenda}
@@ -5853,6 +6112,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
   const [agendaExcludedTaskIds, setAgendaExcludedTaskIds] = useState<Set<string>>(new Set());
   const [agendaApproved, setAgendaApproved] = useState(false);
+  const [agendaPreferences, setAgendaPreferences] = useState<AgendaPreferences>(DEFAULT_AGENDA_PREFERENCES);
+  const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
@@ -5867,6 +6128,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const persistedReviewedNotificationIds = data?.workspaceState?.reviewedNotificationIds.join("|") ?? "";
   const persistedAgendaExcludedTaskIds = data?.workspaceState?.agenda.excludedTaskIds.join("|") ?? "";
   const persistedAgendaApproved = data?.workspaceState?.agenda.approved ?? false;
+  const persistedAgendaPreferences = JSON.stringify(data?.workspaceState?.agenda.preferences ?? DEFAULT_AGENDA_PREFERENCES);
+  const persistedAgendaTaskOrder = data?.workspaceState?.agenda.taskOrder.join("|") ?? "";
 
   const persistWorkspaceState = (input: { key: "reviewed_notifications" | "agenda_state"; value: Record<string, unknown> }) => {
     if (!data?.authenticated) return;
@@ -5875,13 +6138,21 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     });
   };
 
-  const persistAgendaState = (excludedTaskIds: Set<string>, approved: boolean, approvedAt: string | null = null) => {
+  const persistAgendaState = (
+    excludedTaskIds: Set<string>,
+    approved: boolean,
+    approvedAt: string | null = null,
+    preferences = agendaPreferences,
+    taskOrder = agendaTaskOrder,
+  ) => {
     persistWorkspaceState({
       key: "agenda_state",
       value: {
         excludedTaskIds: Array.from(excludedTaskIds),
         approved,
         approvedAt,
+        preferences,
+        taskOrder,
       },
     });
   };
@@ -5899,7 +6170,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     if (!data?.authenticated || !data.workspaceState) return;
     setAgendaExcludedTaskIds(new Set(data.workspaceState.agenda.excludedTaskIds));
     setAgendaApproved(data.workspaceState.agenda.approved);
-  }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds]);
+    setAgendaPreferences(normalizeAgendaPreferences(data.workspaceState.agenda.preferences));
+    setAgendaTaskOrder(data.workspaceState.agenda.taskOrder);
+  }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds, persistedAgendaPreferences, persistedAgendaTaskOrder]);
 
   // The Gmail OAuth callback redirects to "/?gmail=<reason>" after Google
   // sends the user back. Detect that on mount, surface a typed toast, and
@@ -6263,7 +6536,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     onSuccess: (agenda) => {
       setAgendaExcludedTaskIds(new Set());
       setAgendaApproved(false);
-      persistAgendaState(new Set(), false);
+      persistAgendaState(new Set(), false, null, agendaPreferences, agendaTaskOrder);
       const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
       const scheduled = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
       toast({
@@ -6283,6 +6556,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/integrations/google/calendar/export", {
         excludedTaskIds: Array.from(agendaExcludedTaskIds),
+        preferences: agendaPreferences,
+        taskOrder: agendaTaskOrder,
       });
       return (await res.json()) as { ok: boolean; exported: number; updated: number; skipped: number; total: number };
     },
@@ -6342,9 +6617,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? [], data?.positionProfiles ?? []),
     [data?.tasks, data?.users, data?.events, data?.positionProfiles],
   );
+  const orderedAgenda = useMemo(
+    () => orderAgendaItems(data?.agenda ?? [], agendaTaskOrder),
+    [agendaTaskOrder, data?.agenda],
+  );
   const approvedAgenda = useMemo(
-    () => (data?.agenda ?? []).filter((item) => !agendaExcludedTaskIds.has(String(item.taskId))),
-    [agendaExcludedTaskIds, data?.agenda],
+    () => orderedAgenda.filter((item) => !agendaExcludedTaskIds.has(String(item.taskId))),
+    [agendaExcludedTaskIds, orderedAgenda],
   );
   const markNotificationsReviewed = (ids: string[]) => {
     if (ids.length === 0) return;
@@ -6673,9 +6952,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   authenticated={Boolean(data.authenticated)}
                   currentUserId={data.currentUserId}
                   events={data.events}
-                  agenda={data.agenda}
+                  agenda={orderedAgenda}
                   excludedTaskIds={agendaExcludedTaskIds}
                   agendaApproved={agendaApproved}
+                  agendaPreferences={agendaPreferences}
                   onOpenInbox={() => setApprovalInboxOpen(true)}
                   onBuildAgenda={() => buildAgenda.mutate()}
                   onToggleAgendaTask={(taskId) => {
@@ -6685,13 +6965,35 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                       const id = String(taskId);
                       if (next.has(id)) next.delete(id);
                       else next.add(id);
-                      persistAgendaState(next, false);
+                      persistAgendaState(next, false, null, agendaPreferences, agendaTaskOrder);
                       return next;
                     });
                   }}
+                  onMoveAgendaTask={(taskId, direction) => {
+                    setAgendaApproved(false);
+                    setAgendaTaskOrder((current) => {
+                      const ids = orderedAgenda.map((item) => String(item.taskId));
+                      const next = current.length > 0 ? [...current] : ids;
+                      for (const id of ids) {
+                        if (!next.includes(id)) next.push(id);
+                      }
+                      const index = next.indexOf(String(taskId));
+                      const target = direction === "up" ? index - 1 : index + 1;
+                      if (index < 0 || target < 0 || target >= next.length) return next;
+                      [next[index], next[target]] = [next[target], next[index]];
+                      persistAgendaState(agendaExcludedTaskIds, false, null, agendaPreferences, next);
+                      return next;
+                    });
+                  }}
+                  onUpdateAgendaPreferences={(preferences) => {
+                    const next = normalizeAgendaPreferences(preferences);
+                    setAgendaApproved(false);
+                    setAgendaPreferences(next);
+                    persistAgendaState(agendaExcludedTaskIds, false, null, next, agendaTaskOrder);
+                  }}
                   onApproveAgenda={() => {
                     setAgendaApproved(true);
-                    persistAgendaState(agendaExcludedTaskIds, true, new Date().toISOString());
+                    persistAgendaState(agendaExcludedTaskIds, true, new Date().toISOString(), agendaPreferences, agendaTaskOrder);
                     toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
                   }}
                   onOpenAgendaWork={() => setAgendaWorkOpen(true)}
@@ -6731,7 +7033,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onOpenChange={setCalendarExportOpen}
         agenda={approvedAgenda}
         oauthStatus={oauthData}
-        onDownload={() => downloadAgendaCalendar(data.agenda)}
+        onDownload={() => downloadAgendaCalendar(approvedAgenda)}
         onExportGoogle={() => exportGoogleCalendar.mutate()}
         onReconnectGoogle={() => connectGmail.mutate()}
         isExportingGoogle={exportGoogleCalendar.isPending}
