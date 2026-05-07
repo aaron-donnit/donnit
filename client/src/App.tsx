@@ -623,13 +623,13 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div
-      className="panel flex h-[min(640px,calc(100dvh-8.75rem))] min-h-[440px] flex-col lg:h-[calc(100dvh-9.25rem)] lg:min-h-[520px]"
+      className="panel flex h-[min(680px,calc(100dvh-7.75rem))] min-h-[460px] flex-col lg:h-[calc(100dvh-8.25rem)] lg:min-h-[560px]"
       data-testid="panel-chat"
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-brand-green" />
-          <h2 className="display-font text-base font-bold leading-none">Quick add</h2>
+          <h2 className="display-font text-base font-bold leading-none">Chat to task</h2>
         </div>
         <span className="ui-label">AI parser</span>
       </div>
@@ -5247,7 +5247,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const addTaskActions: FunctionAction[] = [
     {
       id: "create-todo",
-      label: "Chat quick add",
+      label: "Chat to task",
       icon: ListPlus,
       primary: true,
       onClick: () => {
@@ -5464,10 +5464,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
-      <section className="mx-auto max-w-[1600px] px-4 pt-4 pb-8 lg:px-6">
+      <section className="mx-auto max-w-[1600px] px-4 pt-1 pb-8 lg:px-6">
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
-          <div className="lg:sticky lg:top-[8.25rem] lg:col-span-4 lg:self-start xl:col-span-3">
+          <div className="lg:sticky lg:top-[7.25rem] lg:col-span-4 lg:self-start xl:col-span-3">
             <ChatPanel messages={data.messages} />
           </div>
 
