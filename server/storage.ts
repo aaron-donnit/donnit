@@ -266,6 +266,7 @@ export interface IStorage {
   listChatMessages(): Promise<ChatMessage[]>;
   listEmailSuggestions(): Promise<EmailSuggestion[]>;
   createEmailSuggestion(suggestion: InsertEmailSuggestion): Promise<EmailSuggestion>;
+  updateEmailSuggestion(id: number, patch: Partial<EmailSuggestion>): Promise<EmailSuggestion | undefined>;
   approveEmailSuggestion(id: number, actorId: number): Promise<{ suggestion?: EmailSuggestion; task?: Task }>;
   dismissEmailSuggestion(id: number): Promise<EmailSuggestion | undefined>;
 }
@@ -322,6 +323,15 @@ export class DatabaseStorage implements IStorage {
     return getDb()
       .insert(emailSuggestions)
       .values({ ...suggestion, status: "pending", createdAt: nowIso() })
+      .returning()
+      .get();
+  }
+
+  async updateEmailSuggestion(id: number, patch: Partial<EmailSuggestion>): Promise<EmailSuggestion | undefined> {
+    return getDb()
+      .update(emailSuggestions)
+      .set(patch)
+      .where(eq(emailSuggestions.id, id))
       .returning()
       .get();
   }

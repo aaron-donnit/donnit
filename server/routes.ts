@@ -31,6 +31,7 @@ import {
 } from "./auth-supabase";
 import {
   DonnitStore,
+  type DonnitEmailSuggestion,
   type DonnitPositionProfile,
   type DonnitTask,
   type DonnitTaskSubtask,
@@ -1039,6 +1040,8 @@ function estimateEmailTaskMinutes(input: {
   urgency?: string | null;
 }) {
   const text = `${input.title} ${input.preview ?? ""} ${(input.actionItems ?? []).join(" ")}`.toLowerCase();
+  const explicitEstimate = text.match(/\bestimated(?:\s+time)?:\s*(\d{1,4})\s*(?:min|mins|minutes)\b/i);
+  if (explicitEstimate) return Math.max(5, Math.min(1440, Number(explicitEstimate[1])));
   if (/reconcile|receipt|expense|charge|transaction/.test(text)) return 15;
   if (/invoice|payment|bill|pay /.test(text)) return 20;
   if (/contract|agreement|proposal|sow|legal/.test(text)) return 45;
@@ -1532,6 +1535,19 @@ type IngestTarget = {
 };
 
 type AiTaskExtraction = {
+  shouldCreateTask: boolean;
+  taskType:
+    | "assignment"
+    | "follow_up"
+    | "approval"
+    | "expense"
+    | "invoice"
+    | "meeting"
+    | "document_review"
+    | "support"
+    | "access"
+    | "recurring"
+    | "context_only";
   title: string;
   description: string;
   urgency: "low" | "normal" | "high" | "critical";
@@ -1542,9 +1558,24 @@ type AiTaskExtraction = {
   reminderDaysBefore: number;
   confidence: "low" | "medium" | "high";
   rationale: string;
+  sourceExcerpt: string;
 };
 
 const aiTaskExtractionSchema = z.object({
+  shouldCreateTask: z.boolean(),
+  taskType: z.enum([
+    "assignment",
+    "follow_up",
+    "approval",
+    "expense",
+    "invoice",
+    "meeting",
+    "document_review",
+    "support",
+    "access",
+    "recurring",
+    "context_only",
+  ]),
   title: z.string().trim().min(2).max(160),
   description: z.string().trim().max(1200).default(""),
   urgency: z.enum(["low", "normal", "high", "critical"]),
@@ -1555,6 +1586,16 @@ const aiTaskExtractionSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(365),
   confidence: z.enum(["low", "medium", "high"]),
   rationale: z.string().trim().max(400),
+  sourceExcerpt: z.string().trim().max(300),
+});
+
+const suggestionPatchSchema = z.object({
+  suggestedTitle: z.string().trim().min(2).max(160).optional(),
+  suggestedDueDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
+  preview: z.string().trim().min(2).max(600).optional(),
+  actionItems: z.array(z.string().trim().min(1).max(260)).max(8).optional(),
+  assignedToId: z.union([z.string().min(1), z.number()]).nullable().optional(),
 });
 
 function extractOutputText(response: any): string | null {
@@ -1567,6 +1608,28 @@ function extractOutputText(response: any): string | null {
     }
   }
   return null;
+}
+
+function compactTaskText(value: string, max = 220) {
+  const cleaned = value
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, max - 3).trim()}...`;
+}
+
+function normalizeAiTitle(title: string, fallback: string, assigneeLabels: string[] = []) {
+  const cleaned =
+    titleFromMessage(title, assigneeLabels) ||
+    titleFromMessage(fallback, assigneeLabels) ||
+    fallback.trim();
+  return compactTaskText(cleaned.replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+/i, ""), 160);
+}
+
+function normalizeAiDescription(description: string, fallback: string) {
+  const cleaned = compactTaskText(description || fallback, 900);
+  if (!cleaned) return compactTaskText(fallback, 900);
+  return cleaned;
 }
 
 async function extractTaskWithAi(input: {
@@ -1607,7 +1670,18 @@ async function extractTaskWithAi(input: {
           {
             role: "system",
             content:
-              "Extract one actionable Donnit task. Return only fields that fit the schema. Use null dueDate when no date is clear. Keep titles grammatical, concise, and written as an action. Do not copy raw email, Slack, SMS, chat, or document text when a cleaner interpretation is possible.",
+              [
+                "Extract one actionable Donnit task for a professional workplace continuity tool.",
+                "Return only schema fields. Use null dueDate when no date is clear.",
+                "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
+                "If the text says to assign someone, put that person in assigneeHint and make the title the work itself.",
+                "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
+                "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
+                "Descriptions should explain the next step in one or two plain sentences.",
+                "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
+                "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
+                "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
+              ].join(" "),
           },
           {
             role: "user",
@@ -1621,6 +1695,7 @@ async function extractTaskWithAi(input: {
               fallbackTitle: input.fallbackTitle ?? null,
               availableAssignees: input.memberLabels ?? [],
               today: todayIso(),
+              currentYear: new Date().getFullYear(),
             }),
           },
         ],
@@ -1633,6 +1708,23 @@ async function extractTaskWithAi(input: {
               type: "object",
               additionalProperties: false,
               properties: {
+                shouldCreateTask: { type: "boolean" },
+                taskType: {
+                  type: "string",
+                  enum: [
+                    "assignment",
+                    "follow_up",
+                    "approval",
+                    "expense",
+                    "invoice",
+                    "meeting",
+                    "document_review",
+                    "support",
+                    "access",
+                    "recurring",
+                    "context_only",
+                  ],
+                },
                 title: { type: "string" },
                 description: { type: "string" },
                 urgency: { type: "string", enum: ["low", "normal", "high", "critical"] },
@@ -1643,8 +1735,11 @@ async function extractTaskWithAi(input: {
                 reminderDaysBefore: { type: "integer" },
                 confidence: { type: "string", enum: ["low", "medium", "high"] },
                 rationale: { type: "string" },
+                sourceExcerpt: { type: "string" },
               },
               required: [
+                "shouldCreateTask",
+                "taskType",
                 "title",
                 "description",
                 "urgency",
@@ -1655,6 +1750,7 @@ async function extractTaskWithAi(input: {
                 "reminderDaysBefore",
                 "confidence",
                 "rationale",
+                "sourceExcerpt",
               ],
             },
           },
@@ -1741,23 +1837,28 @@ type TaskSuggestionCandidate = {
   suggestedDueDate: string | null;
   urgency: string;
   estimatedMinutes?: number;
+  shouldCreateTask?: boolean;
 };
 
 function applyAiToCandidate<T extends TaskSuggestionCandidate>(
   candidate: T,
   ai: AiTaskExtraction | null,
   source: SuggestionSource,
-): T {
+): T & { shouldCreateTask?: boolean } {
   if (!ai) return candidate;
-  const title = titleFromMessage(ai.title) || candidate.suggestedTitle;
+  const title = normalizeAiTitle(ai.title, candidate.suggestedTitle);
   const dueDate = ai.dueDate ?? candidate.suggestedDueDate ?? null;
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : ai.urgency;
   const actionItems = [
-    ai.description || `Complete: ${title}.`,
-    `Donnit rationale: ${ai.rationale}`,
+    normalizeAiDescription(ai.description, candidate.preview),
+    `Why Donnit suggested this: ${ai.rationale}`,
+    `Confidence: ${ai.confidence}`,
+    `Estimated time: ${ai.estimatedMinutes} minutes`,
+    ai.sourceExcerpt ? `Source excerpt: ${compactTaskText(ai.sourceExcerpt, 240)}` : "",
   ].filter(Boolean);
   return {
     ...candidate,
+    shouldCreateTask: ai.shouldCreateTask,
     preview: ai.rationale || candidate.preview,
     actionItems,
     suggestedTitle: title,
@@ -1766,8 +1867,8 @@ function applyAiToCandidate<T extends TaskSuggestionCandidate>(
     estimatedMinutes: ai.estimatedMinutes,
     body:
       candidate.body && candidate.body.trim().length > 0
-        ? `${candidate.body}\n\nAI interpretation: ${ai.description || ai.rationale}`.slice(0, 4000)
-        : `${source.toUpperCase()} interpretation: ${ai.description || ai.rationale}`.slice(0, 4000),
+        ? `${candidate.body}\n\nAI interpretation: ${normalizeAiDescription(ai.description, ai.rationale)}`.slice(0, 4000)
+        : `${source.toUpperCase()} interpretation: ${normalizeAiDescription(ai.description, ai.rationale)}`.slice(0, 4000),
   };
 }
 
@@ -1775,7 +1876,7 @@ async function enrichSuggestionCandidateWithAi<T extends TaskSuggestionCandidate
   candidate: T,
   source: SuggestionSource,
   context?: { from?: string; channel?: string },
-): Promise<T> {
+): Promise<T & { shouldCreateTask?: boolean }> {
   const ai = await extractTaskWithAi({
     source,
     text: `${candidate.subject}\n${candidate.preview}\n${candidate.body ?? ""}`.slice(0, 5000),
@@ -2281,15 +2382,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const resolvedUrgency =
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
         const resolvedTitle = ai
-          ? titleFromMessage(ai.title, [
+          ? normalizeAiTitle(ai.title, fallbackInput.title, [
               aiAssignee?.profile?.full_name ?? "",
               aiAssignee?.profile?.email ?? "",
-            ]) || fallbackInput.title
+            ])
           : fallbackInput.title;
         const taskInput = ai
           ? {
               title: resolvedTitle,
-              description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
+              description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
               urgency: resolvedUrgency,
               dueDate: resolvedDueDate,
@@ -2346,12 +2447,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const resolvedUrgency =
       resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
     const resolvedTitle = ai
-      ? titleFromMessage(ai.title, [aiAssignee?.name ?? "", aiAssignee?.email ?? ""]) || fallbackInput.title
+      ? normalizeAiTitle(ai.title, fallbackInput.title, [aiAssignee?.name ?? "", aiAssignee?.email ?? ""])
       : fallbackInput.title;
     const taskInput = ai
       ? {
           title: resolvedTitle,
-          description: `${ai.description || parsed.data.message}\n\nDonnit rationale: ${ai.rationale}`,
+          description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
           urgency: resolvedUrgency,
           dueDate: resolvedDueDate,
@@ -3093,13 +3194,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(409).json({ message: "Workspace not bootstrapped." });
           return;
         }
-        const candidates = await Promise.all(
+        const candidates = (
+          await Promise.all(
           buildDocumentSuggestionCandidates({
             fileName: parsed.data.fileName,
             text,
             assignedToId: auth.userId,
           }).map((candidate) => enrichSuggestionCandidateWithAi(candidate, "document")),
-        );
+          )
+        ).filter((candidate) => candidate.shouldCreateTask !== false);
         const suggestions = [];
         for (const candidate of candidates) {
           const suggestion = await store.createEmailSuggestion(orgId, {
@@ -3139,13 +3242,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
 
-      const candidates = await Promise.all(
+      const candidates = (
+        await Promise.all(
         buildDocumentSuggestionCandidates({
           fileName: parsed.data.fileName,
           text,
           assignedToId: DEMO_USER_ID,
         }).map((candidate) => enrichSuggestionCandidateWithAi(candidate, "document")),
-      );
+        )
+      ).filter((candidate) => candidate.shouldCreateTask !== false);
       const suggestions = [];
       for (const candidate of candidates) {
         const suggestion = await storage.createEmailSuggestion({
@@ -3168,6 +3273,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ------------------------------------------------------------------
   // Email suggestions
   // ------------------------------------------------------------------
+  app.patch("/api/suggestions/:id", async (req: Request, res: Response) => {
+    const parsed = suggestionPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Suggestion edits are incomplete." });
+      return;
+    }
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const patch: Partial<DonnitEmailSuggestion> = {};
+        if (parsed.data.suggestedTitle !== undefined) patch.suggested_title = parsed.data.suggestedTitle;
+        if (parsed.data.suggestedDueDate !== undefined) patch.suggested_due_date = parsed.data.suggestedDueDate;
+        if (parsed.data.urgency !== undefined) patch.urgency = parsed.data.urgency;
+        if (parsed.data.preview !== undefined) patch.preview = parsed.data.preview;
+        if (parsed.data.actionItems !== undefined) patch.action_items = parsed.data.actionItems;
+        if (parsed.data.assignedToId !== undefined) {
+          patch.assigned_to = parsed.data.assignedToId === null ? null : String(parsed.data.assignedToId);
+        }
+        const updated = await store.updateEmailSuggestion(String(req.params.id), patch);
+        if (!updated) {
+          res.status(404).json({ message: "Suggestion not found." });
+          return;
+        }
+        res.json({
+          id: updated.id,
+          fromEmail: updated.from_email,
+          subject: updated.subject,
+          preview: updated.preview,
+          body: updated.body ?? "",
+          receivedAt: updated.received_at,
+          actionItems: Array.isArray(updated.action_items) ? updated.action_items : [],
+          suggestedTitle: updated.suggested_title,
+          suggestedDueDate: updated.suggested_due_date,
+          urgency: updated.urgency,
+          status: updated.status,
+          assignedToId: updated.assigned_to,
+          createdAt: updated.created_at,
+        });
+        return;
+      } catch (error) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ message: "Suggestion id is invalid." });
+      return;
+    }
+    const patch: Partial<Awaited<ReturnType<typeof storage.listEmailSuggestions>>[number]> = {};
+    if (parsed.data.suggestedTitle !== undefined) patch.suggestedTitle = parsed.data.suggestedTitle;
+    if (parsed.data.suggestedDueDate !== undefined) patch.suggestedDueDate = parsed.data.suggestedDueDate;
+    if (parsed.data.urgency !== undefined) patch.urgency = parsed.data.urgency;
+    if (parsed.data.preview !== undefined) patch.preview = parsed.data.preview;
+    if (typeof parsed.data.assignedToId === "number") patch.assignedToId = parsed.data.assignedToId;
+    const updated = await storage.updateEmailSuggestion(id, patch);
+    if (!updated) {
+      res.status(404).json({ message: "Suggestion not found." });
+      return;
+    }
+    res.json(updated);
+  });
+
   app.post("/api/suggestions/:id/approve", async (req: Request, res: Response) => {
     if (req.donnitAuth) {
       try {
@@ -3574,9 +3744,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(status).json(payload);
       return;
     }
-    const candidates = await Promise.all(
+    const enrichedCandidates = await Promise.all(
       result.candidates.map((candidate) => enrichSuggestionCandidateWithAi(candidate, "email")),
     );
+    const candidates = enrichedCandidates.filter((candidate) => candidate.shouldCreateTask !== false);
 
     if (req.donnitAuth) {
       try {
@@ -3622,7 +3793,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.json({
           ok: true,
           source: result.source,
-          scannedCandidates: candidates.length,
+          scannedCandidates: enrichedCandidates.length,
           createdSuggestions: created.length,
           suggestions: created,
         });
@@ -3666,7 +3837,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({
       ok: true,
       source: result.source,
-      scannedCandidates: candidates.length,
+      scannedCandidates: enrichedCandidates.length,
       createdSuggestions: created.length,
       suggestions: created,
     });
@@ -4054,6 +4225,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const candidate = await enrichSuggestionCandidateWithAi(buildManualEmailCandidate(parsed.data), "email", {
       from: parsed.data.fromEmail,
     });
+    if (candidate.shouldCreateTask === false) {
+      res.status(200).json({
+        ok: true,
+        created: false,
+        message: "Donnit did not find a clear task in that email.",
+        candidate,
+      });
+      return;
+    }
     if (req.donnitAuth) {
       try {
         const auth = req.donnitAuth;
@@ -4117,6 +4297,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         channel: parsed.data.channel,
       },
     );
+    if (candidate.shouldCreateTask === false) {
+      res.status(200).json({
+        ok: true,
+        created: false,
+        source,
+        message: "Donnit did not find a clear task in that message.",
+        candidate,
+      });
+      return;
+    }
 
     if (req.donnitAuth) {
       try {

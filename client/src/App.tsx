@@ -32,6 +32,7 @@ import {
   Minimize2,
   Moon,
   Paperclip,
+  Pencil,
   Play,
   RefreshCcw,
   Repeat2,
@@ -179,6 +180,13 @@ type EmailSuggestion = {
   status: string;
   assignedToId: Id | null;
   createdAt: string;
+};
+
+type SuggestionPatch = {
+  suggestedTitle?: string;
+  suggestedDueDate?: string | null;
+  urgency?: "low" | "normal" | "high" | "critical";
+  preview?: string;
 };
 
 type Bootstrap = {
@@ -3650,6 +3658,11 @@ function AcceptancePanel({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
     onSuccess: invalidateWorkspace,
   });
+  const updateSuggestion = useMutation({
+    mutationFn: async ({ id, patch }: { id: Id; patch: SuggestionPatch }) =>
+      apiRequest("PATCH", `/api/suggestions/${id}`, patch),
+    onSuccess: invalidateWorkspace,
+  });
 
   const visibleSuggestions = pendingSuggestions.slice(0, 3);
   const remainingSuggestionsAfterVisible = Math.max(
@@ -3707,8 +3720,10 @@ function AcceptancePanel({
                 suggestion={suggestion}
                 onApprove={() => approveSuggestion.mutate(suggestion.id)}
                 onDismiss={() => dismissSuggestion.mutate(suggestion.id)}
+                onSaveEdits={(id, patch) => updateSuggestion.mutate({ id, patch })}
                 approving={approveSuggestion.isPending}
                 dismissing={dismissSuggestion.isPending}
+                saving={updateSuggestion.isPending}
               />
             ))}
           </div>
@@ -3748,23 +3763,59 @@ function formatReceivedAt(value: string | null | undefined): string {
   });
 }
 
+function parseSuggestionInsight(actionItems: string[]) {
+  const take = (prefix: string) => {
+    const found = actionItems.find((item) => item.toLowerCase().startsWith(prefix.toLowerCase()));
+    return found ? found.slice(prefix.length).trim() : null;
+  };
+  const metaPrefixes = [
+    "Why Donnit suggested this:",
+    "Confidence:",
+    "Estimated time:",
+    "Source excerpt:",
+  ];
+  return {
+    why: take("Why Donnit suggested this:"),
+    confidence: take("Confidence:"),
+    estimate: take("Estimated time:"),
+    excerpt: take("Source excerpt:"),
+    nextSteps: actionItems.filter(
+      (item) => !metaPrefixes.some((prefix) => item.toLowerCase().startsWith(prefix.toLowerCase())),
+    ),
+  };
+}
+
 function SuggestionCard({
   suggestion,
   onApprove,
   onDismiss,
+  onSaveEdits,
   approving,
   dismissing,
+  saving,
 }: {
   suggestion: EmailSuggestion;
   onApprove: () => void;
   onDismiss: () => void;
+  onSaveEdits?: (id: Id, patch: SuggestionPatch) => void;
   approving: boolean;
   dismissing: boolean;
+  saving?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
+  const [draftTitle, setDraftTitle] = useState(suggestion.suggestedTitle);
+  const [draftDueDate, setDraftDueDate] = useState(suggestion.suggestedDueDate ?? "");
+  const [draftUrgency, setDraftUrgency] = useState<"low" | "normal" | "high" | "critical">(
+    ["low", "normal", "high", "critical"].includes(suggestion.urgency)
+      ? (suggestion.urgency as "low" | "normal" | "high" | "critical")
+      : "normal",
+  );
+  const [draftPreview, setDraftPreview] = useState(suggestion.preview ?? "");
   const actionItems = suggestion.actionItems ?? [];
+  const insight = parseSuggestionInsight(actionItems);
   const body = (suggestion.body ?? "").trim();
   const preview = (suggestion.preview ?? body.slice(0, 240)).trim();
   const fromLower = suggestion.fromEmail.toLowerCase();
@@ -3776,6 +3827,26 @@ function SuggestionCard({
         ? "Document"
         : "Email";
   const canReplyByEmail = sourceLabel === "Email" && suggestion.fromEmail.includes("@");
+  useEffect(() => {
+    setDraftTitle(suggestion.suggestedTitle);
+    setDraftDueDate(suggestion.suggestedDueDate ?? "");
+    setDraftUrgency(
+      ["low", "normal", "high", "critical"].includes(suggestion.urgency)
+        ? (suggestion.urgency as "low" | "normal" | "high" | "critical")
+        : "normal",
+    );
+    setDraftPreview(suggestion.preview ?? "");
+  }, [suggestion.id, suggestion.preview, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
+  const saveEdits = () => {
+    if (!onSaveEdits || draftTitle.trim().length < 2) return;
+    onSaveEdits(suggestion.id, {
+      suggestedTitle: draftTitle.trim(),
+      suggestedDueDate: draftDueDate || null,
+      urgency: draftUrgency,
+      preview: draftPreview.trim() || suggestion.preview,
+    });
+    setEditing(false);
+  };
   const openEmailDraft = () => {
     const subject = suggestion.subject.toLowerCase().startsWith("re:")
       ? suggestion.subject
@@ -3791,9 +3862,19 @@ function SuggestionCard({
       >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground break-words" data-testid={`text-suggestion-title-${suggestion.id}`}>
-            {suggestion.suggestedTitle}
-          </p>
+          {editing ? (
+            <Input
+              value={draftTitle}
+              onChange={(event) => setDraftTitle(event.target.value)}
+              maxLength={160}
+              className="h-9 text-sm"
+              data-testid={`input-suggestion-title-${suggestion.id}`}
+            />
+          ) : (
+            <p className="text-sm font-medium text-foreground break-words" data-testid={`text-suggestion-title-${suggestion.id}`}>
+              {suggestion.suggestedTitle}
+            </p>
+          )}
           <p className="mt-0.5 text-xs text-muted-foreground break-words" data-testid={`text-suggestion-from-${suggestion.id}`}>
             {sourceLabel} - {suggestion.fromEmail} - {formatReceivedAt(suggestion.receivedAt ?? null)}
           </p>
@@ -3801,16 +3882,68 @@ function SuggestionCard({
             Source: {suggestion.subject}
           </p>
         </div>
-        {suggestion.suggestedDueDate && (
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {insight.confidence && (
+            <span className="rounded-md bg-brand-green/10 px-2 py-1 text-[10px] font-semibold uppercase text-brand-green">
+              {insight.confidence}
+            </span>
+          )}
+          {suggestion.suggestedDueDate && !editing && (
+            <span className="ui-label whitespace-nowrap text-[10px]">
+              Due {suggestion.suggestedDueDate}
+            </span>
+          )}
           <span className="ui-label whitespace-nowrap text-[10px]">
-            Due {suggestion.suggestedDueDate}
+            {urgencyLabel(suggestion.urgency)}
           </span>
-        )}
+        </div>
       </div>
 
-      {actionItems.length > 0 && (
+      {editing && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_150px_150px]">
+          <Textarea
+            value={draftPreview}
+            onChange={(event) => setDraftPreview(event.target.value)}
+            className="min-h-[76px] text-xs sm:col-span-3"
+            maxLength={600}
+            data-testid={`input-suggestion-rationale-${suggestion.id}`}
+          />
+          <Input
+            type="date"
+            value={draftDueDate}
+            onChange={(event) => setDraftDueDate(event.target.value)}
+            className="h-9 text-xs"
+            data-testid={`input-suggestion-due-${suggestion.id}`}
+          />
+          <select
+            value={draftUrgency}
+            onChange={(event) => setDraftUrgency(event.target.value as "low" | "normal" | "high" | "critical")}
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            data-testid={`select-suggestion-urgency-${suggestion.id}`}
+          >
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+      )}
+
+      {insight.why && !editing && (
+        <div className="mt-2 rounded-sm border border-brand-green/15 bg-brand-green/5 px-2 py-1.5 text-xs text-foreground">
+          <p className="font-medium">Why Donnit suggested this</p>
+          <p className="mt-0.5 text-muted-foreground">{insight.why}</p>
+          {(insight.estimate || insight.excerpt) && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {[insight.estimate, insight.excerpt ? `Source: ${insight.excerpt}` : null].filter(Boolean).join(" / ")}
+            </p>
+          )}
+        </div>
+      )}
+
+      {insight.nextSteps.length > 0 && (
         <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-foreground" data-testid={`list-action-items-${suggestion.id}`}>
-          {actionItems.map((item, index) => (
+          {insight.nextSteps.map((item, index) => (
             <li key={`${suggestion.id}-ai-${index}`}>{item}</li>
           ))}
         </ul>
@@ -3851,10 +3984,42 @@ function SuggestionCard({
       )}
 
       <div className="mt-2 flex flex-wrap gap-2">
+        {editing ? (
+          <>
+            <Button
+              size="sm"
+              onClick={saveEdits}
+              disabled={saving || draftTitle.trim().length < 2}
+              data-testid={`button-suggestion-save-${suggestion.id}`}
+            >
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              data-testid={`button-suggestion-cancel-edit-${suggestion.id}`}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : onSaveEdits ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setEditing(true)}
+            disabled={approving || dismissing}
+            data-testid={`button-suggestion-edit-${suggestion.id}`}
+          >
+            <Pencil className="size-4" /> Edit
+          </Button>
+        ) : null}
         <Button
           size="sm"
           onClick={onApprove}
-          disabled={approving || dismissing}
+          disabled={approving || dismissing || editing}
           data-testid={`button-suggestion-approve-${suggestion.id}`}
         >
           <Check className="size-4" /> Add as task
@@ -4292,6 +4457,11 @@ function ApprovalInboxDialog({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
     onSuccess: invalidateWorkspace,
   });
+  const updateSuggestion = useMutation({
+    mutationFn: async ({ id, patch }: { id: Id; patch: SuggestionPatch }) =>
+      apiRequest("PATCH", `/api/suggestions/${id}`, patch),
+    onSuccess: invalidateWorkspace,
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -4390,8 +4560,10 @@ function ApprovalInboxDialog({
                         suggestion={suggestion}
                         onApprove={() => approveSuggestion.mutate(suggestion.id)}
                         onDismiss={() => dismissSuggestion.mutate(suggestion.id)}
+                        onSaveEdits={(id, patch) => updateSuggestion.mutate({ id, patch })}
                         approving={approveSuggestion.isPending}
                         dismissing={dismissSuggestion.isPending}
+                        saving={updateSuggestion.isPending}
                       />
                     ))}
                   </div>
