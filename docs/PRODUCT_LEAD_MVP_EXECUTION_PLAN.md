@@ -144,6 +144,13 @@ Step 7.1 implementation status:
 - Added Gmail and Google Calendar reconnect/disconnect controls to Workspace settings.
 - Refreshed integration status after Gmail scan, calendar export, and disconnect events.
 
+Step 7.2 implementation status:
+
+- Added Slack integration health metadata for webhook token, signing secret, bot token, Events API endpoint, user mapping, and unread delay.
+- Added `/api/integrations/slack/events` for Slack URL verification and user-message event ingestion.
+- Added Slack signature/token verification, best-effort Slack user lookup, workspace member assignment mapping, and idempotent suggestion keys.
+- Surfaced Slack event bridge and user mapping status in Workspace settings.
+
 ## Step 8: Onboarding and Pilot Readiness
 
 Goal: make the product usable by design partners with less founder explanation.

@@ -237,7 +237,17 @@ type Bootstrap = {
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };
     email: { provider: string; sourceId: string; status: string; mode: string };
-    slack?: { provider: string; status: string; mode: string; webhookConfigured?: boolean; botConfigured?: boolean };
+    slack?: {
+      provider: string;
+      status: string;
+      mode: string;
+      webhookConfigured?: boolean;
+      botConfigured?: boolean;
+      signingSecretConfigured?: boolean;
+      eventsConfigured?: boolean;
+      userMapping?: string;
+      unreadDelayMinutes?: number;
+    };
     sms?: { provider: string; status: string; mode: string; webhookConfigured?: boolean; providerConfigured?: boolean };
     reminders: { channelOrder: string[]; reminderOrder: string[] };
     app: { delivery: string; native: string };
@@ -5805,6 +5815,11 @@ function WorkspaceSettingsDialog({
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
   const gmailReady = Boolean(oauthStatus?.connected && oauthStatus.gmailScopeConnected && !oauthStatus.tokenExpiresSoon);
+  const slackStatus = useSlackIntegrationStatus(authenticated);
+  const slackData = slackStatus.data;
+  const slackEventsReady = Boolean(slackData?.eventsConfigured ?? integrations.slack?.eventsConfigured);
+  const slackBotReady = Boolean(slackData?.botConfigured ?? integrations.slack?.botConfigured);
+  const slackHealth: "ready" | "warning" | "setup" = slackEventsReady ? (slackBotReady ? "ready" : "warning") : "setup";
   const googleHealthLabel =
     oauthStatus?.health === "ready"
       ? "Ready"
@@ -5829,6 +5844,7 @@ function WorkspaceSettingsDialog({
     if (typeof window === "undefined") return 2;
     return Number(window.localStorage.getItem("donnit.unreadDelayMinutes") ?? "2") || 2;
   });
+  const slackDelay = slackData?.unreadDelayMinutes ?? integrations.slack?.unreadDelayMinutes ?? unreadDelayMinutes;
   const updateAutoEmailScan = (value: boolean) => {
     setAutoEmailScan(value);
     if (typeof window !== "undefined") window.localStorage.setItem("donnit.autoEmailScan", String(value));
@@ -5986,13 +6002,13 @@ function WorkspaceSettingsDialog({
               <ConnectedToolRow
                 icon={Inbox}
                 name="Slack"
-                status={integrations.slack?.webhookConfigured ? "ready" : integrations.slack?.botConfigured ? "warning" : "setup"}
+                status={slackHealth}
                 detail={
-                  integrations.slack?.webhookConfigured
-                    ? "Webhook token is configured. Real Slack app wiring is tabled for the next MVP step."
-                    : integrations.slack?.botConfigured
-                      ? "Slack bot token exists, but the Donnit ingest webhook token is not configured."
-                      : "No Slack webhook token is configured yet."
+                  slackEventsReady
+                    ? slackBotReady
+                      ? `Events are ready. Donnit maps Slack users by profile email/name, then queues suggestions after a ${slackDelay} minute delay.`
+                      : `Events can ingest with the Slack signing secret or ingest token. Add SLACK_BOT_TOKEN for stronger user email mapping.`
+                    : "Slack events are not configured yet. Add SLACK_SIGNING_SECRET or DONNIT_SLACK_WEBHOOK_TOKEN."
                 }
                 actionLabel="Queue test"
                 action={() => testSlack.mutate()}
@@ -6074,6 +6090,15 @@ function WorkspaceSettingsDialog({
                   data-testid="input-automation-unread-delay"
                 />
               </div>
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <p className="text-sm font-medium text-foreground">Slack event bridge</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Endpoint: <span className="font-mono">{slackData?.eventEndpoint ?? "/api/integrations/slack/events"}</span>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  User mapping: {slackData?.userMapping.mappedByEmail ?? 0}/{slackData?.userMapping.totalMembers ?? users.length} workspace members have email-backed mapping.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -6137,9 +6162,33 @@ type GmailOAuthStatus = {
   status?: string | null;
 };
 
+type SlackIntegrationStatus = {
+  ok: boolean;
+  health: "ready" | "events_without_profile_lookup" | "setup";
+  webhookConfigured: boolean;
+  signingSecretConfigured: boolean;
+  botConfigured: boolean;
+  eventsConfigured: boolean;
+  eventEndpoint: string;
+  suggestEndpoint: string;
+  unreadDelayMinutes: number;
+  userMapping: {
+    mode: string;
+    mappedByEmail: number;
+    totalMembers: number;
+  };
+};
+
 function useGmailOAuthStatus(authenticated: boolean) {
   return useQuery<GmailOAuthStatus>({
     queryKey: ["/api/integrations/gmail/oauth/status"],
+    enabled: authenticated,
+  });
+}
+
+function useSlackIntegrationStatus(authenticated: boolean) {
+  return useQuery<SlackIntegrationStatus>({
+    queryKey: ["/api/integrations/slack/status"],
     enabled: authenticated,
   });
 }

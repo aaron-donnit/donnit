@@ -1761,6 +1761,8 @@ type IngestTarget = {
   assignedTo: string;
 };
 
+type ExternalTaskSuggestionInput = z.infer<typeof externalTaskSuggestionSchema>;
+
 type AiTaskExtraction = {
   shouldCreateTask: boolean;
   taskType:
@@ -2142,6 +2144,87 @@ function buildExternalSuggestionCandidate(input: {
     urgency,
     estimatedMinutes: estimate,
   };
+}
+
+function externalSuggestionKey(source: "slack" | "sms", candidate: TaskSuggestionCandidate) {
+  return `${source}:${crypto
+    .createHash("sha1")
+    .update(`${candidate.subject}:${candidate.fromEmail}:${candidate.body}`)
+    .digest("hex")
+    .slice(0, 24)}`;
+}
+
+function normalizeActorLookup(value: string | undefined | null) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/^slack:/, "")
+    .replace(/[<@>]/g, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+}
+
+async function resolveAssignedToFromActor(store: DonnitStore, orgId: string, actor: string | undefined, fallback: string) {
+  const lookup = normalizeActorLookup(actor);
+  if (!lookup) return fallback;
+  const members = await store.listOrgMembers(orgId);
+  const match = members.find((member) => {
+    const email = member.profile?.email?.toLowerCase() ?? "";
+    const name = member.profile?.full_name?.toLowerCase() ?? "";
+    return (
+      (email && (email === lookup || email.startsWith(`${lookup}@`))) ||
+      (name && (name === lookup || name.includes(lookup) || lookup.includes(name)))
+    );
+  });
+  return match?.user_id ?? fallback;
+}
+
+function verifySlackRequest(req: Request) {
+  const expectedToken = process.env.DONNIT_SLACK_WEBHOOK_TOKEN;
+  const signingSecret = process.env.SLACK_SIGNING_SECRET;
+  const providedToken = req.get("x-donnit-ingest-token");
+  if (expectedToken && providedToken === expectedToken) return true;
+  if (!signingSecret) return false;
+  const timestamp = req.get("x-slack-request-timestamp");
+  const signature = req.get("x-slack-signature");
+  const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody.toString("utf8") : "";
+  if (!timestamp || !signature || !raw) return false;
+  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (!Number.isFinite(ageSeconds) || ageSeconds > 60 * 5) return false;
+  const expected = `v0=${crypto
+    .createHmac("sha256", signingSecret)
+    .update(`v0:${timestamp}:${raw}`)
+    .digest("hex")}`;
+  return (
+    Buffer.byteLength(signature) === Buffer.byteLength(expected) &&
+    crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  );
+}
+
+async function lookupSlackUserLabel(userId: string | undefined | null) {
+  if (!userId) return "Slack user";
+  const botToken = process.env.SLACK_BOT_TOKEN;
+  if (!botToken) return userId;
+  try {
+    const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
+      headers: { authorization: `Bearer ${botToken}` },
+    });
+    if (!res.ok) return userId;
+    const payload = (await res.json()) as {
+      ok?: boolean;
+      user?: { real_name?: string; name?: string; profile?: { email?: string; real_name?: string; display_name?: string } };
+    };
+    if (!payload.ok || !payload.user) return userId;
+    return (
+      payload.user.profile?.email ||
+      payload.user.profile?.display_name ||
+      payload.user.profile?.real_name ||
+      payload.user.real_name ||
+      payload.user.name ||
+      userId
+    );
+  } catch {
+    return userId;
+  }
 }
 
 async function extractUploadedDocumentText(input: {
@@ -4691,24 +4774,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.status(201).json({ ok: true, suggestion });
   });
 
-  async function createExternalSuggestion(req: Request, res: Response, source: "slack" | "sms") {
-    const parsed = externalTaskSuggestionSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ message: "Provide message text between 2 and 4000 characters." });
-      return;
-    }
+  async function createExternalSuggestionFromInput(
+    req: Request,
+    res: Response,
+    source: "slack" | "sms",
+    input: ExternalTaskSuggestionInput,
+  ) {
     const candidate = await enrichSuggestionCandidateWithAi(
       buildExternalSuggestionCandidate({
         source,
-        text: parsed.data.text,
-        from: parsed.data.from,
-        channel: parsed.data.channel,
-        subject: parsed.data.subject,
+        text: input.text,
+        from: input.from,
+        channel: input.channel,
+        subject: input.subject,
       }),
       source,
       {
-        from: parsed.data.from,
-        channel: parsed.data.channel,
+        from: input.from,
+        channel: input.channel,
       },
     );
     if (candidate.shouldCreateTask === false) {
@@ -4732,9 +4815,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const assignedTo =
-          typeof parsed.data.assignedToId === "string" ? parsed.data.assignedToId : auth.userId;
+          typeof input.assignedToId === "string"
+            ? input.assignedToId
+            : await resolveAssignedToFromActor(store, orgId, input.from, auth.userId);
         const suggestion = await store.createEmailSuggestion(orgId, {
-          gmail_message_id: `${source}:${crypto.createHash("sha1").update(candidate.body).digest("hex").slice(0, 20)}`,
+          gmail_message_id: externalSuggestionKey(source, candidate),
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
@@ -4778,9 +4863,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const store = new DonnitStore(admin, target.assignedTo);
         const assignedTo =
-          typeof parsed.data.assignedToId === "string" ? parsed.data.assignedToId : target.assignedTo;
+          typeof input.assignedToId === "string"
+            ? input.assignedToId
+            : await resolveAssignedToFromActor(store, target.orgId, input.from, target.assignedTo);
         const suggestion = await store.createEmailSuggestion(target.orgId, {
-          gmail_message_id: `${source}:${crypto.createHash("sha1").update(candidate.body).digest("hex").slice(0, 20)}`,
+          gmail_message_id: externalSuggestionKey(source, candidate),
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
@@ -4809,9 +4896,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       suggestedTitle: candidate.suggestedTitle,
       suggestedDueDate: candidate.suggestedDueDate,
       urgency: candidate.urgency,
-      assignedToId: typeof parsed.data.assignedToId === "number" ? parsed.data.assignedToId : DEMO_USER_ID,
+      assignedToId: typeof input.assignedToId === "number" ? input.assignedToId : DEMO_USER_ID,
     });
     res.status(201).json({ ok: true, suggestion });
+  }
+
+  async function createExternalSuggestion(req: Request, res: Response, source: "slack" | "sms") {
+    const parsed = externalTaskSuggestionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Provide message text between 2 and 4000 characters." });
+      return;
+    }
+    return createExternalSuggestionFromInput(req, res, source, parsed.data);
   }
 
   app.post("/api/integrations/slack/suggest", async (req: Request, res: Response) => {
@@ -4828,6 +4924,79 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return;
     }
     return createExternalSuggestion(req, res, "slack");
+  });
+
+  app.get("/api/integrations/slack/status", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      const members = orgId ? await store.listOrgMembers(orgId) : [];
+      const mappedByEmail = members.filter((member) => Boolean(member.profile?.email)).length;
+      const signingSecretConfigured = Boolean(process.env.SLACK_SIGNING_SECRET);
+      const webhookConfigured = Boolean(process.env.DONNIT_SLACK_WEBHOOK_TOKEN);
+      const botConfigured = Boolean(process.env.SLACK_BOT_TOKEN);
+      const eventsConfigured = signingSecretConfigured || webhookConfigured;
+      res.json({
+        ok: true,
+        provider: "slack",
+        health: eventsConfigured ? (botConfigured ? "ready" : "events_without_profile_lookup") : "setup",
+        webhookConfigured,
+        signingSecretConfigured,
+        botConfigured,
+        eventsConfigured,
+        eventEndpoint: "/api/integrations/slack/events",
+        suggestEndpoint: "/api/integrations/slack/suggest",
+        unreadDelayMinutes: Number(process.env.DONNIT_SLACK_UNREAD_DELAY_MINUTES ?? "2") || 2,
+        userMapping: {
+          mode: botConfigured ? "slack_profile_email_then_name" : "message_name_then_default_owner",
+          mappedByEmail,
+          totalMembers: members.length,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ ok: false, message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/integrations/slack/events", async (req: Request, res: Response) => {
+    if (process.env.NODE_ENV === "production" && !verifySlackRequest(req)) {
+      res.status(401).json({ ok: false, reason: "slack_signature_or_token_required" });
+      return;
+    }
+    const body = req.body as Record<string, any>;
+    if (body?.type === "url_verification" && typeof body.challenge === "string") {
+      res.json({ challenge: body.challenge });
+      return;
+    }
+    if (body?.type !== "event_callback") {
+      res.json({ ok: true, ignored: "unsupported_slack_payload" });
+      return;
+    }
+    const event = body.event as Record<string, any> | undefined;
+    if (!event || event.type !== "message" || typeof event.text !== "string") {
+      res.json({ ok: true, ignored: "unsupported_slack_event" });
+      return;
+    }
+    if (event.subtype || event.bot_id || event.hidden) {
+      res.json({ ok: true, ignored: "non_user_message" });
+      return;
+    }
+    const actor = await lookupSlackUserLabel(typeof event.user === "string" ? event.user : null);
+    const channel = typeof event.channel === "string" ? event.channel : body.event_context ?? "slack";
+    const eventId = typeof body.event_id === "string" ? body.event_id : `${channel}:${event.ts ?? Date.now()}`;
+    const text = String(event.text).replace(/<@([A-Z0-9]+)>/g, "@$1").trim();
+    const metadata = [
+      `Slack event: ${eventId}`,
+      event.ts ? `Message timestamp: ${event.ts}` : "",
+      event.thread_ts ? `Thread timestamp: ${event.thread_ts}` : "",
+    ].filter(Boolean);
+    return createExternalSuggestionFromInput(req, res, "slack", {
+      text: `${text}\n\n${metadata.join("\n")}`.trim(),
+      from: actor,
+      channel,
+      subject: `Slack: ${channel}`,
+    });
   });
 
   app.post("/api/integrations/sms/inbound", async (req: Request, res: Response) => {

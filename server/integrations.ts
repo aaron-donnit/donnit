@@ -44,10 +44,19 @@ export function getIntegrationStatus() {
     },
     slack: {
       provider: "slack",
-      status: process.env.DONNIT_SLACK_WEBHOOK_TOKEN || process.env.SLACK_BOT_TOKEN ? "configured" : "scaffolded",
+      status:
+        process.env.DONNIT_SLACK_WEBHOOK_TOKEN ||
+        process.env.SLACK_BOT_TOKEN ||
+        process.env.SLACK_SIGNING_SECRET
+          ? "configured"
+          : "scaffolded",
       mode: "approval_before_task_creation",
       webhookConfigured: Boolean(process.env.DONNIT_SLACK_WEBHOOK_TOKEN),
       botConfigured: Boolean(process.env.SLACK_BOT_TOKEN),
+      signingSecretConfigured: Boolean(process.env.SLACK_SIGNING_SECRET),
+      eventsConfigured: Boolean(process.env.SLACK_SIGNING_SECRET || process.env.DONNIT_SLACK_WEBHOOK_TOKEN),
+      userMapping: process.env.SLACK_BOT_TOKEN ? "slack_profile_email_then_name" : "message_name_then_default_owner",
+      unreadDelayMinutes: Number(process.env.DONNIT_SLACK_UNREAD_DELAY_MINUTES ?? "2") || 2,
     },
     sms: {
       provider: "sms",
