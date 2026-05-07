@@ -830,45 +830,6 @@
     padding: 14px;
   }
 
-  .chat-panel {
-    height: min(680px, calc(100dvh - 7.75rem));
-    min-height: 460px;
-  }
-
-  .app-function-inner,
-  .workspace-frame {
-    --chat-rail-width: clamp(18.5rem, 22vw, 22.5rem);
-    --chat-rail-gap: 1rem;
-    --chat-rail-left: max(1rem, calc((100vw - 1600px) / 2 + 1.5rem));
-    --chat-rail-top: 4rem;
-    --chat-rail-bottom: 1rem;
-  }
-
-  @media (min-width: 1024px) {
-    .app-function-inner,
-    .workspace-content {
-      margin-left: calc(var(--chat-rail-width) + var(--chat-rail-gap));
-    }
-
-    .workspace-grid {
-      display: block;
-    }
-
-    .workspace-chat-rail {
-      position: fixed;
-      left: var(--chat-rail-left);
-      top: var(--chat-rail-top);
-      bottom: var(--chat-rail-bottom);
-      z-index: 30;
-      width: var(--chat-rail-width);
-    }
-
-    .chat-panel {
-      height: 100%;
-      min-height: 0;
-    }
-  }
-
   /* Dominant work column heading */
   .work-heading {
     font-family: var(--font-display);
