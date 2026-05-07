@@ -2200,6 +2200,45 @@ function verifySlackRequest(req: Request) {
   );
 }
 
+function verifySmsRequest(req: Request) {
+  const expectedToken = process.env.DONNIT_SMS_WEBHOOK_TOKEN;
+  const providedToken = req.get("x-donnit-ingest-token");
+  if (expectedToken && providedToken === expectedToken) return true;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.get("x-twilio-signature");
+  if (!authToken || !signature) return false;
+  const proto = req.get("x-forwarded-proto") ?? req.protocol ?? "https";
+  const host = req.get("x-forwarded-host") ?? req.get("host") ?? "";
+  const fullUrl = `${proto}://${host}${req.originalUrl}`;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const paramString = Object.keys(body)
+    .sort()
+    .map((key) => `${key}${String(body[key] ?? "")}`)
+    .join("");
+  const expected = crypto.createHmac("sha1", authToken).update(`${fullUrl}${paramString}`).digest("base64");
+  return (
+    Buffer.byteLength(signature) === Buffer.byteLength(expected) &&
+    crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  );
+}
+
+function normalizeSmsInboundBody(body: unknown): ExternalTaskSuggestionInput | null {
+  if (!body || typeof body !== "object") return null;
+  const input = body as Record<string, unknown>;
+  const text = typeof input.text === "string" ? input.text : typeof input.Body === "string" ? input.Body : "";
+  if (!text.trim()) return null;
+  const from = typeof input.from === "string" ? input.from : typeof input.From === "string" ? input.From : undefined;
+  const to = typeof input.to === "string" ? input.to : typeof input.To === "string" ? input.To : undefined;
+  const sid = typeof input.MessageSid === "string" ? input.MessageSid : typeof input.SmsMessageSid === "string" ? input.SmsMessageSid : undefined;
+  return {
+    text,
+    from,
+    channel: to ? `to ${to}` : "sms",
+    subject: sid ? `SMS: ${sid}` : "SMS inbound",
+    assignedToId: typeof input.assignedToId === "string" || typeof input.assignedToId === "number" ? input.assignedToId : undefined,
+  };
+}
+
 async function lookupSlackUserLabel(userId: string | undefined | null) {
   if (!userId) return "Slack user";
   const botToken = process.env.SLACK_BOT_TOKEN;
@@ -4865,6 +4904,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const assignedTo =
           typeof input.assignedToId === "string"
             ? input.assignedToId
+            : source === "sms" && process.env.DONNIT_SMS_DEFAULT_ASSIGNEE_ID
+              ? process.env.DONNIT_SMS_DEFAULT_ASSIGNEE_ID
             : await resolveAssignedToFromActor(store, target.orgId, input.from, target.assignedTo);
         const suggestion = await store.createEmailSuggestion(target.orgId, {
           gmail_message_id: externalSuggestionKey(source, candidate),
@@ -5000,19 +5041,54 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/integrations/sms/inbound", async (req: Request, res: Response) => {
-    const expected = process.env.DONNIT_SMS_WEBHOOK_TOKEN;
     if (
       !req.donnitAuth &&
       process.env.NODE_ENV === "production" &&
-      (!expected || req.get("x-donnit-ingest-token") !== expected)
+      !verifySmsRequest(req)
     ) {
       res.status(401).json({
-        message: "Authenticate or provide the SMS ingest token.",
-        reason: expected ? "token_mismatch" : "token_not_configured",
+        message: "Authenticate, provide the SMS ingest token, or send a verified Twilio webhook.",
+        reason: process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN ? "sms_verification_failed" : "token_not_configured",
       });
       return;
     }
-    return createExternalSuggestion(req, res, "sms");
+    const parsed = externalTaskSuggestionSchema.safeParse(req.body);
+    if (parsed.success) return createExternalSuggestionFromInput(req, res, "sms", parsed.data);
+    const normalized = normalizeSmsInboundBody(req.body);
+    if (!normalized) {
+      res.status(400).json({ message: "Provide SMS text in `text` or Twilio `Body`." });
+      return;
+    }
+    return createExternalSuggestionFromInput(req, res, "sms", normalized);
+  });
+
+  app.get("/api/integrations/sms/status", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      const members = orgId ? await store.listOrgMembers(orgId) : [];
+      const inboundConfigured = Boolean(process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN);
+      const providerConfigured = Boolean(process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_FROM_NUMBER);
+      res.json({
+        ok: true,
+        provider: "sms",
+        health: inboundConfigured ? (providerConfigured ? "ready" : "webhook_only") : "setup",
+        inboundConfigured,
+        webhookConfigured: Boolean(process.env.DONNIT_SMS_WEBHOOK_TOKEN),
+        signatureConfigured: Boolean(process.env.TWILIO_AUTH_TOKEN),
+        accountConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID),
+        fromNumberConfigured: Boolean(process.env.TWILIO_FROM_NUMBER),
+        inboundEndpoint: "/api/integrations/sms/inbound",
+        routing: {
+          mode: process.env.DONNIT_SMS_DEFAULT_ASSIGNEE_ID ? "configured_default_assignee" : "default_workspace_owner",
+          defaultAssigneeConfigured: Boolean(process.env.DONNIT_SMS_DEFAULT_ASSIGNEE_ID),
+          totalMembers: members.length,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ ok: false, message: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   return httpServer;

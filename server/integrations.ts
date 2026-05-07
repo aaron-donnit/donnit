@@ -60,10 +60,21 @@ export function getIntegrationStatus() {
     },
     sms: {
       provider: "sms",
-      status: process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN ? "configured" : "scaffolded",
+      status:
+        process.env.DONNIT_SMS_WEBHOOK_TOKEN ||
+        process.env.TWILIO_AUTH_TOKEN ||
+        process.env.TWILIO_ACCOUNT_SID ||
+        process.env.TWILIO_FROM_NUMBER
+          ? "configured"
+          : "scaffolded",
       mode: "approval_before_task_creation",
       webhookConfigured: Boolean(process.env.DONNIT_SMS_WEBHOOK_TOKEN),
+      signatureConfigured: Boolean(process.env.TWILIO_AUTH_TOKEN),
+      accountConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID),
       providerConfigured: Boolean(process.env.TWILIO_AUTH_TOKEN),
+      fromNumberConfigured: Boolean(process.env.TWILIO_FROM_NUMBER),
+      inboundConfigured: Boolean(process.env.DONNIT_SMS_WEBHOOK_TOKEN || process.env.TWILIO_AUTH_TOKEN),
+      routing: process.env.DONNIT_SMS_DEFAULT_ASSIGNEE_ID ? "configured_default_assignee" : "default_workspace_owner",
     },
     reminders: {
       channelOrder: process.env.REMINDER_CHANNEL_ORDER?.split(",") ?? [...APPROVED_CHANNEL_ORDER],

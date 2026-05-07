@@ -248,7 +248,18 @@ type Bootstrap = {
       userMapping?: string;
       unreadDelayMinutes?: number;
     };
-    sms?: { provider: string; status: string; mode: string; webhookConfigured?: boolean; providerConfigured?: boolean };
+    sms?: {
+      provider: string;
+      status: string;
+      mode: string;
+      webhookConfigured?: boolean;
+      signatureConfigured?: boolean;
+      accountConfigured?: boolean;
+      providerConfigured?: boolean;
+      fromNumberConfigured?: boolean;
+      inboundConfigured?: boolean;
+      routing?: string;
+    };
     reminders: { channelOrder: string[]; reminderOrder: string[] };
     app: { delivery: string; native: string };
   };
@@ -5820,6 +5831,11 @@ function WorkspaceSettingsDialog({
   const slackEventsReady = Boolean(slackData?.eventsConfigured ?? integrations.slack?.eventsConfigured);
   const slackBotReady = Boolean(slackData?.botConfigured ?? integrations.slack?.botConfigured);
   const slackHealth: "ready" | "warning" | "setup" = slackEventsReady ? (slackBotReady ? "ready" : "warning") : "setup";
+  const smsStatus = useSmsIntegrationStatus(authenticated);
+  const smsData = smsStatus.data;
+  const smsInboundReady = Boolean(smsData?.inboundConfigured ?? integrations.sms?.inboundConfigured);
+  const smsProviderReady = Boolean(smsData?.signatureConfigured ?? integrations.sms?.signatureConfigured ?? integrations.sms?.providerConfigured);
+  const smsHealth: "ready" | "warning" | "setup" = smsInboundReady ? (smsProviderReady ? "ready" : "warning") : "setup";
   const googleHealthLabel =
     oauthStatus?.health === "ready"
       ? "Ready"
@@ -6017,13 +6033,13 @@ function WorkspaceSettingsDialog({
               <ConnectedToolRow
                 icon={Send}
                 name="SMS"
-                status={integrations.sms?.webhookConfigured ? "ready" : integrations.sms?.providerConfigured ? "warning" : "setup"}
+                status={smsHealth}
                 detail={
-                  integrations.sms?.webhookConfigured
-                    ? "Inbound SMS token is configured. Twilio provider wiring is tabled for the next MVP step."
-                    : integrations.sms?.providerConfigured
-                      ? "SMS provider credentials exist, but the Donnit ingest webhook token is not configured."
-                      : "No SMS webhook token is configured yet."
+                  smsInboundReady
+                    ? smsProviderReady
+                      ? `Inbound SMS is ready. Messages route to ${smsData?.routing.defaultAssigneeConfigured ? "the configured assignee" : "the workspace owner"} for approval.`
+                      : "Inbound SMS token is configured. Add TWILIO_AUTH_TOKEN to verify real Twilio webhooks."
+                    : "No SMS ingest token or Twilio signature verification is configured yet."
                 }
                 actionLabel="Queue test"
                 action={() => testSms.mutate()}
@@ -6097,6 +6113,15 @@ function WorkspaceSettingsDialog({
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   User mapping: {slackData?.userMapping.mappedByEmail ?? 0}/{slackData?.userMapping.totalMembers ?? users.length} workspace members have email-backed mapping.
+                </p>
+              </div>
+              <div className="rounded-md border border-border bg-background px-3 py-2">
+                <p className="text-sm font-medium text-foreground">SMS inbound bridge</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Endpoint: <span className="font-mono">{smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}</span>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Routing: {smsData?.routing.defaultAssigneeConfigured ? "configured default assignee" : "workspace owner fallback"}.
                 </p>
               </div>
             </div>
@@ -6179,6 +6204,22 @@ type SlackIntegrationStatus = {
   };
 };
 
+type SmsIntegrationStatus = {
+  ok: boolean;
+  health: "ready" | "webhook_only" | "setup";
+  inboundConfigured: boolean;
+  webhookConfigured: boolean;
+  signatureConfigured: boolean;
+  accountConfigured: boolean;
+  fromNumberConfigured: boolean;
+  inboundEndpoint: string;
+  routing: {
+    mode: string;
+    defaultAssigneeConfigured: boolean;
+    totalMembers: number;
+  };
+};
+
 function useGmailOAuthStatus(authenticated: boolean) {
   return useQuery<GmailOAuthStatus>({
     queryKey: ["/api/integrations/gmail/oauth/status"],
@@ -6189,6 +6230,13 @@ function useGmailOAuthStatus(authenticated: boolean) {
 function useSlackIntegrationStatus(authenticated: boolean) {
   return useQuery<SlackIntegrationStatus>({
     queryKey: ["/api/integrations/slack/status"],
+    enabled: authenticated,
+  });
+}
+
+function useSmsIntegrationStatus(authenticated: boolean) {
+  return useQuery<SmsIntegrationStatus>({
+    queryKey: ["/api/integrations/sms/status"],
     enabled: authenticated,
   });
 }

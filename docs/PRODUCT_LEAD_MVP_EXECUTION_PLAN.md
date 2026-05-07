@@ -151,6 +151,14 @@ Step 7.2 implementation status:
 - Added Slack signature/token verification, best-effort Slack user lookup, workspace member assignment mapping, and idempotent suggestion keys.
 - Surfaced Slack event bridge and user mapping status in Workspace settings.
 
+Step 7.3 implementation status:
+
+- Added SMS integration health metadata for ingest token, Twilio signature verification, account/from-number config, inbound endpoint, and routing mode.
+- Added `/api/integrations/sms/status`.
+- Hardened `/api/integrations/sms/inbound` to accept either Donnit JSON payloads or Twilio form webhooks (`Body`, `From`, `To`, `MessageSid`).
+- Added optional Twilio signature verification and configurable default assignee routing.
+- Surfaced SMS inbound bridge and routing status in Workspace settings.
+
 ## Step 8: Onboarding and Pilot Readiness
 
 Goal: make the product usable by design partners with less founder explanation.
