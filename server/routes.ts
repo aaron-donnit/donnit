@@ -4349,14 +4349,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   //   2. The donnit user must be inferred entirely from the signed state.
   //   3. We must NEVER let an exception escape — Vercel surfaces those as
   //      FUNCTION_INVOCATION_FAILED 500 to the user. Every error path
-  //      redirects to "/?gmail=<reason>" so the SPA can show a real toast.
+  //      redirects to "/?gmail=<reason>#/app" so the SPA can show a real
+  //      toast while keeping the user inside the authenticated app route.
   app.get("/api/integrations/gmail/oauth/callback", async (req: Request, res: Response) => {
     const safeRedirect = (
       reason: string,
       detail?: { googleError?: string | null; googleErrorDescription?: string | null },
     ) => {
-      // Always redirect to "/" with a typed gmail param so the SPA can show
-      // a toast and refresh oauth status without further server hops.
+      // Always redirect to the app route with a typed gmail param so the SPA
+      // can show a toast and refresh oauth status without further server hops.
       // Optional `gmail_error` / `gmail_error_description` carry Google's
       // own short error code / description so the toast can show exactly
       // what Google said. These fields come from Google's documented OAuth
@@ -4371,7 +4372,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           String(detail.googleErrorDescription).slice(0, 200),
         );
       }
-      const redirectUrl = `/?${params.toString()}`;
+      const redirectUrl = `/?${params.toString()}#/app`;
       try {
         res.status(302).setHeader("Location", redirectUrl).end();
       } catch {
