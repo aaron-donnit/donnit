@@ -623,7 +623,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div
-      className="panel flex h-[min(520px,calc(100dvh-10.5rem))] min-h-[360px] flex-col lg:h-[calc(100dvh-10.5rem)] lg:min-h-[420px]"
+      className="panel flex h-[min(640px,calc(100dvh-8.75rem))] min-h-[440px] flex-col lg:h-[calc(100dvh-9.25rem)] lg:min-h-[520px]"
       data-testid="panel-chat"
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -678,7 +678,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           onChange={(event) => setMessage(event.target.value)}
           placeholder="Add spouse birthday for 2026-05-30, remind me 15 days before."
           rows={3}
-          className="h-20 max-h-20 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
+          className="h-24 max-h-24 min-h-0 resize-none overflow-y-auto focus-visible:ring-2 focus-visible:ring-brand-green focus-visible:ring-offset-1"
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -2121,18 +2121,19 @@ function AgendaPanel({
   const totalMinutes = includedAgenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
   const scheduledCount = includedAgenda.filter((item) => item.scheduleStatus === "scheduled").length;
   return (
-    <div className="panel" data-testid="panel-agenda" id="panel-agenda">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div>
+    <div className="panel overflow-hidden" data-testid="panel-agenda" id="panel-agenda">
+      <div className="flex flex-col gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
           <h3 className="display-font text-sm font-bold">Agenda</h3>
           <p className="ui-label mt-1">
             {agenda.length > 0 ? `${scheduledCount}/${agenda.length} scheduled / ${totalMinutes} min` : "No blocks yet"}
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           <Button
             variant="outline"
             size="sm"
+            className="w-full justify-center px-2"
             onClick={onBuild}
             disabled={isBuilding}
             data-testid="button-panel-build-agenda"
@@ -2143,6 +2144,7 @@ function AgendaPanel({
           <Button
             variant="outline"
             size="sm"
+            className="w-full justify-center px-2"
             onClick={onOpenWork}
             disabled={includedAgenda.length === 0}
             data-testid="button-panel-work-agenda"
@@ -2153,6 +2155,7 @@ function AgendaPanel({
           <Button
             variant="outline"
             size="sm"
+            className="w-full justify-center px-2"
             onClick={onExport}
             disabled={includedAgenda.length === 0 || !approved}
             data-testid="button-panel-export-agenda"
