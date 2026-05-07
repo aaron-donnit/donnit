@@ -623,7 +623,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div
-      className="panel flex h-[min(680px,calc(100dvh-7.75rem))] min-h-[460px] flex-col lg:h-[calc(100dvh-8.25rem)] lg:min-h-[560px]"
+      className="panel chat-panel flex flex-col"
       data-testid="panel-chat"
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -5450,7 +5450,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
       {/* Function bar */}
       <section className="border-b border-border bg-background">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
+        <div className="app-function-inner mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 lg:px-6">
           <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="ui-label">Today · {todayLabel}</span>
@@ -5464,15 +5464,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       </section>
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
-      <section className="mx-auto max-w-[1600px] px-4 pt-1 pb-8 lg:px-6">
-        <div className="grid gap-4 lg:grid-cols-12">
+      <section className="workspace-frame mx-auto max-w-[1600px] px-4 pt-3 pb-8 lg:px-6">
+        <div className="workspace-grid grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
-          <div className="lg:sticky lg:top-[7.25rem] lg:col-span-4 lg:self-start xl:col-span-3">
+          <div className="workspace-chat-rail lg:col-span-4 lg:self-start xl:col-span-3">
             <ChatPanel messages={data.messages} />
           </div>
 
           {/* Work area — right */}
-          <div className="lg:col-span-8 xl:col-span-9">
+          <div className="workspace-content lg:col-span-8 xl:col-span-9">
             <div className="grid gap-4 xl:grid-cols-12">
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
