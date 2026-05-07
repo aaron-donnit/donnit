@@ -6167,6 +6167,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaPreferences, setAgendaPreferences] = useState<AgendaPreferences>(DEFAULT_AGENDA_PREFERENCES);
   const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
+  const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
       if (typeof window === "undefined") return new Set();
@@ -6225,6 +6226,29 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setAgendaPreferences(normalizeAgendaPreferences(data.workspaceState.agenda.preferences));
     setAgendaTaskOrder(data.workspaceState.agenda.taskOrder);
   }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds, persistedAgendaPreferences, persistedAgendaTaskOrder]);
+
+  useEffect(() => {
+    if (!googleConnectPolling) return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/gmail/oauth/status"] });
+      if (Date.now() - startedAt > 120_000) {
+        window.clearInterval(timer);
+        setGoogleConnectPolling(false);
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [googleConnectPolling]);
+
+  useEffect(() => {
+    if (!googleConnectPolling || !oauthStatus.data?.connected) return;
+    setGoogleConnectPolling(false);
+    queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
+    toast({
+      title: "Google connected",
+      description: "Donnit stayed open while Google authorization completed.",
+    });
+  }, [googleConnectPolling, oauthStatus.data?.connected]);
 
   // The Gmail OAuth callback redirects to "/?gmail=<reason>" after Google
   // sends the user back. Detect that on mount, surface a typed toast, and
@@ -6392,14 +6416,27 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   }, []);
 
   const connectGmail = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (popup?: Window | null) => {
       const res = await apiRequest("POST", "/api/integrations/gmail/oauth/connect");
-      return (await res.json()) as { ok: boolean; url?: string };
+      const result = (await res.json()) as { ok: boolean; url?: string };
+      return { ...result, popup };
     },
     onSuccess: (result) => {
-      if (result?.url) {
-        window.location.href = result.url;
+      if (!result?.url) return;
+      if (result.popup && !result.popup.closed) {
+        result.popup.location.href = result.url;
+        setGoogleConnectPolling(true);
+        toast({
+          title: "Google opened separately",
+          description: "Finish authorization in the Google window. Donnit will stay open here.",
+        });
+        return;
       }
+      toast({
+        title: "Allow popups to connect Google",
+        description: "Donnit keeps you signed in by opening Google authorization in a separate window.",
+        variant: "destructive",
+      });
     },
     onError: (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -6413,6 +6450,18 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       });
     },
   });
+
+  const startGoogleConnect = () => {
+    let popup: Window | null = null;
+    if (typeof window !== "undefined") {
+      popup = window.open("", "donnit-google-connect", "popup,width=560,height=720");
+      if (popup) {
+        popup.document.title = "Connect Google";
+        popup.document.body.innerHTML = "<p style=\"font-family: sans-serif; padding: 24px;\">Opening Google authorization...</p>";
+      }
+    }
+    connectGmail.mutate(popup);
+  };
 
   const disconnectGmail = useMutation({
     mutationFn: async () => {
@@ -6492,7 +6541,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         title = "Connect Gmail to scan";
         description =
           "Donnit needs permission to read unread Gmail. Click Connect Gmail to authorize.";
-        action = { label: "Connect Gmail", run: () => connectGmail.mutate() };
+        action = { label: "Connect Gmail", run: startGoogleConnect };
       } else if (
         reason === "gmail_oauth_token_invalid" ||
         reason === "gmail_auth_required" ||
@@ -6502,13 +6551,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         description =
           serverMessage ??
           "Gmail authorization expired. Reconnect Gmail and try again.";
-        action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
+        action = { label: "Reconnect Gmail", run: startGoogleConnect };
       } else if (reason === "gmail_scope_missing") {
         title = "Reconnect Gmail with read access";
         description =
           serverMessage ??
           "Donnit's Gmail authorization is missing the gmail.readonly scope. Reconnect Gmail and accept the 'Read your email' permission on Google's consent screen.";
-        action = { label: "Reconnect Gmail", run: () => connectGmail.mutate() };
+        action = { label: "Reconnect Gmail", run: startGoogleConnect };
       } else if (reason === "gmail_api_not_enabled") {
         title = "Enable Gmail API in Google Cloud";
         description =
@@ -6831,7 +6880,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             label: needsReconnect ? "Reconnect Gmail" : "Connect Gmail",
             icon: MailPlus,
             primary: needsReconnect,
-            onClick: () => connectGmail.mutate(),
+            onClick: startGoogleConnect,
             loading: connectGmail.isPending,
             hint: needsReconnect
               ? "Gmail authorization expired - re-authorize to resume scans"
@@ -7090,7 +7139,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         oauthStatus={oauthData}
         onDownload={() => downloadAgendaCalendar(approvedAgenda)}
         onExportGoogle={() => exportGoogleCalendar.mutate()}
-        onReconnectGoogle={() => connectGmail.mutate()}
+        onReconnectGoogle={startGoogleConnect}
         isExportingGoogle={exportGoogleCalendar.isPending}
         isReconnectingGoogle={connectGmail.isPending}
       />
@@ -7110,7 +7159,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         currentUserId={data.currentUserId}
         integrations={data.integrations}
         oauthStatus={oauthData}
-        onConnectGmail={() => connectGmail.mutate()}
+        onConnectGmail={startGoogleConnect}
         onDisconnectGmail={() => disconnectGmail.mutate()}
         onScanEmail={() => scan.mutate()}
         onOpenCalendarExport={() => setCalendarExportOpen(true)}
