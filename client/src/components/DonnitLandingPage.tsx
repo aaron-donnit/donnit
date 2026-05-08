@@ -83,14 +83,14 @@ function Header() {
         <nav className="nav-list">
           <a href="#product">Product</a>
           <a href="#how">How it works</a>
-          <a href="#teams">Teams</a>
+          <a href="#continuity">Role handoffs</a>
           <a href="#pricing">Pricing</a>
           <a href={CONTACT_MAILTO}>Changelog</a>
         </nav>
         <div className="nav-cta">
           <a href={APP_ROUTE} className="btn btn-ghost">Sign in</a>
           <a href={APP_ROUTE} className="btn btn-primary btn-arrow">
-            Get Donnit free <IconArrow />
+            Open Donnit <IconArrow />
           </a>
         </div>
       </div>
@@ -230,19 +230,19 @@ function Hero() {
               Workforce continuity, finally working
             </span>
             <h1 className="hero-headline">
-              The to-do list that actually <span className="green">finishes itself.</span>
+              The to-do list that <span className="green">finishes itself.</span>
             </h1>
             <p className="hero-sub">
               Donnit captures every task from chat and email, hands it to the right person, and keeps a complete record of who did what — so when people change roles, go on leave, or move on, the work and the knowledge stay.
             </p>
             <div className="hero-cta">
-              <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Start free — no card <IconArrow /></a>
+              <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Start pilot <IconArrow /></a>
               <a href="#how" className="btn btn-ghost">Watch the 60-second tour →</a>
             </div>
             <div className="hero-meta">
-              <span>Free for solo use</span>
+              <span>Pilot-ready workspace</span>
               <span className="dot-sep" />
-              <span>Slack &amp; Gmail in 2 clicks</span>
+              <span>Slack &amp; Gmail intake</span>
               <span className="dot-sep" />
               <span>Secure-by-design pilot</span>
             </div>
@@ -260,14 +260,6 @@ function Hero() {
           </div>
         </div>
 
-        <div className="logo-bar">
-          <div className="label">Built for teams who need work to survive handoffs</div>
-          <div className="logo-row">
-            {['◇ Northwave', '✱ Atlas Labs', '◎ Brightcap', '▲ Field & Co.', '✦ Helio', '◐ Postmark', '☼ Quint'].map(n => (
-              <span className="lo" key={n}>{n}</span>
-            ))}
-          </div>
-        </div>
       </div>
     </section>
   );
@@ -284,12 +276,16 @@ const SCRAPS = [
   { src: 'DM · CEO', text: 'pls keep me on offsite venue thread', cls: 'dm', from: { x: 64, y: 64, r: 5 } },
 ];
 function Pain() {
-  const [mode, setMode] = useState('before'); // before | after
-  // auto toggle
+  const [mode, setMode] = useState<'before' | 'after'>('before');
+  const [timerReset, setTimerReset] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setMode(m => m === 'before' ? 'after' : 'before'), 4200);
-    return () => clearInterval(t);
-  }, []);
+    const t = window.setTimeout(() => setMode(m => m === 'before' ? 'after' : 'before'), 3000);
+    return () => window.clearTimeout(t);
+  }, [mode, timerReset]);
+  const selectMode = (nextMode: 'before' | 'after') => {
+    setMode(nextMode);
+    setTimerReset((value) => value + 1);
+  };
 
   return (
     <section className="block pain">
@@ -297,13 +293,13 @@ function Pain() {
         <div className="block-head reveal">
           <div className="eyebrow">The problem</div>
           <h2>Work shouldn't <span className="green">disappear</span> into mental notes and Slack threads.</h2>
-          <p>The average operator juggles 7 inboxes. Tasks arrive everywhere — and only the loud ones get done. Donnit pulls them all into one list, sorted by what actually matters: due date, then urgency.</p>
+          <p>Tasks arrive everywhere — and only the loud ones get done. Donnit pulls loose work into one list, sorted by what matters: due date, then urgency.</p>
         </div>
 
         <div className="pain-toggle-wrap reveal">
           <div className="pain-toggle" role="tablist">
-            <button className={mode === 'before' ? 'active' : ''} onClick={() => setMode('before')}>Without Donnit</button>
-            <button className={mode === 'after' ? 'active' : ''} onClick={() => setMode('after')}>With Donnit</button>
+            <button className={mode === 'before' ? 'active' : ''} onClick={() => selectMode('before')}>Without Donnit</button>
+            <button className={mode === 'after' ? 'active' : ''} onClick={() => selectMode('after')}>With Donnit</button>
           </div>
         </div>
 
@@ -375,7 +371,7 @@ function Differentiators() {
           <div className="diff-card reveal">
             <div className="num">01 — EMAIL TRIAGE</div>
             <h3>Your inbox assigns tasks. Donnit handles them.</h3>
-            <p>Donnit reads your inbox, surfaces what's actually a task, and tees it up — accept, decline, or schedule. The other 80% stays in email, where it belongs.</p>
+            <p>Donnit reads your inbox, surfaces likely tasks, and tees them up — accept, decline, or schedule. Context stays attached so the work is easier to trust.</p>
             <div className="diff-visual">
               <EmailTriageDemo />
             </div>
@@ -470,15 +466,15 @@ function SimplicityDemo() {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 18, width: '100%' }}>
       <div className="simp-stat">
         <div className="num"><span className="green">1</span> sort</div>
-        <div className="lbl">vs. Asana's 7</div>
+        <div className="lbl">Due date, then urgency</div>
       </div>
       <div className="simp-stat" style={{ flex: 1 }}>
-        <div className="lbl" style={{ marginBottom: 4 }}>Avg. clicks to add a task</div>
+        <div className="lbl" style={{ marginBottom: 4 }}>Capture paths Donnit keeps simple</div>
         <div className="simp-bars">
-          <div className="simp-bar" style={{ height: '70%' }}><span className="bar-lbl">Asana</span></div>
-          <div className="simp-bar" style={{ height: '90%' }}><span className="bar-lbl">ClickUp</span></div>
-          <div className="simp-bar" style={{ height: '55%' }}><span className="bar-lbl">Todoist</span></div>
-          <div className="simp-bar us" style={{ height: '15%' }}><span className="bar-lbl">Donnit</span></div>
+          <div className="simp-bar" style={{ height: '46%' }}><span className="bar-lbl">Chat</span></div>
+          <div className="simp-bar" style={{ height: '62%' }}><span className="bar-lbl">Email</span></div>
+          <div className="simp-bar" style={{ height: '52%' }}><span className="bar-lbl">Slack</span></div>
+          <div className="simp-bar us" style={{ height: '78%' }}><span className="bar-lbl">Agenda</span></div>
         </div>
       </div>
     </div>
@@ -637,7 +633,7 @@ function Continuity() {
         <div className="block-head reveal">
           <div className="eyebrow">Workforce continuity</div>
           <h2>When people change roles, <span className="green">work doesn't get lost.</span></h2>
-          <p>The average company loses 42 days of productivity every time someone leaves a role. Donnit captures the work, the context, and the decisions automatically — so a Tuesday handoff is as clean as a Monday standup.</p>
+          <p>Role changes create risk when the work lives in threads, inboxes, and memory. Donnit captures the work, the context, and the decisions as they happen — so handoffs start with a real operating record.</p>
         </div>
 
         <div className="cont-grid">
@@ -710,84 +706,6 @@ function Continuity() {
   );
 }
 
-/* ---------- Personas ---------- */
-function Personas() {
-  const ps = [
-    {
-      ini: 'JL', a: 'avatar-1',
-      who: 'Jordan, 34',
-      role: 'Operations Manager · 40-person team',
-      quote: '"I need to know what my team is actually working on — and I need tasks to stop disappearing into Slack threads."',
-      needs: ['Manager log', 'Auto-assign', 'Slack integration', 'Urgency visibility'],
-    },
-    {
-      ini: 'SK', a: 'avatar-2',
-      who: 'Sam, 29',
-      role: 'Senior Developer · IC contributor',
-      quote: '"I want to add tasks by typing, not clicking through 5 dropdowns. And I want my emails to stop creating invisible work."',
-      needs: ['Chat input', 'Email scanning', 'Fast UI', 'Accept / deny'],
-    },
-    {
-      ini: 'RH', a: 'avatar-3',
-      who: 'Rachel, 41',
-      role: 'Founder · Solo + 3 contractors',
-      quote: '"I\'m managing work and my personal life from the same brain. I need one tool for all of it."',
-      needs: ['Annual reminders', 'Daily agenda', 'Personal + work', 'Simple log'],
-    },
-  ];
-  return (
-    <section className="block" id="teams" style={{ background: '#fff', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)' }}>
-      <div className="container">
-        <div className="block-head reveal">
-          <div className="eyebrow">Built for three jobs, not one</div>
-          <h2>One tool that <span className="green">works on Sunday night</span>, Monday morning, and the team standup at 11.</h2>
-          <p>If a design works for Rachel on a Sunday night, it works for everyone during the work week. We test against three real users — not personas on a slide.</p>
-        </div>
-        <div className="persona-grid">
-          {ps.map((p, i) => (
-            <div className={`persona-card reveal reveal-${i+1}`} key={p.who}>
-              <div className="persona-head">
-                <div className={`persona-avatar ${p.a}`}>{p.ini}</div>
-                <div>
-                  <div className="who">{p.who}</div>
-                  <div className="role">{p.role}</div>
-                </div>
-              </div>
-              <p className="persona-quote">{p.quote}</p>
-              <div className="persona-needs">
-                {p.needs.map(n => <span className="need-pill" key={n}>{n}</span>)}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Stats ---------- */
-function Stats() {
-  return (
-    <section className="stats-bar">
-      <div className="container">
-        <div className="stats-grid">
-          {[
-            { num: '1', small: '', lbl: 'Place for tasks, context, and handoffs' },
-            { num: '4', small: '', lbl: 'Sources already supported for task intake' },
-            { num: '3.2', small: 's', lbl: 'Target time to capture a quick task' },
-            { num: '100', small: '%', lbl: 'Focused on preserving role knowledge' },
-          ].map((s, i) => (
-            <div className="stat-item reveal" key={i} style={{ transitionDelay: `${i*60}ms` }}>
-              <div className="stat-num">{s.num}<span className="small">{s.small}</span></div>
-              <div className="stat-lbl">{s.lbl}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 /* ---------- Pricing ---------- */
 function Pricing() {
   return (
@@ -795,47 +713,47 @@ function Pricing() {
       <div className="container">
         <div className="block-head center reveal">
           <div className="eyebrow" style={{textAlign:'center'}}>Pricing</div>
-          <h2>Free for solo. <span className="green">Fair</span> for teams.</h2>
-          <p>No per-feature paywalls. No "contact sales" for the basics. The chat input, email scan, and manager log work on every plan.</p>
+          <h2>Start small. <span className="green">Prove value.</span></h2>
+          <p>Begin with one role, one team, or one transition workflow. We will publish plan details as the pilot program moves toward general availability.</p>
         </div>
         <div className="price-grid">
           <div className="price-card reveal">
-            <div className="price-name">Solo</div>
-            <div className="price-desc">For Rachel, running her own thing.</div>
-            <div className="price-amount"><span className="currency">$</span>0</div>
-            <div className="price-period">free forever · 1 user</div>
+            <div className="price-name">Individual pilot</div>
+            <div className="price-desc">For testing AI capture, agenda building, and personal task continuity.</div>
+            <div className="price-amount" style={{fontSize: 38}}>Early access</div>
+            <div className="price-period">start with one workflow</div>
             <ul className="price-features">
               <li>Chat &amp; email capture</li>
               <li>Personal log + reminders</li>
               <li>Slack &amp; Gmail connect</li>
-              <li>Up to 1,000 tasks / month</li>
+              <li>Approval inbox for suggested tasks</li>
             </ul>
             <div className="price-cta">
-              <a href={APP_ROUTE} className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }}>Start free</a>
+              <a href={APP_ROUTE} className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }}>Open Donnit</a>
             </div>
           </div>
 
           <div className="price-card featured reveal reveal-2">
-            <span className="price-tag">Most teams</span>
-            <div className="price-name">Team</div>
-            <div className="price-desc">For Sam, Jordan, and the eight people in between.</div>
-            <div className="price-amount"><span className="currency">$</span>9<span style={{fontSize: 22, fontWeight: 600, color:'rgba(247,245,240,0.6)', marginLeft:4}}>/seat</span></div>
-            <div className="price-period">billed monthly · cancel anytime</div>
+            <span className="price-tag">Best pilot fit</span>
+            <div className="price-name">Team pilot</div>
+            <div className="price-desc">For managers testing task capture, delegation, team visibility, and handoffs.</div>
+            <div className="price-amount" style={{fontSize: 38}}>Guided setup</div>
+            <div className="price-period">connect a real team workflow</div>
             <ul className="price-features">
-              <li>Everything in Solo</li>
+              <li>Everything in Individual pilot</li>
               <li>Accept / deny assignment flow</li>
               <li>Manager log &amp; team rollups</li>
               <li>Org-wide Slack &amp; calendar sync</li>
-              <li>Unlimited tasks</li>
+              <li>Position Profile setup</li>
             </ul>
             <div className="price-cta">
-              <a href={APP_ROUTE} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Start 14-day trial</a>
+              <a href={DEMO_MAILTO} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Book a demo</a>
             </div>
           </div>
 
           <div className="price-card reveal reveal-3">
             <div className="price-name">Enterprise</div>
-            <div className="price-desc">For Jordan's COO, who has questions.</div>
+            <div className="price-desc">For larger teams evaluating workforce continuity, access control, and audit needs.</div>
             <div className="price-amount" style={{fontSize: 38}}>Let's talk</div>
             <div className="price-period">SSO · audit · custom retention</div>
             <ul className="price-features">
@@ -861,12 +779,12 @@ function FinalCTA() {
     <section className="final-cta">
       <div className="container">
         <h2 className="reveal">Done.<br />Logged. Continuous.</h2>
-        <p className="reveal reveal-2">Stop losing work to inboxes, transitions, and tribal knowledge. Donnit keeps the tasks moving and the record intact — free for solo, set up in under two minutes.</p>
+        <p className="reveal reveal-2">Stop losing work to inboxes, transitions, and tribal knowledge. Donnit keeps the tasks moving and the record intact — start with one role or one team workflow.</p>
         <div className="reveal reveal-3" style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Get Donnit free <IconArrow /></a>
+          <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Open Donnit <IconArrow /></a>
           <a href={DEMO_MAILTO} className="btn btn-outline" style={{ borderColor: 'var(--charcoal)' }}>Book a 15-min demo</a>
         </div>
-        <div className="meta reveal reveal-4">No credit card · Free for solo · Slack &amp; Gmail in 2 clicks</div>
+        <div className="meta reveal reveal-4">Start with one workflow · Slack, Gmail, SMS, and chat intake</div>
 
         <div className="final-stage reveal reveal-4">
           {[12, 28, 44, 60, 76].map((left, i) => (
@@ -913,9 +831,9 @@ function Footer() {
           </div>
           <div className="col">
             <h4>Use cases</h4>
-            <a href="#teams">For founders</a>
-            <a href="#teams">For ops teams</a>
-            <a href="#teams">For ICs</a>
+            <a href="#continuity">For founders</a>
+            <a href="#continuity">For ops teams</a>
+            <a href="#how">For ICs</a>
             <a href="#pricing">Personal</a>
           </div>
           <div className="col">
@@ -958,8 +876,6 @@ export default function DonnitLandingPage() {
       <Differentiators />
       <Continuity />
       <ChatCapture />
-      <Personas />
-      <Stats />
       <Pricing />
       <FinalCTA />
       <Footer />

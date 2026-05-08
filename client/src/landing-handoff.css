@@ -569,7 +569,13 @@
   font-size: 13px;
   max-width: 280px;
   line-height: 1.4;
-  transition: transform 800ms var(--ease), opacity 600ms var(--ease);
+  transition:
+    left 900ms var(--ease),
+    top 900ms var(--ease),
+    width 900ms var(--ease),
+    max-width 900ms var(--ease),
+    transform 900ms var(--ease),
+    opacity 650ms var(--ease);
   box-shadow: 0 12px 30px -12px rgba(0,0,0,0.5);
 }
 .donnit-landing-handoff .scrap .src {
