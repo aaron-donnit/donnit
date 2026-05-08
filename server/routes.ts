@@ -513,6 +513,15 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
   return "normal";
 }
 
+function parseExplicitUrgency(message: string): "low" | "normal" | "high" | "critical" | null {
+  const text = message.toLowerCase();
+  if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
+  if (/(urgent|asap|high priority|important)/.test(text)) return "high";
+  if (/(low priority|whenever|someday)/.test(text)) return "low";
+  if (/\b(normal|medium|standard|regular priority)\b/.test(text)) return "normal";
+  return null;
+}
+
 function parseEstimate(message: string) {
   const minutes = message.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i);
   if (minutes) return Math.max(5, Math.round(Number(minutes[1])));
@@ -576,11 +585,11 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
     const safe = escapeRegExp(label.trim());
     if (!safe) continue;
     cleaned = cleaned
-      .replace(new RegExp(`\\bassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bassign(?: this)?(?: a)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bassign\\s+${safe}\\b`, "gi"), "")
-      .replace(new RegExp(`\\bdelegate(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bdelegate(?: this)?(?: a)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bdelegate\\s+${safe}\\b`, "gi"), "")
-      .replace(new RegExp(`\\breassign(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\breassign(?: this)?(?: a)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\breassign\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
@@ -658,6 +667,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
   const withoutAssignee = stripLeadingUnknownAssignee(stripAssigneePhrases(cleaned, assigneeLabels))
     .replace(/\s+/g, " ")
     .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
+    .replace(/^to\s+/i, "")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
   return withoutAssignee
@@ -1722,6 +1732,130 @@ function parseChatTaskAuthenticated(
   };
 }
 
+function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
+  const missing = new Set(task.missing);
+  if (!task.dueDate) missing.add("dueDate");
+  return Array.from(missing);
+}
+
+function missingChatQuestion(task: PendingChatTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
+  const assignee = members.find((member) => member.user_id === task.assignedToId);
+  const assigneeName = memberDisplayName(assignee ?? {});
+  const visibilityText = task.visibility === "confidential"
+    ? " as confidential"
+    : task.visibility === "personal"
+      ? " as personal"
+      : "";
+  const intro = `I can assign ${assigneeName} to ${lowercaseFirst(task.title)}${visibilityText}.`;
+  const missing = pendingChatMissing(task);
+  if (missing.includes("dueDate") && missing.includes("urgency")) {
+    return `${intro} When is this due, and how urgent is it?`;
+  }
+  if (missing.includes("dueDate")) return `${intro} When is this due?`;
+  return `${intro} How urgent is this task?`;
+}
+
+function lowercaseFirst(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
+function formatChatDueDate(value: string | null) {
+  if (!value) return "no due date";
+  const parsed = new Date(`${value}T12:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(parsed);
+}
+
+function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
+  const assignee = members.find((member) => member.user_id === task.assigned_to);
+  const assigneeName = memberDisplayName(assignee ?? {});
+  const visibilitySentence =
+    task.visibility === "confidential"
+      ? " This task was marked as confidential."
+      : task.visibility === "personal"
+        ? " This task was marked as personal."
+        : "";
+  return `${assigneeName} was assigned to ${lowercaseFirst(task.title)} by ${formatChatDueDate(task.due_date)}.${visibilitySentence}`;
+}
+
+function buildPendingFromTaskInput(input: {
+  title: string;
+  description: string;
+  status: string;
+  urgency: "low" | "normal" | "high" | "critical";
+  dueDate: string | null;
+  estimatedMinutes: number;
+  assignedToId: string;
+  assignedById: string;
+  source: "chat";
+  recurrence: DonnitTask["recurrence"];
+  reminderDaysBefore: number;
+  visibility: "work" | "personal" | "confidential";
+}, missing: Array<"dueDate" | "urgency">): PendingChatTask {
+  return {
+    title: input.title,
+    description: input.description,
+    status: input.status as PendingChatTask["status"],
+    urgency: input.urgency,
+    dueDate: input.dueDate,
+    estimatedMinutes: input.estimatedMinutes,
+    assignedToId: input.assignedToId,
+    assignedById: input.assignedById,
+    source: "chat",
+    recurrence: input.recurrence,
+    reminderDaysBefore: input.reminderDaysBefore,
+    visibility: input.visibility,
+    missing,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function getPendingChatTask(store: DonnitStore, orgId: string) {
+  const state = await store.getWorkspaceState(orgId, "onboarding_state");
+  const value = (state?.value ?? {}) as Record<string, unknown>;
+  const parsed = pendingChatTaskSchema.safeParse(value.pendingChatTask);
+  return parsed.success ? parsed.data : null;
+}
+
+async function setPendingChatTask(store: DonnitStore, orgId: string, task: PendingChatTask) {
+  const state = await store.getWorkspaceState(orgId, "onboarding_state");
+  await store.upsertWorkspaceState(orgId, "onboarding_state", {
+    ...((state?.value ?? {}) as Record<string, unknown>),
+    pendingChatTask: task,
+  });
+}
+
+async function clearPendingChatTask(store: DonnitStore, orgId: string) {
+  const state = await store.getWorkspaceState(orgId, "onboarding_state");
+  const rest = { ...((state?.value ?? {}) as Record<string, unknown>) };
+  delete rest.pendingChatTask;
+  await store.upsertWorkspaceState(orgId, "onboarding_state", {
+    ...rest,
+    pendingChatTaskClearedAt: new Date().toISOString(),
+  });
+}
+
+function mergePendingChatTask(task: PendingChatTask, message: string): PendingChatTask {
+  const dueDate = parseDueDate(message) ?? task.dueDate;
+  const explicitUrgency = parseExplicitUrgency(message);
+  const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
+  const estimatedMinutes = /\d/.test(message) ? parseEstimate(message) : task.estimatedMinutes;
+  const missing = task.missing.filter((item) => {
+    if (item === "dueDate") return !dueDate;
+    if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
+    return false;
+  });
+  return {
+    ...task,
+    dueDate,
+    urgency,
+    estimatedMinutes,
+    missing,
+  };
+}
+
 type SuggestionSource = "email" | "slack" | "sms" | "document";
 
 const documentSuggestRequestSchema = z.object({
@@ -1740,6 +1874,25 @@ const taskSubtaskUpdateSchema = z.object({
   done: z.boolean().optional(),
   position: z.number().int().min(0).max(1000).optional(),
 });
+
+const pendingChatTaskSchema = z.object({
+  title: z.string().trim().min(2).max(160),
+  description: z.string().max(1600).default(""),
+  status: z.enum(["open", "pending_acceptance", "accepted", "denied", "completed"]),
+  urgency: z.enum(["low", "normal", "high", "critical"]),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  estimatedMinutes: z.number().int().min(5).max(1440),
+  assignedToId: z.string().min(1),
+  assignedById: z.string().min(1),
+  source: z.literal("chat"),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]),
+  reminderDaysBefore: z.number().int().min(0).max(365),
+  visibility: z.enum(["work", "personal", "confidential"]),
+  missing: z.array(z.enum(["dueDate", "urgency"])).default([]),
+  createdAt: z.string().datetime().optional(),
+});
+
+type PendingChatTask = z.infer<typeof pendingChatTaskSchema>;
 
 const workspaceStateSchema = z.discriminatedUnion("key", [
   z.object({
@@ -3676,6 +3829,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const orgId = profile.default_org_id;
         const members = await store.listOrgMembers(orgId);
+        await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: null });
+        const pending = await getPendingChatTask(store, orgId);
+        if (pending) {
+          if (/\b(cancel|never mind|nevermind|discard|stop)\b/i.test(parsed.data.message)) {
+            await clearPendingChatTask(store, orgId);
+            const assistant = await store.createChatMessage(orgId, {
+              role: "assistant",
+              content: "No problem. I discarded that pending task.",
+              task_id: null,
+            });
+            res.json({ assistant, pending: false });
+            return;
+          }
+
+          const merged = mergePendingChatTask(pending, parsed.data.message);
+          if (pendingChatMissing(merged).length > 0) {
+            await setPendingChatTask(store, orgId, merged);
+            const assistant = await store.createChatMessage(orgId, {
+              role: "assistant",
+              content: missingChatQuestion(merged, members),
+              task_id: null,
+            });
+            res.json({ assistant, pending: true });
+            return;
+          }
+
+          const activeProfile =
+            merged.visibility === "personal"
+              ? null
+              : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === merged.assignedToId);
+          const created = await store.createTask(orgId, {
+            title: merged.title,
+            description: merged.description,
+            status: merged.status as DonnitTask["status"],
+            urgency: merged.urgency,
+            due_date: merged.dueDate,
+            estimated_minutes: merged.estimatedMinutes,
+            assigned_to: merged.assignedToId,
+            assigned_by: merged.assignedById,
+            source: merged.source,
+            recurrence: merged.recurrence,
+            reminder_days_before: merged.reminderDaysBefore,
+            position_profile_id: merged.visibility === "personal" ? null : activeProfile?.id ?? null,
+            visibility: merged.visibility,
+            visible_from: visibleFromForRecurringTask({
+              recurrence: merged.recurrence,
+              due_date: merged.dueDate,
+              reminder_days_before: merged.reminderDaysBefore,
+            }),
+          });
+          await clearPendingChatTask(store, orgId);
+          const assistant = await store.createChatMessage(orgId, {
+            role: "assistant",
+            content: chatTaskOutcome(created, members),
+            task_id: created.id,
+          });
+          res.status(201).json({ task: toClientTask(created), assistant });
+          return;
+        }
         const ai = await extractChatTaskWithAi(
           parsed.data.message,
           members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
@@ -3718,6 +3930,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               visibility: ai.visibility ?? fallbackInput.visibility,
             }
           : fallbackInput;
+        const missing: Array<"dueDate" | "urgency"> = [];
+        const explicitUrgency = parseExplicitUrgency(parsed.data.message);
+        if (!taskInput.dueDate) missing.push("dueDate");
+        if (explicitUrgency === null && !(taskInput.dueDate && isPastDue(taskInput.dueDate))) missing.push("urgency");
+        if (missing.length > 0) {
+          const pendingTask = buildPendingFromTaskInput(
+            {
+              ...taskInput,
+              assignedToId: String(taskInput.assignedToId),
+              assignedById: String(taskInput.assignedById),
+            },
+            missing,
+          );
+          await setPendingChatTask(store, orgId, pendingTask);
+          const assistant = await store.createChatMessage(orgId, {
+            role: "assistant",
+            content: missingChatQuestion(pendingTask, members),
+            task_id: null,
+          });
+          res.json({ assistant, pending: true });
+          return;
+        }
         const activeProfile =
           taskInput.visibility === "personal"
             ? null
@@ -3742,16 +3976,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             reminder_days_before: taskInput.reminderDaysBefore,
           }),
         });
-        await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: created.id });
-        const assignee = members.find((m) => m.user_id === created.assigned_to);
-        const dueText = dueDateAssistantText(created.due_date);
-        const assignmentText =
-          created.status === "pending_acceptance"
-            ? ` I asked ${assignee?.profile?.full_name ?? "the assignee"} to accept or deny it.`
-            : " It is on your list now.";
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: `Added “${created.title}” as ${created.urgency} urgency.${dueText}${assignmentText}`,
+          content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
           task_id: created.id,
         });
         res.status(201).json({ task: toClientTask(created), assistant });
