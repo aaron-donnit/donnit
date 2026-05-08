@@ -5101,11 +5101,17 @@ function ApprovalInboxDialog({
   onOpenChange,
   tasks,
   suggestions,
+  onScanEmail,
+  scanningEmail,
+  onOpenManualImport,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   tasks: Task[];
   suggestions: EmailSuggestion[];
+  onScanEmail?: () => void;
+  scanningEmail?: boolean;
+  onOpenManualImport?: () => void;
 }) {
   const waiting = tasks.filter((task) => task.status === "pending_acceptance");
   const pendingSuggestions = suggestions.filter((suggestion) => suggestion.status === "pending");
@@ -5157,6 +5163,25 @@ function ApprovalInboxDialog({
               <p className="mt-1 text-xs text-muted-foreground">
                 Scan email or assign work to create new approval items.
               </p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {onScanEmail && (
+                  <Button size="sm" onClick={onScanEmail} disabled={scanningEmail} data-testid="button-empty-inbox-scan-email">
+                    {scanningEmail ? <Loader2 className="size-4 animate-spin" /> : <Inbox className="size-4" />}
+                    Scan email
+                  </Button>
+                )}
+                {onOpenManualImport && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={onOpenManualImport}
+                    data-testid="button-empty-inbox-manual-email"
+                  >
+                    <MailPlus className="size-4" />
+                    Import email
+                  </Button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-5">
@@ -6341,7 +6366,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }
   });
   const oauthStatus = useGmailOAuthStatus(auth.authenticated);
-  const showDebugTools = import.meta.env.DEV;
   const persistedReviewedNotificationIds = data?.workspaceState?.reviewedNotificationIds.join("|") ?? "";
   const persistedAgendaExcludedTaskIds = data?.workspaceState?.agenda.excludedTaskIds.join("|") ?? "";
   const persistedAgendaApproved = data?.workspaceState?.agenda.approved ?? false;
@@ -6988,6 +7012,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       hint: "Upload a PDF or Word document and queue task suggestions",
     },
     {
+      id: "import-email",
+      label: "Import email",
+      icon: MailPlus,
+      onClick: () => setManualImportOpen(true),
+      hint: "Paste an email into the approval queue",
+    },
+    {
       id: "assign-task",
       label: "Assign task",
       icon: UserPlus,
@@ -7036,6 +7067,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       hint: agendaApproved
         ? "Add the approved agenda to Google Calendar or download an .ics file"
         : "Approve the agenda before exporting",
+    },
+    {
+      id: "manual-email-import",
+      label: "Import email",
+      icon: MailPlus,
+      onClick: () => setManualImportOpen(true),
+      hint: "Paste an email into the approval queue",
     },
     ...(showConnectGmail
       ? [
@@ -7103,17 +7141,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         window.location.hash = "/log";
       },
     },
-    ...(showDebugTools
-      ? [
-          {
-            id: "manual-email-debug",
-            label: "Manual import",
-            icon: FileText,
-            onClick: () => setManualImportOpen(true),
-            hint: "Diagnostic manual email import",
-          } satisfies FunctionAction,
-        ]
-      : []),
   ];
   const menuGroups: MenuActionGroup[] = [
     { label: "Tools sync", actions: toolsSyncActions },
@@ -7285,6 +7312,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onOpenChange={setApprovalInboxOpen}
         tasks={data.tasks}
         suggestions={data.suggestions}
+        onScanEmail={() => scan.mutate()}
+        scanningEmail={scan.isPending}
+        onOpenManualImport={() => setManualImportOpen(true)}
       />
       <AgendaWorkDialog
         open={agendaWorkOpen}
