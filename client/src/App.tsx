@@ -6170,10 +6170,12 @@ function WorkspaceMembersPanel({
   users,
   currentUser,
   currentUserId,
+  positionProfiles,
 }: {
   users: User[];
   currentUser: User | null;
   currentUserId: Id;
+  positionProfiles: PositionProfile[];
 }) {
   const canManage = canManageWorkspaceMembers(currentUser);
   const activeUsers = users.filter(isActiveUser);
@@ -6336,6 +6338,7 @@ function WorkspaceMembersPanel({
             users={users}
             currentUserId={currentUserId}
             canManage={canManage}
+            positionProfiles={positionProfiles}
           />
         ))}
       </div>
@@ -6348,11 +6351,13 @@ function WorkspaceMemberRow({
   users,
   currentUserId,
   canManage,
+  positionProfiles,
 }: {
   user: User;
   users: User[];
   currentUserId: Id;
   canManage: boolean;
+  positionProfiles: PositionProfile[];
 }) {
   const [fullName, setFullName] = useState(user.name);
   const [role, setRole] = useState<(typeof MEMBER_ROLE_OPTIONS)[number]>(
@@ -6364,6 +6369,9 @@ function WorkspaceMemberRow({
   const [managerId, setManagerId] = useState(user.managerId ? String(user.managerId) : "");
   const [canAssign, setCanAssign] = useState(Boolean(user.canAssign));
   const [status, setStatus] = useState<(typeof MEMBER_STATUS_OPTIONS)[number]>(user.status ?? "active");
+  const [profileId, setProfileId] = useState("");
+  const [lastAccessLink, setLastAccessLink] = useState("");
+  const savedProfiles = positionProfiles.filter((profile) => profile.persisted);
   const managerOptions = users.filter(
     (candidate) =>
       isActiveUser(candidate) &&
@@ -6371,6 +6379,15 @@ function WorkspaceMemberRow({
       String(candidate.id) !== String(user.id),
   );
   const isSelf = String(user.id) === String(currentUserId);
+  const copyAccessLink = async (value: string) => {
+    setLastAccessLink(value);
+    try {
+      await navigator.clipboard.writeText(value);
+      toast({ title: "Link copied", description: "Send it to the user through your preferred channel." });
+    } catch {
+      toast({ title: "Access link ready", description: "Copy the link from the member row." });
+    }
+  };
   const saveMember = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("PATCH", `/api/admin/members/${encodeURIComponent(String(user.id))}`, {
@@ -6391,6 +6408,58 @@ function WorkspaceMemberRow({
       toast({
         title: "Could not update member",
         description: apiErrorMessage(error, "Check role/status rules and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+  const accessAction = useMutation({
+    mutationFn: async (action: "invite" | "reset-access" | "remove-access") => {
+      const res = await apiRequest("POST", `/api/admin/members/${encodeURIComponent(String(user.id))}/${action}`);
+      return {
+        action,
+        result: (await res.json()) as { ok: boolean; message?: string; actionLink?: string },
+      };
+    },
+    onSuccess: async ({ action, result }) => {
+      await invalidateWorkspace();
+      if (result.actionLink) {
+        await copyAccessLink(result.actionLink);
+        return;
+      }
+      toast({
+        title: action === "remove-access" ? "Access removed" : "Access updated",
+        description: result.message ?? "Member access was updated.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update access",
+        description: apiErrorMessage(error, "Check Supabase service role configuration and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+  const assignPositionProfile = useMutation({
+    mutationFn: async () => {
+      if (!profileId) throw new Error("Choose a Position Profile.");
+      const res = await apiRequest("PATCH", `/api/position-profiles/${encodeURIComponent(profileId)}`, {
+        currentOwnerId: String(user.id),
+        directManagerId: managerId || null,
+        temporaryOwnerId: null,
+        delegateUserId: null,
+        delegateUntil: null,
+        status: "active",
+      });
+      return (await res.json()) as PersistedPositionProfile;
+    },
+    onSuccess: async (profile) => {
+      await invalidateWorkspace();
+      toast({ title: "Profile assigned", description: `${profile.title} is now assigned to ${fullName.trim() || user.name}.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not assign profile",
+        description: apiErrorMessage(error, "Confirm the profile is saved and try again."),
         variant: "destructive",
       });
     },
@@ -6422,85 +6491,158 @@ function WorkspaceMemberRow({
         </div>
       </div>
       {canManage && (
-        <div className="grid gap-2 sm:grid-cols-[1.2fr_.85fr_.9fr_.9fr_.7fr_auto] sm:items-center">
-          <Input
-            value={fullName}
-            onChange={(event) => setFullName(event.target.value)}
-            aria-label={`${user.name} name`}
-            className="h-9"
-            data-testid={`input-member-row-name-${user.id}`}
-          />
-          <select
-            value={role}
-            onChange={(event) => setRole(event.target.value as (typeof MEMBER_ROLE_OPTIONS)[number])}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
-            disabled={isSelf && role === "owner"}
-            aria-label={`${user.name} role`}
-            data-testid={`select-member-row-role-${user.id}`}
-          >
-            {MEMBER_ROLE_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {titleCase(option)}
-              </option>
-            ))}
-          </select>
-          <select
-            value={managerId}
-            onChange={(event) => setManagerId(event.target.value)}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
-            aria-label={`${user.name} manager`}
-            data-testid={`select-member-row-manager-${user.id}`}
-          >
-            <option value="">No manager</option>
-            {managerOptions.map((candidate) => (
-              <option key={String(candidate.id)} value={String(candidate.id)}>
-                {candidate.name}
-              </option>
-            ))}
-          </select>
-          <Input
-            value={persona}
-            onChange={(event) => setPersona(event.target.value)}
-            aria-label={`${user.name} persona`}
-            className="h-9"
-            data-testid={`input-member-row-persona-${user.id}`}
-          />
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value as (typeof MEMBER_STATUS_OPTIONS)[number])}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
-            disabled={isSelf}
-            aria-label={`${user.name} status`}
-            data-testid={`select-member-row-status-${user.id}`}
-          >
-            {MEMBER_STATUS_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {titleCase(option)}
-              </option>
-            ))}
-          </select>
-          <div className="flex items-center justify-end gap-2">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={canAssign}
-                onChange={(event) => setCanAssign(event.target.checked)}
-                aria-label={`${user.name} can assign`}
-              />
-              Assign
-            </label>
+        <div className="grid gap-2">
+          <div className="grid gap-2 sm:grid-cols-[1.2fr_.85fr_.9fr_.9fr_.7fr_auto] sm:items-center">
+            <Input
+              value={fullName}
+              onChange={(event) => setFullName(event.target.value)}
+              aria-label={`${user.name} name`}
+              className="h-9"
+              data-testid={`input-member-row-name-${user.id}`}
+            />
+            <select
+              value={role}
+              onChange={(event) => setRole(event.target.value as (typeof MEMBER_ROLE_OPTIONS)[number])}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+              disabled={isSelf && role === "owner"}
+              aria-label={`${user.name} role`}
+              data-testid={`select-member-row-role-${user.id}`}
+            >
+              {MEMBER_ROLE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {titleCase(option)}
+                </option>
+              ))}
+            </select>
+            <select
+              value={managerId}
+              onChange={(event) => setManagerId(event.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+              aria-label={`${user.name} manager`}
+              data-testid={`select-member-row-manager-${user.id}`}
+            >
+              <option value="">No manager</option>
+              {managerOptions.map((candidate) => (
+                <option key={String(candidate.id)} value={String(candidate.id)}>
+                  {candidate.name}
+                </option>
+              ))}
+            </select>
+            <Input
+              value={persona}
+              onChange={(event) => setPersona(event.target.value)}
+              aria-label={`${user.name} persona`}
+              className="h-9"
+              data-testid={`input-member-row-persona-${user.id}`}
+            />
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as (typeof MEMBER_STATUS_OPTIONS)[number])}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+              disabled={isSelf}
+              aria-label={`${user.name} status`}
+              data-testid={`select-member-row-status-${user.id}`}
+            >
+              {MEMBER_STATUS_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {titleCase(option)}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center justify-end gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={canAssign}
+                  onChange={(event) => setCanAssign(event.target.checked)}
+                  aria-label={`${user.name} can assign`}
+                />
+                Assign
+              </label>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => saveMember.mutate()}
+                disabled={saveMember.isPending || fullName.trim().length < 2}
+                data-testid={`button-member-row-save-${user.id}`}
+              >
+                {saveMember.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                Save
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-2 rounded-md bg-muted/35 px-2 py-2 sm:grid-cols-[1fr_auto] sm:items-center">
+            <select
+              value={profileId}
+              onChange={(event) => setProfileId(event.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+              aria-label={`Assign Position Profile to ${user.name}`}
+              data-testid={`select-member-row-position-profile-${user.id}`}
+            >
+              <option value="">Assign Position Profile</option>
+              {savedProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.title}
+                </option>
+              ))}
+            </select>
             <Button
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => saveMember.mutate()}
-              disabled={saveMember.isPending || fullName.trim().length < 2}
-              data-testid={`button-member-row-save-${user.id}`}
+              onClick={() => assignPositionProfile.mutate()}
+              disabled={!profileId || assignPositionProfile.isPending || user.status === "inactive"}
+              data-testid={`button-member-row-assign-profile-${user.id}`}
             >
-              {saveMember.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-              Save
+              {assignPositionProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <BriefcaseBusiness className="size-4" />}
+              Assign profile
             </Button>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => accessAction.mutate("invite")}
+              disabled={accessAction.isPending || user.status === "inactive"}
+              data-testid={`button-member-row-invite-${user.id}`}
+            >
+              {accessAction.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+              Invite link
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => accessAction.mutate("reset-access")}
+              disabled={accessAction.isPending || user.status === "inactive"}
+              data-testid={`button-member-row-reset-${user.id}`}
+            >
+              {accessAction.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+              Reset access
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              onClick={() => accessAction.mutate("remove-access")}
+              disabled={accessAction.isPending || user.status === "inactive" || isSelf}
+              data-testid={`button-member-row-remove-access-${user.id}`}
+            >
+              {accessAction.isPending ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+              Remove access
+            </Button>
+          </div>
+          {lastAccessLink && (
+            <div className="grid gap-2 rounded-md border border-dashed border-border px-2 py-2 sm:grid-cols-[1fr_auto]">
+              <Input readOnly value={lastAccessLink} className="h-9 text-xs" aria-label={`${user.name} access link`} />
+              <Button type="button" size="sm" variant="outline" onClick={() => copyAccessLink(lastAccessLink)}>
+                Copy link
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -6854,6 +6996,7 @@ function WorkspaceSettingsDialog({
             users={users}
             currentUser={currentUser}
             currentUserId={currentUserId}
+            positionProfiles={positionProfiles}
           />
         </div>
         </div>

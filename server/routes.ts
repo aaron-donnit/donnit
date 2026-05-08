@@ -1110,6 +1110,14 @@ function isMemberAdminSchemaError(error: unknown) {
   );
 }
 
+function buildAuthRedirectUrl(req: Request) {
+  const configured = process.env.DONNIT_AUTH_REDIRECT_URL || process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL;
+  if (configured) return configured;
+  const proto = String(req.header("x-forwarded-proto") ?? req.protocol ?? "https").split(",")[0].trim() || "https";
+  const host = req.header("x-forwarded-host") ?? req.header("host");
+  return host ? `${proto}://${host}/#/app` : "https://donnit-1.vercel.app/#/app";
+}
+
 async function requireWorkspaceAdminContext(auth: NonNullable<Request["donnitAuth"]>) {
   const userStore = new DonnitStore(auth.client, auth.userId);
   const orgId = await userStore.getDefaultOrgId();
@@ -1120,6 +1128,10 @@ async function requireWorkspaceAdminContext(auth: NonNullable<Request["donnitAut
     return { ok: false as const, status: 403, message: "Only workspace admins can manage members." };
   }
   return { ok: true as const, orgId, members, actor };
+}
+
+function memberDisplayName(member: { profile?: { full_name?: string | null; email?: string | null } | null }) {
+  return member.profile?.full_name || member.profile?.email || "Member";
 }
 
 function relationshipEventNote(input: {
@@ -3397,6 +3409,139 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       const payload = serializeSupabaseError(error);
       console.error("[donnit] update member failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.post("/api/admin/members/:userId/invite", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const targetUserId = String(req.params.userId ?? "");
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const target = context.members.find((member) => member.user_id === targetUserId);
+      if (!target?.profile?.email) {
+        res.status(404).json({ message: "Member email was not found." });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Invite links need SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const { data, error } = await admin.auth.admin.generateLink({
+        type: "magiclink",
+        email: target.profile.email,
+        options: {
+          data: { full_name: memberDisplayName(target), donnit_org_id: context.orgId },
+          redirectTo: buildAuthRedirectUrl(req),
+        },
+      });
+      if (error || !data.properties?.action_link) throw error ?? new Error("Could not generate invite link.");
+      res.json({
+        ok: true,
+        type: "invite",
+        email: target.profile.email,
+        actionLink: data.properties.action_link,
+        message: `Invite link generated for ${memberDisplayName(target)}.`,
+      });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] member invite failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.post("/api/admin/members/:userId/reset-access", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const targetUserId = String(req.params.userId ?? "");
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const target = context.members.find((member) => member.user_id === targetUserId);
+      if (!target?.profile?.email) {
+        res.status(404).json({ message: "Member email was not found." });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Reset links need SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const { data, error } = await admin.auth.admin.generateLink({
+        type: "recovery",
+        email: target.profile.email,
+        options: { redirectTo: buildAuthRedirectUrl(req) },
+      });
+      if (error || !data.properties?.action_link) throw error ?? new Error("Could not generate reset link.");
+      res.json({
+        ok: true,
+        type: "reset",
+        email: target.profile.email,
+        actionLink: data.properties.action_link,
+        message: `Reset link generated for ${memberDisplayName(target)}.`,
+      });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] member reset failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.post("/api/admin/members/:userId/remove-access", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const targetUserId = String(req.params.userId ?? "");
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const target = context.members.find((member) => member.user_id === targetUserId);
+      if (!target) {
+        res.status(404).json({ message: "Member not found in this workspace." });
+        return;
+      }
+      if (targetUserId === auth.userId) {
+        res.status(409).json({ message: "You cannot remove your own access." });
+        return;
+      }
+      const hasOtherActiveAdmin = context.members.some((member) => (
+        member.user_id !== targetUserId &&
+        isWorkspaceAdmin(member) &&
+        ((member as { status?: string }).status ?? "active") !== "inactive"
+      ));
+      if (isWorkspaceAdmin(target) && !hasOtherActiveAdmin) {
+        res.status(409).json({ message: "At least one active owner or admin must remain in the workspace." });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Removing access needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const { data: member, error } = await admin
+        .from(DONNIT_TABLES.organizationMembers)
+        .update({ status: "inactive", can_assign: false })
+        .eq("org_id", context.orgId)
+        .eq("user_id", targetUserId)
+        .select("*")
+        .single();
+      if (error) throw error;
+      res.json({
+        ok: true,
+        member,
+        message: `${memberDisplayName(target)} can no longer access this Donnit workspace.`,
+      });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] member remove access failed", { userId: req.donnitAuth?.userId, ...payload });
       res.status(500).json({ ok: false, ...payload });
     }
   });
