@@ -190,3 +190,10 @@ Step 8.1 implementation status:
 - Added a hamburger menu action to reopen the setup checklist after dismissal.
 - Added durable onboarding dismissal state in `donnit.user_workspace_state`.
 - Added migration `20260508164500_onboarding_workspace_state.sql` to allow `onboarding_state` persistence.
+
+Step 8.2 implementation status:
+
+- Added a Pilot Analytics section to Reports.
+- Tracks captured work volume, AI approval quality, automation/source share, work health, agenda habit, and continuity coverage.
+- Surfaces pilot risks such as pending approvals, overdue work, delegated accountability, and high-risk Position Profiles.
+- Keeps the metrics framed around behavior change and workforce continuity, not employee surveillance.
