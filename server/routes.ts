@@ -2937,6 +2937,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let completedTasks = 0;
       let createdSuggestions = 0;
       let createdProfiles = 0;
+      let skippedProfiles = 0;
+      const seedWarnings: string[] = [];
       const existingTasks = await store.listTasks(orgId);
       const allTasks = [...existingTasks];
       const allSubtasks = await store.listTaskSubtasks(orgId);
@@ -3065,34 +3067,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const profileExists = allPositionProfiles.some((profile) => profile.title === seed.positionTitle);
         if (!profileExists) {
-          const profile = await store.createPositionProfile(orgId, {
-            title: seed.positionTitle,
-            status: "active",
-            current_owner_id: userId,
-            direct_manager_id: auth.userId,
-            risk_score: seed.positionRisk,
-            risk_summary: seed.positionSummary,
-            auto_update_rules: {
-              mode: "demo",
-              reviewHighImpactChanges: true,
-              preserveInstitutionalKnowledge: true,
-            },
-            institutional_memory: {
-              source: "demo_seed",
-              recurringResponsibilities: seed.tasks
-                .filter((task) => task.recurrence !== "none" || task.source === "annual")
-                .map((task) => task.title),
-              howTo:
-                seed.key === "jordan"
-                  ? ["Renewal blockers are usually collected from Slack, then summarized into the account notes before QBR prep."]
-                  : seed.key === "maya"
-                    ? ["Friday coverage plans should identify owner, backup, deadline, and unresolved blocker for each client."]
-                    : ["Expense receipts should be reconciled against the monthly close folder and tagged by vendor."],
-              tools: seed.key === "nina" ? ["Gmail", "Payroll", "Expense system"] : ["Slack", "Gmail", "Calendar"],
-            },
-          });
-          allPositionProfiles.push(profile);
-          createdProfiles += 1;
+          try {
+            const profile = await store.createPositionProfile(orgId, {
+              title: seed.positionTitle,
+              status: "active",
+              current_owner_id: userId,
+              direct_manager_id: auth.userId,
+              risk_score: seed.positionRisk,
+              risk_summary: seed.positionSummary,
+              auto_update_rules: {
+                mode: "demo",
+                reviewHighImpactChanges: true,
+                preserveInstitutionalKnowledge: true,
+              },
+              institutional_memory: {
+                source: "demo_seed",
+                recurringResponsibilities: seed.tasks
+                  .filter((task) => task.recurrence !== "none" || task.source === "annual")
+                  .map((task) => task.title),
+                howTo:
+                  seed.key === "jordan"
+                    ? ["Renewal blockers are usually collected from Slack, then summarized into the account notes before QBR prep."]
+                    : seed.key === "maya"
+                      ? ["Friday coverage plans should identify owner, backup, deadline, and unresolved blocker for each client."]
+                      : ["Expense receipts should be reconciled against the monthly close folder and tagged by vendor."],
+                tools: seed.key === "nina" ? ["Gmail", "Payroll", "Expense system"] : ["Slack", "Gmail", "Calendar"],
+              },
+            });
+            allPositionProfiles.push(profile);
+            createdProfiles += 1;
+          } catch (error) {
+            const reason = classifySupabaseError(describeSupabaseError(error), {
+              schema: DONNIT_SCHEMA,
+              table: "position_profiles",
+            });
+            if (reason !== "missing_table" && reason !== "schema_not_exposed") throw error;
+            skippedProfiles += 1;
+            if (!seedWarnings.includes("position_profiles_unavailable")) {
+              seedWarnings.push("position_profiles_unavailable");
+            }
+          }
         }
       }
 
@@ -3123,10 +3137,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         subtasks: createdSubtasks,
         suggestions: createdSuggestions,
         positionProfiles: createdProfiles,
+        skippedPositionProfiles: skippedProfiles,
         completedTasks,
+        warnings: seedWarnings,
         message:
-          createdTasks + createdSuggestions + createdProfiles + createdSubtasks + completedTasks > 0
-            ? "Pilot demo workspace seeded with team members, tasks, approvals, subtasks, reports, and Position Profiles."
+          seedWarnings.includes("position_profiles_unavailable")
+            ? "Demo workspace seeded, but Position Profiles were skipped because the Position Profiles migration is not applied or exposed."
+            : createdTasks + createdSuggestions + createdProfiles + createdSubtasks + completedTasks > 0
+              ? "Pilot demo workspace seeded with team members, tasks, approvals, subtasks, reports, and Position Profiles."
             : "Pilot demo workspace was already present.",
       });
     } catch (error) {
