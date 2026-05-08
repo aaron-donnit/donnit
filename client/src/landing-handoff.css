@@ -143,12 +143,16 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
+  width: auto;
+  height: auto;
   gap: 10px;
   font-family: var(--display);
   font-weight: 800;
   font-size: 22px;
   letter-spacing: -0.035em;
   color: var(--charcoal);
+  background: transparent;
+  border-radius: 0;
   white-space: nowrap;
 }
 .donnit-landing-handoff .brand-mark .word { display: inline-block; letter-spacing: inherit; }

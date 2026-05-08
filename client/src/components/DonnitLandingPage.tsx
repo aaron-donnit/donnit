@@ -893,12 +893,8 @@ function LeadFormModal({
     if (!open) return;
     setStatus("idle");
     setStatusMessage("");
-    setMessage(
-      intent === "demo"
-        ? "I would like to book a demo and learn how Donnit can support workforce continuity."
-        : "I would like to sign up for Donnit and learn the best way to get started.",
-    );
-  }, [intent, open]);
+    setMessage("");
+  }, [open]);
 
   if (!open) return null;
 
@@ -968,7 +964,7 @@ function LeadFormModal({
           <div className="lead-actions">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary btn-arrow" disabled={status === "submitting"}>
-              {status === "submitting" ? "Sending..." : "Send to sales"} <IconArrow />
+              {status === "submitting" ? "Sending..." : "Submit"} <IconArrow />
             </button>
           </div>
         </form>
