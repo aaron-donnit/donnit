@@ -1587,7 +1587,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
       note: event.note,
       createdAt: event.created_at,
     })),
-    messages: messages.map((m) => ({
+    messages: messages.filter((m) => m.role !== "system").map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content,
@@ -1814,6 +1814,12 @@ function buildPendingFromTaskInput(input: {
 
 async function getPendingChatTask(store: DonnitStore, orgId: string) {
   const key = `${orgId}:${store.userId}`;
+  const fromMessages = await getPendingChatTaskFromMessages(store, orgId);
+  if (fromMessages === false) return null;
+  if (fromMessages) {
+    pendingChatTaskMemory.set(key, fromMessages);
+    return fromMessages;
+  }
   try {
     const state = await store.getWorkspaceState(orgId, "onboarding_state");
     const value = (state?.value ?? {}) as Record<string, unknown>;
@@ -1832,6 +1838,15 @@ async function setPendingChatTask(store: DonnitStore, orgId: string, task: Pendi
   const key = `${orgId}:${store.userId}`;
   pendingChatTaskMemory.set(key, task);
   try {
+    await store.createChatMessage(orgId, {
+      role: "system",
+      content: `${pendingChatTaskMarker}${JSON.stringify(task)}`,
+      task_id: null,
+    });
+  } catch (error) {
+    console.error("[donnit] pending chat task system write failed", error instanceof Error ? error.message : String(error));
+  }
+  try {
     const state = await store.getWorkspaceState(orgId, "onboarding_state");
     await store.upsertWorkspaceState(orgId, "onboarding_state", {
       ...((state?.value ?? {}) as Record<string, unknown>),
@@ -1845,6 +1860,15 @@ async function setPendingChatTask(store: DonnitStore, orgId: string, task: Pendi
 async function clearPendingChatTask(store: DonnitStore, orgId: string) {
   const key = `${orgId}:${store.userId}`;
   pendingChatTaskMemory.delete(key);
+  try {
+    await store.createChatMessage(orgId, {
+      role: "system",
+      content: `${pendingChatTaskClearedMarker}:${new Date().toISOString()}`,
+      task_id: null,
+    });
+  } catch (error) {
+    console.error("[donnit] pending chat task system clear failed", error instanceof Error ? error.message : String(error));
+  }
   try {
     const state = await store.getWorkspaceState(orgId, "onboarding_state");
     const rest = { ...((state?.value ?? {}) as Record<string, unknown>) };
@@ -1875,6 +1899,33 @@ function mergePendingChatTask(task: PendingChatTask, message: string): PendingCh
     estimatedMinutes,
     missing,
   };
+}
+
+async function getPendingChatTaskFromMessages(store: DonnitStore, orgId: string) {
+  try {
+    const messages = await store.listChatMessages(orgId);
+    for (const message of [...messages].reverse()) {
+      if (message.role !== "system") continue;
+      if (message.content.startsWith(pendingChatTaskClearedMarker)) return false;
+      if (!message.content.startsWith(pendingChatTaskMarker)) continue;
+      const raw = message.content.slice(pendingChatTaskMarker.length).trim();
+      const parsed = pendingChatTaskSchema.safeParse(JSON.parse(raw));
+      return parsed.success ? parsed.data : null;
+    }
+  } catch (error) {
+    console.error("[donnit] pending chat task message read failed", error instanceof Error ? error.message : String(error));
+  }
+  return undefined;
+}
+
+function looksLikeClarificationReply(message: string) {
+  const text = message.toLowerCase().trim();
+  const hasDueOrUrgency = Boolean(parseDueDate(message) || parseExplicitUrgency(message));
+  if (!hasDueOrUrgency) return false;
+  return (
+    /^(it|it'?s|this|that|due|by|on|urgent|high|medium|normal|low|critical)\b/.test(text) ||
+    !/\b(assign|create|add|make|review|send|call|email|prepare|draft|complete|follow|reconcile|schedule|update|confirm|analyze|audit)\b/.test(text)
+  );
 }
 
 type SuggestionSource = "email" | "slack" | "sms" | "document";
@@ -1915,6 +1966,8 @@ const pendingChatTaskSchema = z.object({
 
 type PendingChatTask = z.infer<typeof pendingChatTaskSchema>;
 const pendingChatTaskMemory = new Map<string, PendingChatTask>();
+const pendingChatTaskMarker = "DONNIT_PENDING_CHAT_TASK:";
+const pendingChatTaskClearedMarker = "DONNIT_PENDING_CHAT_TASK_CLEARED";
 
 const workspaceStateSchema = z.discriminatedUnion("key", [
   z.object({
@@ -3908,6 +3961,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             task_id: created.id,
           });
           res.status(201).json({ task: toClientTask(created), assistant });
+          return;
+        }
+        if (looksLikeClarificationReply(parsed.data.message)) {
+          const assistant = await store.createChatMessage(orgId, {
+            role: "assistant",
+            content: "I lost the task context for that reply. Please restate the task with the owner, due date, and urgency so I can assign it cleanly.",
+            task_id: null,
+          });
+          res.json({ assistant, pending: false });
           return;
         }
         const ai = await extractChatTaskWithAi(
