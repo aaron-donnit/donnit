@@ -151,6 +151,9 @@ type Task = {
   source: string;
   recurrence: string;
   reminderDaysBefore: number;
+  positionProfileId: Id | null;
+  visibility: "work" | "personal" | "confidential";
+  visibleFrom: string | null;
   acceptedAt: string | null;
   deniedAt: string | null;
   completedAt: string | null;
@@ -289,6 +292,7 @@ type PositionProfile = {
   persisted: boolean;
   title: string;
   owner: User;
+  currentOwnerId: Id | null;
   directManagerId: Id | null;
   temporaryOwnerId: Id | null;
   delegateUserId: Id | null;
@@ -481,6 +485,7 @@ function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionP
     persisted: true,
     title: record.title || profile.title,
     status: record.status || profile.status,
+    currentOwnerId: record.currentOwnerId,
     directManagerId: record.directManagerId,
     temporaryOwnerId: record.temporaryOwnerId,
     delegateUserId: record.delegateUserId,
@@ -508,6 +513,7 @@ function buildEmptyPositionProfile(record: PersistedPositionProfile, users: User
     persisted: true,
     title: record.title,
     owner,
+    currentOwnerId: record.currentOwnerId,
     directManagerId: record.directManagerId,
     temporaryOwnerId: record.temporaryOwnerId,
     delegateUserId: record.delegateUserId,
@@ -542,7 +548,7 @@ function buildPositionProfiles(
 ): PositionProfile[] {
   const today = new Date().toISOString().slice(0, 10);
   const derivedProfiles: PositionProfile[] = users.map((user) => {
-    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id));
+    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility === "work");
     const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
     const completedTasks = owned.filter((task) => task.status === "completed");
     const recurringTasks = owned.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
@@ -599,6 +605,7 @@ function buildPositionProfiles(
       persisted: false,
       title,
       owner: user,
+      currentOwnerId: user.id,
       directManagerId: user.managerId,
       temporaryOwnerId: null,
       delegateUserId: null,
@@ -632,7 +639,12 @@ function buildPositionProfiles(
     const record = persistedProfiles.find((item) => String(item.currentOwnerId) === String(profile.owner.id));
     if (!record) return profile;
     usedRecordIds.add(record.id);
-    return mergeProfileRecord(profile, record);
+    const profileTasks = tasks.filter(
+      (task) =>
+        task.visibility === "work" &&
+        (String(task.positionProfileId ?? "") === record.id || String(task.assignedToId) === String(profile.owner.id)),
+    );
+    return mergeProfileRecord({ ...profile, currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"), completedTasks: profileTasks.filter((task) => task.status === "completed") }, record);
   });
   for (const record of persistedProfiles) {
     if (usedRecordIds.has(record.id)) continue;
@@ -652,6 +664,12 @@ function canManageWorkspaceMembers(user: User | null | undefined) {
 
 function isActiveUser(user: User) {
   return user.status !== "inactive";
+}
+
+function isVisibleWorkTask(task: Task) {
+  if (!task.visibleFrom) return true;
+  if (task.status === "completed" || task.status === "denied") return true;
+  return task.visibleFrom <= new Date().toISOString().slice(0, 10);
 }
 
 function escapeIcsText(value: string) {
@@ -1925,6 +1943,9 @@ function TaskDetailDialog({
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("open");
   const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
+  const [visibility, setVisibility] = useState<"work" | "personal" | "confidential">("work");
+  const [recurrence, setRecurrence] = useState("none");
+  const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
   const [dueDate, setDueDate] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [assignedToId, setAssignedToId] = useState("");
@@ -1940,6 +1961,9 @@ function TaskDetailDialog({
     setDescription(task.description);
     setStatus(task.status);
     setUrgency(task.urgency as "low" | "normal" | "high" | "critical");
+    setVisibility(task.visibility ?? "work");
+    setRecurrence(task.recurrence ?? "none");
+    setReminderDaysBefore(task.reminderDaysBefore ?? 0);
     setDueDate(task.dueDate ?? "");
     setEstimatedMinutes(task.estimatedMinutes);
     setAssignedToId(String(task.assignedToId));
@@ -1972,6 +1996,9 @@ function TaskDetailDialog({
         description: description.trim(),
         status,
         urgency,
+        visibility,
+        recurrence,
+        reminderDaysBefore,
         dueDate: dueDate || null,
         estimatedMinutes,
         assignedToId,
@@ -2256,6 +2283,51 @@ function TaskDetailDialog({
                 value={estimatedMinutes}
                 onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
                 data-testid="input-task-detail-estimate"
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-visibility">Privacy</Label>
+              <select
+                id="task-detail-visibility"
+                value={visibility}
+                onChange={(event) => setVisibility(event.target.value as "work" | "personal" | "confidential")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                data-testid="select-task-detail-visibility"
+              >
+                <option value="work">Work / profile memory</option>
+                <option value="personal">Personal</option>
+                <option value="confidential">Confidential</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-recurrence">Recurring</Label>
+              <select
+                id="task-detail-recurrence"
+                value={recurrence}
+                onChange={(event) => setRecurrence(event.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                data-testid="select-task-detail-recurrence"
+              >
+                <option value="none">No recurrence</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-reminder">Show early</Label>
+              <Input
+                id="task-detail-reminder"
+                type="number"
+                min={0}
+                max={365}
+                value={reminderDaysBefore}
+                onChange={(event) => setReminderDaysBefore(Math.max(0, Number(event.target.value) || 0))}
+                data-testid="input-task-detail-reminder-days"
               />
             </div>
           </div>
@@ -3751,7 +3823,7 @@ function PositionProfilesPanel({
   const customProfiles = useMemo(
     () =>
       customProfileMetas
-        .map((meta) => {
+        .map((meta): PositionProfile | null => {
           const owner = users.find((user) => String(user.id) === meta.ownerId) ?? users[0];
           if (!owner) return null;
           const base = profiles.find((profile) => String(profile.owner.id) === String(owner.id));
@@ -3775,6 +3847,7 @@ function PositionProfilesPanel({
               ],
               lastUpdatedAt: null,
               status: "active" as const,
+              currentOwnerId: owner.id,
               directManagerId: owner.managerId,
               temporaryOwnerId: null,
               delegateUserId: null,
@@ -3783,6 +3856,7 @@ function PositionProfilesPanel({
             id: meta.id,
             title: meta.title,
             owner,
+            currentOwnerId: owner.id,
           } satisfies PositionProfile;
         })
         .filter((profile): profile is PositionProfile => Boolean(profile)),
@@ -3809,6 +3883,7 @@ function PositionProfilesPanel({
   const [targetUserId, setTargetUserId] = useState("");
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
+  const [showProfileHistory, setShowProfileHistory] = useState(false);
 
   useEffect(() => {
     if (repositoryProfiles.length === 0) {
@@ -3975,6 +4050,7 @@ function PositionProfilesPanel({
   };
   const openProfile = (profileId: string) => {
     setSelectedProfileId(profileId);
+    setShowProfileHistory(false);
     setCreateOpen(false);
     setViewMode("detail");
   };
@@ -4401,6 +4477,50 @@ function PositionProfilesPanel({
                 </ul>
               </div>
             )}
+
+            <div className="rounded-md border border-border bg-background px-3 py-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                  <History className="size-4 text-muted-foreground" />
+                  Historical task memory
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowProfileHistory((value) => !value)}
+                  data-testid="button-position-profile-history-toggle"
+                >
+                  {showProfileHistory ? "Hide context" : "Show context"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Personal and confidential tasks are excluded from this role memory.
+              </p>
+              {showProfileHistory && (
+                <div className="mt-3 space-y-2">
+                  {selectedProfile.completedTasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                      No completed work has been captured for this profile yet.
+                    </p>
+                  ) : (
+                    selectedProfile.completedTasks.slice(0, 8).map((task) => (
+                      <div key={String(task.id)} className="rounded-md bg-muted/45 px-3 py-2 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-medium text-foreground">{task.title}</p>
+                          <span className="shrink-0 text-muted-foreground">{task.completedAt ? new Date(task.completedAt).toLocaleDateString() : task.dueDate ?? ""}</span>
+                        </div>
+                        {(task.description || task.completionNotes) && (
+                          <p className="mt-1 line-clamp-3 text-muted-foreground">
+                            {[task.description, task.completionNotes].filter(Boolean).join(" ")}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="rounded-md border border-border bg-background px-3 py-2">
               <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
@@ -6186,6 +6306,14 @@ function WorkspaceMembersPanel({
   const [persona, setPersona] = useState("operator");
   const [managerId, setManagerId] = useState("");
   const [canAssign, setCanAssign] = useState(false);
+  const [positionProfileId, setPositionProfileId] = useState("");
+  const availablePositionProfiles = positionProfiles
+    .filter((profile) => profile.persisted)
+    .filter((profile) => {
+      if (!profile.currentOwnerId) return true;
+      const owner = users.find((user) => String(user.id) === String(profile.currentOwnerId));
+      return owner?.status === "inactive";
+    });
 
   const addMember = useMutation({
     mutationFn: async () => {
@@ -6196,6 +6324,7 @@ function WorkspaceMembersPanel({
         persona: persona.trim() || "operator",
         managerId: managerId || null,
         canAssign,
+        positionProfileId: positionProfileId || null,
       });
       return await res.json();
     },
@@ -6211,6 +6340,7 @@ function WorkspaceMembersPanel({
       setPersona("operator");
       setManagerId("");
       setCanAssign(false);
+      setPositionProfileId("");
     },
     onError: (error: unknown) => {
       toast({
@@ -6313,11 +6443,31 @@ function WorkspaceMembersPanel({
               Can assign
             </label>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="member-position-profile">Position Profile</Label>
+            <select
+              id="member-position-profile"
+              value={positionProfileId}
+              onChange={(event) => setPositionProfileId(event.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+              data-testid="select-member-position-profile"
+            >
+              <option value="">Choose available Position Profile</option>
+              {availablePositionProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.title}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              One active employee can own each Position Profile at a time.
+            </p>
+          </div>
           <div className="flex justify-end">
             <Button
               type="button"
               onClick={() => addMember.mutate()}
-              disabled={addMember.isPending || fullName.trim().length < 2 || !email.includes("@")}
+              disabled={addMember.isPending || fullName.trim().length < 2 || !email.includes("@") || (availablePositionProfiles.length > 0 && !positionProfileId)}
               data-testid="button-member-add"
             >
               {addMember.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
@@ -6371,7 +6521,13 @@ function WorkspaceMemberRow({
   const [status, setStatus] = useState<(typeof MEMBER_STATUS_OPTIONS)[number]>(user.status ?? "active");
   const [profileId, setProfileId] = useState("");
   const [lastAccessLink, setLastAccessLink] = useState("");
-  const savedProfiles = positionProfiles.filter((profile) => profile.persisted);
+  const savedProfiles = positionProfiles
+    .filter((profile) => profile.persisted)
+    .filter((profile) => {
+      if (!profile.currentOwnerId || String(profile.currentOwnerId) === String(user.id)) return true;
+      const owner = users.find((candidate) => String(candidate.id) === String(profile.currentOwnerId));
+      return owner?.status === "inactive";
+    });
   const managerOptions = users.filter(
     (candidate) =>
       isActiveUser(candidate) &&
@@ -6442,19 +6598,19 @@ function WorkspaceMemberRow({
   const assignPositionProfile = useMutation({
     mutationFn: async () => {
       if (!profileId) throw new Error("Choose a Position Profile.");
-      const res = await apiRequest("PATCH", `/api/position-profiles/${encodeURIComponent(profileId)}`, {
-        currentOwnerId: String(user.id),
-        directManagerId: managerId || null,
-        temporaryOwnerId: null,
-        delegateUserId: null,
-        delegateUntil: null,
-        status: "active",
+      const profile = savedProfiles.find((item) => item.id === profileId);
+      const res = await apiRequest("POST", "/api/position-profiles/assign", {
+        profileId,
+        fromUserId: profile?.currentOwnerId ?? user.id,
+        toUserId: user.id,
+        mode: "transfer",
+        profileTitle: profile?.title ?? "Position Profile",
       });
-      return (await res.json()) as PersistedPositionProfile;
+      return (await res.json()) as { ok: boolean; updated: number; profile?: PersistedPositionProfile | null };
     },
-    onSuccess: async (profile) => {
+    onSuccess: async (result) => {
       await invalidateWorkspace();
-      toast({ title: "Profile assigned", description: `${profile.title} is now assigned to ${fullName.trim() || user.name}.` });
+      toast({ title: "Profile assigned", description: `${result.profile?.title ?? "Position Profile"} is now assigned to ${fullName.trim() || user.name}.` });
     },
     onError: (error: unknown) => {
       toast({
@@ -7684,7 +7840,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
 
   const metrics = useMemo(() => {
-    const tasks = data?.tasks ?? [];
+    const tasks = (data?.tasks ?? []).filter(isVisibleWorkTask);
     const suggestions = data?.suggestions ?? [];
     const today = new Date().toISOString().slice(0, 10);
     const waitingTasks = tasks.filter((t) => t.status === "pending_acceptance").length;
@@ -7697,6 +7853,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       completed: tasks.filter((t) => t.status === "completed").length,
     };
   }, [data?.tasks, data?.suggestions]);
+  const displayTasks = useMemo(() => (data?.tasks ?? []).filter(isVisibleWorkTask), [data?.tasks]);
 
   const todayLabel = useMemo(
     () =>
@@ -7704,8 +7861,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     [],
   );
   const rawNotifications = useMemo(
-    () => buildNotifications(data?.tasks ?? [], data?.suggestions ?? []),
-    [data?.tasks, data?.suggestions],
+    () => buildNotifications(displayTasks, data?.suggestions ?? []),
+    [displayTasks, data?.suggestions],
   );
   const notifications = useMemo(
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
@@ -8178,7 +8335,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
                 <TaskList
-                  tasks={data.tasks}
+                  tasks={displayTasks}
                   users={data.users}
                   subtasks={data.subtasks ?? []}
                   authenticated={Boolean(data.authenticated)}
@@ -8191,7 +8348,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 <SupportRail
                   view={supportView}
                   onViewChange={setSupportView}
-                  tasks={data.tasks}
+                  tasks={displayTasks}
                   suggestions={data.suggestions}
                   users={data.users}
                   subtasks={data.subtasks ?? []}

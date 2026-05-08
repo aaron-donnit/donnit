@@ -94,8 +94,11 @@ export type DonnitTask = {
   delegated_to: string | null;
   collaborator_ids: string[];
   source: "chat" | "manual" | "email" | "slack" | "sms" | "document" | "automation" | "annual";
-  recurrence: "none" | "annual";
+  recurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
   reminder_days_before: number;
+  position_profile_id: string | null;
+  visibility: "work" | "personal" | "confidential";
+  visible_from: string | null;
   accepted_at: string | null;
   denied_at: string | null;
   completed_at: string | null;
@@ -278,8 +281,11 @@ export class DonnitStore {
       | "completion_notes"
       | "delegated_to"
       | "collaborator_ids"
+      | "position_profile_id"
+      | "visibility"
+      | "visible_from"
     > &
-      Partial<Pick<DonnitTask, "delegated_to" | "collaborator_ids">>,
+      Partial<Pick<DonnitTask, "delegated_to" | "collaborator_ids" | "position_profile_id" | "visibility" | "visible_from">>,
   ): Promise<DonnitTask> {
     const { data, error } = await this.client
       .from(DONNIT_TABLES.tasks)

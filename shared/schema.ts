@@ -27,6 +27,9 @@ export const tasks = sqliteTable("tasks", {
   source: text("source").notNull().default("chat"),
   recurrence: text("recurrence").notNull().default("none"),
   reminderDaysBefore: integer("reminder_days_before").notNull().default(0),
+  positionProfileId: text("position_profile_id"),
+  visibility: text("visibility").notNull().default("work"),
+  visibleFrom: text("visible_from"),
   acceptedAt: text("accepted_at"),
   deniedAt: text("denied_at"),
   completedAt: text("completed_at"),
@@ -104,7 +107,10 @@ export const taskCreateRequestSchema = insertTaskSchema.extend({
     .enum(["open", "pending_acceptance", "accepted", "denied", "completed"])
     .default("open"),
   source: z.enum(["chat", "manual", "email", "slack", "sms", "document", "automation", "annual"]).default("manual"),
-  recurrence: z.enum(["none", "annual"]).default("none"),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]).default("none"),
+  positionProfileId: z.string().nullable().optional(),
+  visibility: z.enum(["work", "personal", "confidential"]).default("work"),
+  visibleFrom: z.string().nullable().optional(),
   dueDate: z.string().nullable().optional(),
   description: z.string().optional().default(""),
 });
@@ -119,6 +125,11 @@ export const taskUpdateRequestSchema = z.object({
   assignedToId: z.union([z.string().min(1), z.number()]).optional(),
   delegatedToId: z.union([z.string().min(1), z.number()]).nullable().optional(),
   collaboratorIds: z.array(z.union([z.string().min(1), z.number()])).optional(),
+  positionProfileId: z.string().nullable().optional(),
+  visibility: z.enum(["work", "personal", "confidential"]).optional(),
+  visibleFrom: z.string().nullable().optional(),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]).optional(),
+  reminderDaysBefore: z.number().int().min(0).max(365).optional(),
   note: z.string().trim().max(1000).optional(),
 });
 

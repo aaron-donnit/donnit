@@ -986,6 +986,9 @@ function toClientTask(task: DonnitTask) {
     source: task.source,
     recurrence: task.recurrence,
     reminderDaysBefore: task.reminder_days_before,
+    positionProfileId: (task as { position_profile_id?: string | null }).position_profile_id ?? null,
+    visibility: (task as { visibility?: string }).visibility ?? "work",
+    visibleFrom: (task as { visible_from?: string | null }).visible_from ?? null,
     acceptedAt: task.accepted_at,
     deniedAt: task.denied_at,
     completedAt: task.completed_at,
@@ -1134,6 +1137,19 @@ function memberDisplayName(member: { profile?: { full_name?: string | null; emai
   return member.profile?.full_name || member.profile?.email || "Member";
 }
 
+function visibleFromForRecurringTask(input: {
+  recurrence?: string | null;
+  due_date?: string | null;
+  reminder_days_before?: number | null;
+}) {
+  if (!input.due_date || !input.recurrence || input.recurrence === "none") return null;
+  const days = Math.max(0, Number(input.reminder_days_before ?? 0) || 0);
+  const date = new Date(`${input.due_date}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 function relationshipEventNote(input: {
   assignedToId: string | number;
   delegatedToId: string | number | null;
@@ -1197,6 +1213,9 @@ function toClientDemoTask(task: Task): ClientDemoTask {
   return {
     ...task,
     collaboratorIds: parseDemoCollaboratorIds(task.collaboratorIds),
+    positionProfileId: null,
+    visibility: "work" as const,
+    visibleFrom: null,
   };
 }
 
@@ -1644,7 +1663,7 @@ function parseChatTaskAuthenticated(
     assignedToId,
     assignedById: selfId,
     source: "chat" as const,
-    recurrence: recurrence as "none" | "annual",
+    recurrence: recurrence as DonnitTask["recurrence"],
     reminderDaysBefore,
   };
 }
@@ -1716,6 +1735,7 @@ const memberCreateSchema = z.object({
   persona: z.string().trim().min(1).max(80).default("operator"),
   managerId: z.string().uuid().nullable().optional(),
   canAssign: z.boolean().default(false),
+  positionProfileId: z.string().uuid().nullable().optional(),
 });
 const memberUpdateSchema = z.object({
   fullName: z.string().trim().min(1).max(120).optional(),
@@ -1942,7 +1962,7 @@ type AiTaskExtraction = {
   dueDate: string | null;
   estimatedMinutes: number;
   assigneeHint: string | null;
-  recurrence: "none" | "annual";
+  recurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
   reminderDaysBefore: number;
   confidence: "low" | "medium" | "high";
   rationale: string;
@@ -1970,7 +1990,7 @@ const aiTaskExtractionSchema = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
   estimatedMinutes: z.number().int().min(5).max(1440),
   assigneeHint: z.string().trim().max(160).nullable(),
-  recurrence: z.enum(["none", "annual"]),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]),
   reminderDaysBefore: z.number().int().min(0).max(365),
   confidence: z.enum(["low", "medium", "high"]),
   rationale: z.string().trim().max(400),
@@ -2132,7 +2152,7 @@ async function extractTaskWithAi(input: {
                 dueDate: { anyOf: [{ type: "string", format: "date" }, { type: "null" }] },
                 estimatedMinutes: { type: "integer" },
                 assigneeHint: { anyOf: [{ type: "string" }, { type: "null" }] },
-                recurrence: { type: "string", enum: ["none", "annual"] },
+                recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "quarterly", "annual"] },
                 reminderDaysBefore: { type: "integer" },
                 confidence: { type: "string", enum: ["low", "medium", "high"] },
                 rationale: { type: "string" },
@@ -3240,6 +3260,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(400).json({ message: "Manager must be an active workspace member." });
         return;
       }
+      const store = new DonnitStore(admin, auth.userId);
+      const profiles = input.positionProfileId ? await store.listPositionProfiles(context.orgId) : [];
+      const assignedProfile = input.positionProfileId
+        ? profiles.find((profile) => profile.id === input.positionProfileId)
+        : null;
+      if (input.positionProfileId && !assignedProfile) {
+        res.status(404).json({ message: "Position Profile was not found." });
+        return;
+      }
+      if (assignedProfile?.current_owner_id) {
+        const currentOwner = context.members.find((member) => member.user_id === assignedProfile.current_owner_id);
+        if (((currentOwner as { status?: string } | undefined)?.status ?? "active") !== "inactive") {
+          res.status(409).json({ message: "That Position Profile is already assigned to an active employee." });
+          return;
+        }
+      }
 
       const { data: existingProfile, error: profileLookupError } = await admin
         .from(DONNIT_TABLES.profiles)
@@ -3306,6 +3342,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         throw memberError;
+      }
+
+      if (assignedProfile) {
+        await store.updatePositionProfile(context.orgId, assignedProfile.id, {
+          status: "active",
+          current_owner_id: userId,
+          direct_manager_id: input.managerId ?? null,
+          temporary_owner_id: null,
+          delegate_user_id: null,
+          delegate_until: null,
+          risk_summary: `Assigned to ${input.fullName} during member creation.`,
+        });
       }
 
       res.status(201).json({ ok: true, member });
@@ -3609,6 +3657,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               reminderDaysBefore: ai.reminderDaysBefore,
             }
           : fallbackInput;
+        const activeProfile = (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === taskInput.assignedToId);
         const created = await store.createTask(orgId, {
           title: taskInput.title,
           description: taskInput.description,
@@ -3621,6 +3670,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: taskInput.source,
           recurrence: taskInput.recurrence,
           reminder_days_before: taskInput.reminderDaysBefore,
+          position_profile_id: activeProfile?.id ?? null,
+          visibility: "work",
+          visible_from: visibleFromForRecurringTask({
+            recurrence: taskInput.recurrence,
+            due_date: taskInput.dueDate,
+            reminder_days_before: taskInput.reminderDaysBefore,
+          }),
         });
         await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: created.id });
         const assignee = members.find((m) => m.user_id === created.assigned_to);
@@ -3707,6 +3763,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const data = parsed.data;
+        const activeProfile = data.positionProfileId
+          ? null
+          : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === String(data.assignedToId));
         const created = await store.createTask(orgId, {
           title: data.title,
           description: data.description ?? "",
@@ -3719,6 +3778,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: data.source,
           recurrence: data.recurrence,
           reminder_days_before: data.reminderDaysBefore ?? 0,
+          position_profile_id: data.positionProfileId ?? activeProfile?.id ?? null,
+          visibility: data.visibility ?? "work",
+          visible_from: data.visibleFrom ?? visibleFromForRecurringTask({
+            recurrence: data.recurrence,
+            due_date: data.dueDate ?? null,
+            reminder_days_before: data.reminderDaysBefore ?? 0,
+          }),
         });
         res.status(201).json(toClientTask(created));
         return;
@@ -3771,6 +3837,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (data.urgency !== undefined) patch.urgency = data.urgency;
         if (data.dueDate !== undefined) patch.due_date = data.dueDate;
         if (data.estimatedMinutes !== undefined) patch.estimated_minutes = data.estimatedMinutes;
+        if (data.recurrence !== undefined) patch.recurrence = data.recurrence;
+        if (data.reminderDaysBefore !== undefined) patch.reminder_days_before = data.reminderDaysBefore;
+        if (data.visibility !== undefined) patch.visibility = data.visibility;
+        if (data.visibleFrom !== undefined) patch.visible_from = data.visibleFrom;
+        if (data.positionProfileId !== undefined) patch.position_profile_id = data.positionProfileId;
+        if ((data.recurrence !== undefined || data.dueDate !== undefined || data.reminderDaysBefore !== undefined) && data.visibleFrom === undefined) {
+          patch.visible_from = visibleFromForRecurringTask({
+            recurrence: data.recurrence ?? existing.recurrence,
+            due_date: data.dueDate === undefined ? existing.due_date : data.dueDate,
+            reminder_days_before: data.reminderDaysBefore ?? existing.reminder_days_before,
+          });
+        }
         if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
         const supportsRelationshipColumns = hasTaskRelationshipColumns(existing);
         const nextDelegatedToId = data.delegatedToId === undefined
@@ -4205,6 +4283,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/position-profiles/:id/tasks", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles, tasks] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+        store.listTasks(orgId),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      if (!profile) {
+        res.status(404).json({ message: "Position Profile not found." });
+        return;
+      }
+      const canView =
+        isWorkspaceAdmin(actor) ||
+        profile.current_owner_id === auth.userId ||
+        profile.temporary_owner_id === auth.userId ||
+        profile.delegate_user_id === auth.userId;
+      if (!canView) {
+        res.status(403).json({ message: "Only admins and assigned profile owners can view this history." });
+        return;
+      }
+      const profileTasks = tasks.filter((task) => (
+        ((task as { position_profile_id?: string | null }).position_profile_id === profile.id ||
+          (profile.current_owner_id && task.assigned_to === profile.current_owner_id)) &&
+        ((task as { visibility?: string }).visibility ?? "work") === "work"
+      ));
+      res.json({
+        ok: true,
+        profile: toClientPositionProfile(profile),
+        tasks: profileTasks.map((task) => {
+          const visibleTask = toClientTask(task);
+          const includeHistory = req.query.history === "1";
+          return includeHistory
+            ? visibleTask
+            : {
+                ...visibleTask,
+                description: "",
+                completionNotes: "",
+              };
+        }),
+      });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.patch("/api/position-profiles/:id", requireDonnitAuth, async (req: Request, res: Response) => {
     const parsed = positionProfileUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -4310,11 +4442,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const tasks = await store.listTasks(orgId);
+        const profileId = parsed.data.profileId ?? null;
         const active = tasks.filter(
           (task) =>
             task.assigned_to === fromUserId &&
             task.status !== "completed" &&
-            task.status !== "denied",
+            task.status !== "denied" &&
+            ((task as { visibility?: string }).visibility ?? "work") === "work",
         );
         if (mode === "delegate" && active.some((task) => !hasTaskRelationshipColumns(task))) {
           res.status(409).json({ message: "Apply migration 0008 before delegating position profiles." });
@@ -4324,8 +4458,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         for (const task of active) {
           const patch: Partial<DonnitTask> =
             mode === "transfer"
-              ? { assigned_to: toUserId, ...(hasTaskRelationshipColumns(task) ? { delegated_to: null } : {}) }
-              : { delegated_to: toUserId };
+              ? {
+                  assigned_to: toUserId,
+                  position_profile_id: profileId,
+                  visible_from: visibleFromForRecurringTask(task),
+                  ...(hasTaskRelationshipColumns(task) ? { delegated_to: null } : {}),
+                }
+              : { delegated_to: toUserId, position_profile_id: profileId, visible_from: visibleFromForRecurringTask(task) };
           const updated = await store.updateTask(task.id, patch);
           if (!updated) continue;
           updatedCount += 1;
@@ -4341,6 +4480,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               delegateUntil: delegateUntil ?? null,
             }),
           });
+        }
+        if (profileId) {
+          const historical = tasks.filter(
+            (task) =>
+              task.assigned_to === fromUserId &&
+              ((task as { visibility?: string }).visibility ?? "work") === "work" &&
+              ((task as { position_profile_id?: string | null }).position_profile_id ?? null) !== profileId,
+          );
+          for (const task of historical) {
+            await store.updateTask(task.id, { position_profile_id: profileId });
+          }
         }
         let profile = null;
         if (parsed.data.profileId) {
