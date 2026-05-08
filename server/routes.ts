@@ -1813,28 +1813,49 @@ function buildPendingFromTaskInput(input: {
 }
 
 async function getPendingChatTask(store: DonnitStore, orgId: string) {
-  const state = await store.getWorkspaceState(orgId, "onboarding_state");
-  const value = (state?.value ?? {}) as Record<string, unknown>;
-  const parsed = pendingChatTaskSchema.safeParse(value.pendingChatTask);
-  return parsed.success ? parsed.data : null;
+  const key = `${orgId}:${store.userId}`;
+  try {
+    const state = await store.getWorkspaceState(orgId, "onboarding_state");
+    const value = (state?.value ?? {}) as Record<string, unknown>;
+    const parsed = pendingChatTaskSchema.safeParse(value.pendingChatTask);
+    if (parsed.success) {
+      pendingChatTaskMemory.set(key, parsed.data);
+      return parsed.data;
+    }
+  } catch (error) {
+    console.error("[donnit] pending chat task read failed", error instanceof Error ? error.message : String(error));
+  }
+  return pendingChatTaskMemory.get(key) ?? null;
 }
 
 async function setPendingChatTask(store: DonnitStore, orgId: string, task: PendingChatTask) {
-  const state = await store.getWorkspaceState(orgId, "onboarding_state");
-  await store.upsertWorkspaceState(orgId, "onboarding_state", {
-    ...((state?.value ?? {}) as Record<string, unknown>),
-    pendingChatTask: task,
-  });
+  const key = `${orgId}:${store.userId}`;
+  pendingChatTaskMemory.set(key, task);
+  try {
+    const state = await store.getWorkspaceState(orgId, "onboarding_state");
+    await store.upsertWorkspaceState(orgId, "onboarding_state", {
+      ...((state?.value ?? {}) as Record<string, unknown>),
+      pendingChatTask: task,
+    });
+  } catch (error) {
+    console.error("[donnit] pending chat task write failed", error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function clearPendingChatTask(store: DonnitStore, orgId: string) {
-  const state = await store.getWorkspaceState(orgId, "onboarding_state");
-  const rest = { ...((state?.value ?? {}) as Record<string, unknown>) };
-  delete rest.pendingChatTask;
-  await store.upsertWorkspaceState(orgId, "onboarding_state", {
-    ...rest,
-    pendingChatTaskClearedAt: new Date().toISOString(),
-  });
+  const key = `${orgId}:${store.userId}`;
+  pendingChatTaskMemory.delete(key);
+  try {
+    const state = await store.getWorkspaceState(orgId, "onboarding_state");
+    const rest = { ...((state?.value ?? {}) as Record<string, unknown>) };
+    delete rest.pendingChatTask;
+    await store.upsertWorkspaceState(orgId, "onboarding_state", {
+      ...rest,
+      pendingChatTaskClearedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[donnit] pending chat task clear failed", error instanceof Error ? error.message : String(error));
+  }
 }
 
 function mergePendingChatTask(task: PendingChatTask, message: string): PendingChatTask {
@@ -1893,6 +1914,7 @@ const pendingChatTaskSchema = z.object({
 });
 
 type PendingChatTask = z.infer<typeof pendingChatTaskSchema>;
+const pendingChatTaskMemory = new Map<string, PendingChatTask>();
 
 const workspaceStateSchema = z.discriminatedUnion("key", [
   z.object({
