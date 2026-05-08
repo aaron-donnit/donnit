@@ -133,6 +133,7 @@ type User = {
   persona: string;
   managerId: Id | null;
   canAssign: boolean;
+  status?: "active" | "inactive";
 };
 
 type Task = {
@@ -643,6 +644,14 @@ function buildPositionProfiles(
 
 function canAdministerProfiles(user: User | null | undefined) {
   return user?.role === "owner" || user?.role === "admin";
+}
+
+function canManageWorkspaceMembers(user: User | null | undefined) {
+  return user?.role === "owner" || user?.role === "admin";
+}
+
+function isActiveUser(user: User) {
+  return user.status !== "inactive";
 }
 
 function escapeIcsText(value: string) {
@@ -2084,11 +2093,12 @@ function TaskDetailDialog({
   });
 
   if (!task) return null;
+  const activeUsers = users.filter(isActiveUser);
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
   const delegate = users.find((user) => String(user.id) === delegatedToId);
   const selectedCollaborators = users.filter((user) => collaboratorIds.includes(String(user.id)));
-  const collaboratorOptions = users.filter(
+  const collaboratorOptions = activeUsers.filter(
     (user) => String(user.id) !== assignedToId && !collaboratorIds.includes(String(user.id)),
   );
   const ready = title.trim().length >= 2;
@@ -2390,7 +2400,7 @@ function TaskDetailDialog({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-72">
                 <DropdownMenuLabel>Reassign owner</DropdownMenuLabel>
-                {users.map((user) => {
+                {activeUsers.map((user) => {
                   const userId = String(user.id);
                   return (
                     <DropdownMenuItem
@@ -2411,7 +2421,7 @@ function TaskDetailDialog({
                   No delegate
                   {!delegatedToId && <Check className="ml-auto size-4" />}
                 </DropdownMenuItem>
-                {users
+                {activeUsers
                   .filter((user) => String(user.id) !== assignedToId)
                   .map((user) => {
                     const userId = String(user.id);
@@ -3308,6 +3318,7 @@ function TeamViewPanel({
   const canViewTeam = Boolean(currentUser && ["owner", "admin", "manager"].includes(currentUser.role));
   const teamMembers = users.filter((user) => {
     if (!currentUser) return false;
+    if (!isActiveUser(user)) return false;
     if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
     return String(user.managerId) === String(currentUserId);
   });
@@ -3792,7 +3803,7 @@ function PositionProfilesPanel({
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
   const targetUsers = useMemo(
-    () => users.filter((user) => selectedProfile && String(user.id) !== String(selectedProfile.owner.id)),
+    () => users.filter((user) => selectedProfile && isActiveUser(user) && String(user.id) !== String(selectedProfile.owner.id)),
     [selectedProfile, users],
   );
   const [targetUserId, setTargetUserId] = useState("");
@@ -5568,8 +5579,8 @@ function AssignTaskDialog({
   const assignableUsers = useMemo(
     () =>
       users.length > 0
-        ? users
-        : [{ id: currentUserId, name: "You", email: "", role: "", persona: "", managerId: null, canAssign: true }],
+        ? users.filter(isActiveUser)
+        : [{ id: currentUserId, name: "You", email: "", role: "", persona: "", managerId: null, canAssign: true, status: "active" as const }],
     [users, currentUserId],
   );
   const defaultAssigneeId = String(
@@ -6152,6 +6163,350 @@ function ConnectedToolRow({
   );
 }
 
+const MEMBER_ROLE_OPTIONS = ["owner", "admin", "manager", "member", "viewer"] as const;
+const MEMBER_STATUS_OPTIONS = ["active", "inactive"] as const;
+
+function WorkspaceMembersPanel({
+  users,
+  currentUser,
+  currentUserId,
+}: {
+  users: User[];
+  currentUser: User | null;
+  currentUserId: Id;
+}) {
+  const canManage = canManageWorkspaceMembers(currentUser);
+  const activeUsers = users.filter(isActiveUser);
+  const managerOptions = activeUsers.filter((user) => ["owner", "admin", "manager"].includes(user.role));
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<(typeof MEMBER_ROLE_OPTIONS)[number]>("member");
+  const [persona, setPersona] = useState("operator");
+  const [managerId, setManagerId] = useState("");
+  const [canAssign, setCanAssign] = useState(false);
+
+  const addMember = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/members", {
+        fullName: fullName.trim(),
+        email: email.trim(),
+        role,
+        persona: persona.trim() || "operator",
+        managerId: managerId || null,
+        canAssign,
+      });
+      return await res.json();
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({
+        title: "Member added",
+        description: "The user is staged in Donnit and can now receive assigned work.",
+      });
+      setFullName("");
+      setEmail("");
+      setRole("member");
+      setPersona("operator");
+      setManagerId("");
+      setCanAssign(false);
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not add member",
+        description: apiErrorMessage(error, "Apply the member management migration and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  return (
+    <div className="rounded-md border border-border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-3 py-2">
+        <div>
+          <p className="text-sm font-medium text-foreground">Members and access</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Stage users, reporting lines, and workspace permissions.
+          </p>
+        </div>
+        <span className="ui-label">
+          {activeUsers.length}/{users.length} active
+        </span>
+      </div>
+      {canManage ? (
+        <div className="grid gap-3 border-b border-border bg-muted/25 px-3 py-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="member-full-name">Name</Label>
+              <Input
+                id="member-full-name"
+                value={fullName}
+                onChange={(event) => setFullName(event.target.value)}
+                placeholder="Jordan Lee"
+                data-testid="input-member-name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="member-email">Email</Label>
+              <Input
+                id="member-email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="jordan@company.com"
+                data-testid="input-member-email"
+              />
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="member-role">Role</Label>
+              <select
+                id="member-role"
+                value={role}
+                onChange={(event) => setRole(event.target.value as (typeof MEMBER_ROLE_OPTIONS)[number])}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                data-testid="select-member-role"
+              >
+                {MEMBER_ROLE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {titleCase(option)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="member-manager">Manager</Label>
+              <select
+                id="member-manager"
+                value={managerId}
+                onChange={(event) => setManagerId(event.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                data-testid="select-member-manager"
+              >
+                <option value="">No manager</option>
+                {managerOptions.map((user) => (
+                  <option key={String(user.id)} value={String(user.id)}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="member-persona">Persona</Label>
+              <Input
+                id="member-persona"
+                value={persona}
+                onChange={(event) => setPersona(event.target.value)}
+                placeholder="operator"
+                data-testid="input-member-persona"
+              />
+            </div>
+            <label className="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm">
+              <input
+                type="checkbox"
+                checked={canAssign}
+                onChange={(event) => setCanAssign(event.target.checked)}
+                data-testid="checkbox-member-can-assign"
+              />
+              Can assign
+            </label>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => addMember.mutate()}
+              disabled={addMember.isPending || fullName.trim().length < 2 || !email.includes("@")}
+              data-testid="button-member-add"
+            >
+              {addMember.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+              Add member
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="border-b border-border px-3 py-3 text-sm text-muted-foreground">
+          Only workspace owners and admins can change user access.
+        </div>
+      )}
+      <div className="max-h-72 overflow-y-auto px-3 py-2">
+        {users.map((user) => (
+          <WorkspaceMemberRow
+            key={String(user.id)}
+            user={user}
+            users={users}
+            currentUserId={currentUserId}
+            canManage={canManage}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceMemberRow({
+  user,
+  users,
+  currentUserId,
+  canManage,
+}: {
+  user: User;
+  users: User[];
+  currentUserId: Id;
+  canManage: boolean;
+}) {
+  const [fullName, setFullName] = useState(user.name);
+  const [role, setRole] = useState<(typeof MEMBER_ROLE_OPTIONS)[number]>(
+    MEMBER_ROLE_OPTIONS.includes(user.role as (typeof MEMBER_ROLE_OPTIONS)[number])
+      ? (user.role as (typeof MEMBER_ROLE_OPTIONS)[number])
+      : "member",
+  );
+  const [persona, setPersona] = useState(user.persona || "operator");
+  const [managerId, setManagerId] = useState(user.managerId ? String(user.managerId) : "");
+  const [canAssign, setCanAssign] = useState(Boolean(user.canAssign));
+  const [status, setStatus] = useState<(typeof MEMBER_STATUS_OPTIONS)[number]>(user.status ?? "active");
+  const managerOptions = users.filter(
+    (candidate) =>
+      isActiveUser(candidate) &&
+      ["owner", "admin", "manager"].includes(candidate.role) &&
+      String(candidate.id) !== String(user.id),
+  );
+  const isSelf = String(user.id) === String(currentUserId);
+  const saveMember = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/admin/members/${encodeURIComponent(String(user.id))}`, {
+        fullName: fullName.trim(),
+        role,
+        persona: persona.trim() || "operator",
+        managerId: managerId || null,
+        canAssign,
+        status,
+      });
+      return await res.json();
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Member updated", description: `${fullName.trim() || user.name} was saved.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not update member",
+        description: apiErrorMessage(error, "Check role/status rules and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  useEffect(() => {
+    setFullName(user.name);
+    setRole(
+      MEMBER_ROLE_OPTIONS.includes(user.role as (typeof MEMBER_ROLE_OPTIONS)[number])
+        ? (user.role as (typeof MEMBER_ROLE_OPTIONS)[number])
+        : "member",
+    );
+    setPersona(user.persona || "operator");
+    setManagerId(user.managerId ? String(user.managerId) : "");
+    setCanAssign(Boolean(user.canAssign));
+    setStatus(user.status ?? "active");
+  }, [user.id, user.name, user.role, user.persona, user.managerId, user.canAssign, user.status]);
+
+  return (
+    <div className="grid gap-2 border-b border-border/60 py-3 last:border-b-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`ui-label ${status === "inactive" ? "text-muted-foreground" : ""}`}>{status}</span>
+          <span className="ui-label">{titleCase(user.role || "member")}</span>
+        </div>
+      </div>
+      {canManage && (
+        <div className="grid gap-2 sm:grid-cols-[1.2fr_.85fr_.9fr_.9fr_.7fr_auto] sm:items-center">
+          <Input
+            value={fullName}
+            onChange={(event) => setFullName(event.target.value)}
+            aria-label={`${user.name} name`}
+            className="h-9"
+            data-testid={`input-member-row-name-${user.id}`}
+          />
+          <select
+            value={role}
+            onChange={(event) => setRole(event.target.value as (typeof MEMBER_ROLE_OPTIONS)[number])}
+            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+            disabled={isSelf && role === "owner"}
+            aria-label={`${user.name} role`}
+            data-testid={`select-member-row-role-${user.id}`}
+          >
+            {MEMBER_ROLE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {titleCase(option)}
+              </option>
+            ))}
+          </select>
+          <select
+            value={managerId}
+            onChange={(event) => setManagerId(event.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+            aria-label={`${user.name} manager`}
+            data-testid={`select-member-row-manager-${user.id}`}
+          >
+            <option value="">No manager</option>
+            {managerOptions.map((candidate) => (
+              <option key={String(candidate.id)} value={String(candidate.id)}>
+                {candidate.name}
+              </option>
+            ))}
+          </select>
+          <Input
+            value={persona}
+            onChange={(event) => setPersona(event.target.value)}
+            aria-label={`${user.name} persona`}
+            className="h-9"
+            data-testid={`input-member-row-persona-${user.id}`}
+          />
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as (typeof MEMBER_STATUS_OPTIONS)[number])}
+            className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+            disabled={isSelf}
+            aria-label={`${user.name} status`}
+            data-testid={`select-member-row-status-${user.id}`}
+          >
+            {MEMBER_STATUS_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {titleCase(option)}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center justify-end gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={canAssign}
+                onChange={(event) => setCanAssign(event.target.checked)}
+                aria-label={`${user.name} can assign`}
+              />
+              Assign
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => saveMember.mutate()}
+              disabled={saveMember.isPending || fullName.trim().length < 2}
+              data-testid={`button-member-row-save-${user.id}`}
+            >
+              {saveMember.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkspaceSettingsDialog({
   open,
   onOpenChange,
@@ -6189,7 +6544,6 @@ function WorkspaceSettingsDialog({
 }) {
   const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
   const canManagePositionProfiles = canAdministerProfiles(currentUser);
-  const managers = users.filter((user) => user.role === "owner" || user.role === "admin" || user.role === "manager");
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
   const gmailReady = Boolean(oauthStatus?.connected && oauthStatus.gmailScopeConnected && !oauthStatus.tokenExpiresSoon);
@@ -6292,7 +6646,7 @@ function WorkspaceSettingsDialog({
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${dialogShellClass} sm:max-w-3xl`}>
+      <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
         <DialogHeader className={dialogHeaderClass}>
           <DialogTitle className="flex items-center gap-2">
             <Users className="size-5 text-brand-green" />
@@ -6313,7 +6667,9 @@ function WorkspaceSettingsDialog({
             </div>
             <div className="rounded-md border border-border px-3 py-3">
               <p className="ui-label">Members</p>
-              <p className="mt-1 text-sm font-medium text-foreground">{users.length}</p>
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {users.filter(isActiveUser).length}/{users.length} active
+              </p>
             </div>
             <div className="rounded-md border border-border px-3 py-3">
               <p className="ui-label">Google</p>
@@ -6494,23 +6850,11 @@ function WorkspaceSettingsDialog({
             </div>
           </div>
 
-          <div className="rounded-md border border-border">
-            <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-              <p className="text-sm font-medium text-foreground">People and roles</p>
-              <span className="ui-label">{managers.length} manager{managers.length === 1 ? "" : "s"}</span>
-            </div>
-            <div className="max-h-56 overflow-y-auto px-3 py-2">
-              {users.map((user) => (
-                <div key={String(user.id)} className="flex items-center justify-between gap-3 border-b border-border/60 py-2 last:border-b-0">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-                  </div>
-                  <span className="ui-label whitespace-nowrap">{user.role}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <WorkspaceMembersPanel
+            users={users}
+            currentUser={currentUser}
+            currentUserId={currentUserId}
+          />
         </div>
         </div>
         <DialogFooter className={dialogFooterClass}>

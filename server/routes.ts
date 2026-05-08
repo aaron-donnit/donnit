@@ -1095,6 +1095,33 @@ function createSubtaskWriteStore(auth: NonNullable<Request["donnitAuth"]>) {
   return new DonnitStore(admin ?? auth.client, auth.userId);
 }
 
+function isWorkspaceAdmin(member: { role?: string | null } | null | undefined) {
+  return ["owner", "admin"].includes(String(member?.role ?? ""));
+}
+
+function isMemberAdminSchemaError(error: unknown) {
+  const raw = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
+  const haystack = `${String(raw?.message ?? "")} ${String(raw?.details ?? "")} ${String(raw?.hint ?? "")}`.toLowerCase();
+  return (
+    raw?.code === "23514" ||
+    haystack.includes("status") ||
+    haystack.includes("role") ||
+    haystack.includes("organization_members")
+  );
+}
+
+async function requireWorkspaceAdminContext(auth: NonNullable<Request["donnitAuth"]>) {
+  const userStore = new DonnitStore(auth.client, auth.userId);
+  const orgId = await userStore.getDefaultOrgId();
+  if (!orgId) return { ok: false as const, status: 409, message: "Workspace not bootstrapped." };
+  const members = await userStore.listOrgMembers(orgId);
+  const actor = members.find((member) => member.user_id === auth.userId);
+  if (!isWorkspaceAdmin(actor)) {
+    return { ok: false as const, status: 403, message: "Only workspace admins can manage members." };
+  }
+  return { ok: true as const, orgId, members, actor };
+}
+
 function relationshipEventNote(input: {
   assignedToId: string | number;
   delegatedToId: string | number | null;
@@ -1439,6 +1466,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     persona: m.profile?.persona ?? "operator",
     managerId: m.manager_id,
     canAssign: m.can_assign,
+    status: (m as { status?: string }).status ?? "active",
   }));
   const clientTasks = sortClientTasks(applyRelationshipEvents(tasks.map(toClientTask), events));
   const calendarContext = await tryBuildGoogleCalendarContext(store);
@@ -1542,6 +1570,7 @@ async function buildDemoBootstrap() {
       ...user,
       name: demoNames[index] ?? `Demo User ${index + 1}`,
       email: `demo-user-${index + 1}@example.invalid`,
+      status: "active",
     })),
     tasks: demoTasks,
     events: events.map((event) => ({
@@ -1665,6 +1694,25 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
     }),
   }),
 ]);
+
+const memberRoleSchema = z.enum(["owner", "admin", "manager", "member", "viewer"]);
+const memberStatusSchema = z.enum(["active", "inactive"]);
+const memberCreateSchema = z.object({
+  fullName: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().max(240).transform((value) => value.toLowerCase()),
+  role: memberRoleSchema.default("member"),
+  persona: z.string().trim().min(1).max(80).default("operator"),
+  managerId: z.string().uuid().nullable().optional(),
+  canAssign: z.boolean().default(false),
+});
+const memberUpdateSchema = z.object({
+  fullName: z.string().trim().min(1).max(120).optional(),
+  role: memberRoleSchema.optional(),
+  persona: z.string().trim().min(1).max(80).optional(),
+  managerId: z.string().uuid().nullable().optional(),
+  canAssign: z.boolean().optional(),
+  status: memberStatusSchema.optional(),
+});
 
 const positionProfileAssignSchema = z.object({
   profileId: z.string().trim().min(1).optional(),
@@ -3150,6 +3198,205 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       const payload = serializeSupabaseError(error);
       console.error("[donnit] seed demo team failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.post("/api/admin/members", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = memberCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Member payload is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Member management needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const input = parsed.data;
+      if (input.managerId && !context.members.some((member) => (
+        member.user_id === input.managerId &&
+        ((member as { status?: string }).status ?? "active") !== "inactive"
+      ))) {
+        res.status(400).json({ message: "Manager must be an active workspace member." });
+        return;
+      }
+
+      const { data: existingProfile, error: profileLookupError } = await admin
+        .from(DONNIT_TABLES.profiles)
+        .select("*")
+        .eq("email", input.email)
+        .maybeSingle();
+      if (profileLookupError) throw profileLookupError;
+
+      let userId = typeof existingProfile?.id === "string" ? existingProfile.id : null;
+      if (!userId) {
+        const listed = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        if (listed.error) throw listed.error;
+        const existingAuthUser = listed.data.users.find(
+          (user) => String(user.email ?? "").toLowerCase() === input.email,
+        );
+        if (existingAuthUser?.id) {
+          userId = existingAuthUser.id;
+        } else {
+          const created = await admin.auth.admin.createUser({
+            email: input.email,
+            password: crypto.randomBytes(18).toString("base64url"),
+            email_confirm: true,
+            user_metadata: { full_name: input.fullName },
+          });
+          if (created.error || !created.data.user?.id) throw created.error ?? new Error("Could not create workspace member.");
+          userId = created.data.user.id;
+        }
+      }
+
+      const { error: profileError } = await admin
+        .from(DONNIT_TABLES.profiles)
+        .upsert(
+          {
+            id: userId,
+            full_name: input.fullName,
+            email: input.email,
+            default_org_id: context.orgId,
+            persona: input.persona,
+          },
+          { onConflict: "id" },
+        );
+      if (profileError) throw profileError;
+
+      const { data: member, error: memberError } = await admin
+        .from(DONNIT_TABLES.organizationMembers)
+        .upsert(
+          {
+            org_id: context.orgId,
+            user_id: userId,
+            role: input.role,
+            manager_id: input.managerId ?? null,
+            can_assign: input.canAssign,
+            status: "active",
+          },
+          { onConflict: "org_id,user_id" },
+        )
+        .select("*")
+        .single();
+      if (memberError) {
+        if (isMemberAdminSchemaError(memberError)) {
+          res.status(409).json({
+            message: "Member management schema is not applied yet. Apply the latest Supabase migration and redeploy.",
+          });
+          return;
+        }
+        throw memberError;
+      }
+
+      res.status(201).json({ ok: true, member });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] add member failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.patch("/api/admin/members/:userId", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = memberUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Member update payload is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const targetUserId = String(req.params.userId ?? "");
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const target = context.members.find((member) => member.user_id === targetUserId);
+      if (!target) {
+        res.status(404).json({ message: "Member not found in this workspace." });
+        return;
+      }
+      const input = parsed.data;
+      if (input.managerId && !context.members.some((member) => (
+        member.user_id === input.managerId &&
+        ((member as { status?: string }).status ?? "active") !== "inactive"
+      ))) {
+        res.status(400).json({ message: "Manager must be an active workspace member." });
+        return;
+      }
+      if (input.managerId === targetUserId) {
+        res.status(400).json({ message: "A member cannot report to themselves." });
+        return;
+      }
+      const targetIsAdmin = isWorkspaceAdmin(target);
+      const nextRole = input.role ?? target.role;
+      const nextStatus = input.status ?? ((target as { status?: string }).status ?? "active");
+      const wouldRemoveAdminAccess = targetIsAdmin && (!["owner", "admin"].includes(nextRole) || nextStatus === "inactive");
+      const hasOtherActiveAdmin = context.members.some((member) => (
+        member.user_id !== targetUserId &&
+        isWorkspaceAdmin(member) &&
+        ((member as { status?: string }).status ?? "active") !== "inactive"
+      ));
+      if (wouldRemoveAdminAccess && !hasOtherActiveAdmin) {
+        res.status(409).json({ message: "At least one active owner or admin must remain in the workspace." });
+        return;
+      }
+      if (targetUserId === auth.userId && nextStatus === "inactive") {
+        res.status(409).json({ message: "You cannot deactivate your own admin access." });
+        return;
+      }
+
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Member management needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+
+      if (input.fullName || input.persona) {
+        const { error: profileError } = await admin
+          .from(DONNIT_TABLES.profiles)
+          .update({
+            ...(input.fullName ? { full_name: input.fullName } : {}),
+            ...(input.persona ? { persona: input.persona } : {}),
+          })
+          .eq("id", targetUserId);
+        if (profileError) throw profileError;
+      }
+
+      const memberUpdate = {
+        ...(input.role ? { role: input.role } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "managerId") ? { manager_id: input.managerId ?? null } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "canAssign") ? { can_assign: input.canAssign ?? false } : {}),
+        ...(input.status ? { status: input.status } : {}),
+      };
+      const { data: member, error: memberError } = await admin
+        .from(DONNIT_TABLES.organizationMembers)
+        .update(memberUpdate)
+        .eq("org_id", context.orgId)
+        .eq("user_id", targetUserId)
+        .select("*")
+        .single();
+      if (memberError) {
+        if (isMemberAdminSchemaError(memberError)) {
+          res.status(409).json({
+            message: "Member management schema is not applied yet. Apply the latest Supabase migration and redeploy.",
+          });
+          return;
+        }
+        throw memberError;
+      }
+
+      res.json({ ok: true, member });
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] update member failed", { userId: req.donnitAuth?.userId, ...payload });
       res.status(500).json({ ok: false, ...payload });
     }
   });

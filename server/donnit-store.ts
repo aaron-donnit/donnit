@@ -74,9 +74,10 @@ export type DonnitProfile = {
 export type DonnitMember = {
   org_id: string;
   user_id: string;
-  role: "owner" | "manager" | "member" | "viewer";
+  role: "owner" | "admin" | "manager" | "member" | "viewer";
   manager_id: string | null;
   can_assign: boolean;
+  status: "active" | "inactive";
 };
 
 export type DonnitTask = {
