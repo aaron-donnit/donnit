@@ -204,3 +204,4 @@ Step 8.3 implementation status:
 - Seed now creates sample team members, realistic open/completed tasks, subtasks, pending approval suggestions, and Position Profiles.
 - Added an admin menu action to seed the demo workspace even when team members already exist.
 - Demo data is idempotent so rerunning the action refreshes missing pieces without duplicating existing sample records.
+- Added an in-app Demo workspace guide that explains the demo data lives in the active workspace and links directly to Team, Approvals, Reports, and Position Profiles.

@@ -1482,6 +1482,88 @@ function OnboardingChecklist({
   );
 }
 
+function DemoWorkspaceGuide({
+  users,
+  tasks,
+  suggestions,
+  positionProfiles,
+  onOpenTeam,
+  onOpenApprovals,
+  onOpenReports,
+  onOpenPositionProfiles,
+  onDismiss,
+}: {
+  users: User[];
+  tasks: Task[];
+  suggestions: EmailSuggestion[];
+  positionProfiles: PositionProfile[];
+  onOpenTeam: () => void;
+  onOpenApprovals: () => void;
+  onOpenReports: () => void;
+  onOpenPositionProfiles: () => void;
+  onDismiss: () => void;
+}) {
+  const demoUsers = users.filter((user) => String(user.email ?? "").endsWith("@example.invalid"));
+  const demoTasks = tasks.filter((task) =>
+    [
+      "Confirm Friday client coverage plan",
+      "Follow up on ACME renewal blockers",
+      "Reconcile ChatGPT expense receipt",
+      "Respond to payroll access text",
+    ].includes(task.title),
+  );
+  const pendingApprovals = suggestions.filter((suggestion) => suggestion.status === "pending").length;
+  const demoProfiles = positionProfiles.filter((profile) =>
+    ["Operations Manager", "Client Success Specialist", "Finance Coordinator"].includes(profile.title),
+  );
+  return (
+    <section className="mb-4 rounded-lg border border-border bg-card p-4" data-testid="panel-demo-workspace-guide">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-start gap-3">
+            <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-green text-white">
+              <Sparkles className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="display-font text-base font-bold text-foreground">Demo workspace</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Demo data has been added to this workspace. Use these views to walk through the buyer story: team visibility, approval review, reporting, and role continuity.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                <span className="rounded-md bg-muted px-2 py-1">{demoUsers.length} sample members</span>
+                <span className="rounded-md bg-muted px-2 py-1">{demoTasks.length || tasks.length} demo tasks</span>
+                <span className="rounded-md bg-muted px-2 py-1">{pendingApprovals} pending approvals</span>
+                <span className="rounded-md bg-muted px-2 py-1">{demoProfiles.length} demo profiles</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={onOpenTeam} data-testid="button-demo-open-team">
+            <Users className="size-4" />
+            Team
+          </Button>
+          <Button size="sm" variant="outline" onClick={onOpenApprovals} data-testid="button-demo-open-approvals">
+            <Inbox className="size-4" />
+            Approvals
+          </Button>
+          <Button size="sm" variant="outline" onClick={onOpenReports} data-testid="button-demo-open-reports">
+            <BarChart3 className="size-4" />
+            Reports
+          </Button>
+          <Button size="sm" variant="outline" onClick={onOpenPositionProfiles} data-testid="button-demo-open-profiles">
+            <BriefcaseBusiness className="size-4" />
+            Profiles
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDismiss} data-testid="button-demo-guide-dismiss">
+            Dismiss
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function TaskRow({
   task,
   users,
@@ -6550,6 +6632,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [onboardingManuallyOpen, setOnboardingManuallyOpen] = useState(false);
+  const [demoGuideDismissed, setDemoGuideDismissed] = useState(false);
+  const [demoGuideManuallyOpen, setDemoGuideManuallyOpen] = useState(false);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
@@ -7093,10 +7177,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     onSuccess: async (result) => {
       await invalidateWorkspace();
       setSupportView("team");
+      setDemoGuideDismissed(false);
+      setDemoGuideManuallyOpen(true);
       toast({
         title: "Demo workspace ready",
-        description: result.message ?? "Seeded a buyer-ready pilot story with team, approvals, reports, and Position Profiles.",
+        description: result.message ?? "Demo data was added to this workspace. Use the demo guide to open Team, Approvals, Reports, and Profiles.",
       });
+      window.setTimeout(() => {
+        document.getElementById("panel-demo-workspace-guide")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
     },
     onError: (error: unknown) => {
       toast({
@@ -7139,6 +7228,23 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     () => buildPositionProfiles(data?.tasks ?? [], data?.users ?? [], data?.events ?? [], data?.positionProfiles ?? []),
     [data?.tasks, data?.users, data?.events, data?.positionProfiles],
   );
+  const hasDemoData = useMemo(() => {
+    const users = data?.users ?? [];
+    const tasks = data?.tasks ?? [];
+    const suggestions = data?.suggestions ?? [];
+    return (
+      users.some((user) => String(user.email ?? "").endsWith("@example.invalid")) ||
+      tasks.some((task) =>
+        [
+          "Confirm Friday client coverage plan",
+          "Follow up on ACME renewal blockers",
+          "Reconcile ChatGPT expense receipt",
+          "Respond to payroll access text",
+        ].includes(task.title),
+      ) ||
+      suggestions.some((suggestion) => String(suggestion.fromEmail).endsWith("@example.com"))
+    );
+  }, [data?.suggestions, data?.tasks, data?.users]);
   const orderedAgenda = useMemo(
     () => orderAgendaItems(data?.agenda ?? [], agendaTaskOrder),
     [agendaTaskOrder, data?.agenda],
@@ -7278,6 +7384,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }, 0);
   };
   const showOnboarding = onboardingManuallyOpen || (!onboardingDismissed && onboardingSteps.some((step) => !step.done));
+  const openDemoGuide = () => {
+    setDemoGuideDismissed(false);
+    setDemoGuideManuallyOpen(true);
+    window.setTimeout(() => {
+      document.getElementById("panel-demo-workspace-guide")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+  const showDemoGuide = demoGuideManuallyOpen || (hasDemoData && !demoGuideDismissed);
   const scrollToReporting = () => {
     setSupportView("reports");
     window.setTimeout(() => {
@@ -7418,6 +7532,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             loading: seedDemoWorkspace.isPending,
             hint: "Create sample team, tasks, approvals, reports, and Position Profiles",
           } satisfies FunctionAction,
+          ...(hasDemoData
+            ? [
+                {
+                  id: "demo-guide",
+                  label: "Open demo guide",
+                  icon: Eye,
+                  onClick: openDemoGuide,
+                  hint: "Show where the seeded demo data lives",
+                } satisfies FunctionAction,
+              ]
+            : []),
           {
             id: "position-profiles",
             label: "Position Profiles",
@@ -7533,6 +7658,22 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               <OnboardingChecklist
                 steps={onboardingSteps}
                 onDismiss={() => dismissOnboarding(true)}
+              />
+            )}
+            {showDemoGuide && (
+              <DemoWorkspaceGuide
+                users={data.users}
+                tasks={data.tasks}
+                suggestions={data.suggestions}
+                positionProfiles={positionProfiles}
+                onOpenTeam={() => setSupportView("team")}
+                onOpenApprovals={() => setApprovalInboxOpen(true)}
+                onOpenReports={scrollToReporting}
+                onOpenPositionProfiles={() => setWorkspaceSettingsOpen(true)}
+                onDismiss={() => {
+                  setDemoGuideDismissed(true);
+                  setDemoGuideManuallyOpen(false);
+                }}
               />
             )}
             <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
