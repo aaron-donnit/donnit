@@ -187,6 +187,10 @@ type WorkspaceState = {
     preferences: AgendaPreferences;
     taskOrder: string[];
   };
+  onboarding: {
+    dismissed: boolean;
+    dismissedAt: string | null;
+  };
 };
 
 type ChatMessage = {
@@ -820,6 +824,15 @@ type MenuActionGroup = {
 
 type SupportRailView = "today" | "agenda" | "team" | "reports";
 
+type OnboardingStep = {
+  id: string;
+  title: string;
+  detail: string;
+  done: boolean;
+  actionLabel: string;
+  onAction: () => void;
+};
+
 function FunctionActionButton({ action }: { action: FunctionAction }) {
   return (
     <button
@@ -1391,6 +1404,81 @@ function WorkspaceMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function OnboardingChecklist({
+  steps,
+  onDismiss,
+}: {
+  steps: OnboardingStep[];
+  onDismiss: () => void;
+}) {
+  const doneCount = steps.filter((step) => step.done).length;
+  const nextStep = steps.find((step) => !step.done) ?? steps[steps.length - 1];
+  return (
+    <section className="mb-4 rounded-lg border border-brand-green/30 bg-brand-green/5 p-4" data-testid="panel-onboarding-checklist">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex size-8 items-center justify-center rounded-md bg-brand-green text-white">
+              <Sparkles className="size-4" />
+            </span>
+            <div>
+              <p className="display-font text-base font-bold text-foreground">Start strong</p>
+              <p className="text-sm text-muted-foreground">
+                Get Donnit to first value: capture work, approve it, schedule it, and preserve role memory.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-5">
+            {steps.map((step) => (
+              <button
+                key={step.id}
+                type="button"
+                onClick={step.onAction}
+                className={`rounded-md border p-3 text-left transition hover:border-brand-green/70 ${
+                  step.done ? "border-brand-green/40 bg-background" : "border-border bg-card"
+                }`}
+                data-testid={`button-onboarding-${step.id}`}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="ui-label">{step.actionLabel}</span>
+                  <span
+                    className={`inline-flex size-5 items-center justify-center rounded-full border ${
+                      step.done ? "border-brand-green bg-brand-green text-white" : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    {step.done ? <Check className="size-3" /> : null}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold leading-snug text-foreground">{step.title}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{step.detail}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-md border border-border bg-background p-3 xl:w-56">
+          <p className="ui-label">Setup progress</p>
+          <p className="display-font mt-1 text-2xl font-bold text-foreground">
+            {doneCount}/{steps.length}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {doneCount === steps.length ? "Ready for a pilot workflow." : `Next: ${nextStep?.title ?? "Keep going"}`}
+          </p>
+          <div className="mt-3 flex gap-2">
+            {nextStep && !nextStep.done ? (
+              <Button size="sm" onClick={nextStep.onAction} data-testid="button-onboarding-next">
+                {nextStep.actionLabel}
+              </Button>
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={onDismiss} data-testid="button-onboarding-dismiss">
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -6356,6 +6444,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaApproved, setAgendaApproved] = useState(false);
   const [agendaPreferences, setAgendaPreferences] = useState<AgendaPreferences>(DEFAULT_AGENDA_PREFERENCES);
   const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
@@ -6372,8 +6461,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const persistedAgendaApproved = data?.workspaceState?.agenda.approved ?? false;
   const persistedAgendaPreferences = JSON.stringify(data?.workspaceState?.agenda.preferences ?? DEFAULT_AGENDA_PREFERENCES);
   const persistedAgendaTaskOrder = data?.workspaceState?.agenda.taskOrder.join("|") ?? "";
+  const persistedOnboardingDismissed = data?.workspaceState?.onboarding.dismissed ?? false;
 
-  const persistWorkspaceState = (input: { key: "reviewed_notifications" | "agenda_state"; value: Record<string, unknown> }) => {
+  const persistWorkspaceState = (input: { key: "reviewed_notifications" | "agenda_state" | "onboarding_state"; value: Record<string, unknown> }) => {
     if (!data?.authenticated) return;
     apiRequest("PATCH", "/api/workspace-state", input).catch((error: unknown) => {
       console.warn("[donnit] workspace state persistence failed", error);
@@ -6415,6 +6505,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setAgendaPreferences(normalizeAgendaPreferences(data.workspaceState.agenda.preferences));
     setAgendaTaskOrder(data.workspaceState.agenda.taskOrder);
   }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds, persistedAgendaPreferences, persistedAgendaTaskOrder]);
+
+  useEffect(() => {
+    if (!data?.authenticated || !data.workspaceState) return;
+    setOnboardingDismissed(data.workspaceState.onboarding.dismissed);
+  }, [data?.authenticated, persistedOnboardingDismissed]);
 
   useEffect(() => {
     if (!googleConnectPolling) return;
@@ -6974,6 +7069,66 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
+  const focusChatInput = () => {
+    const el = document.getElementById("chat-message") as HTMLTextAreaElement | null;
+    el?.focus();
+  };
+  const dismissOnboarding = (dismissed: boolean) => {
+    setOnboardingDismissed(dismissed);
+    persistWorkspaceState({
+      key: "onboarding_state",
+      value: {
+        dismissed,
+        dismissedAt: dismissed ? new Date().toISOString() : null,
+      },
+    });
+  };
+  const onboardingSteps: OnboardingStep[] = [
+    {
+      id: "connect-google",
+      title: "Connect Google",
+      detail: "Enable Gmail scan and calendar scheduling from the same account.",
+      done: Boolean(oauthData?.connected),
+      actionLabel: oauthData?.connected ? "Connected" : needsReconnect ? "Reconnect" : "Connect",
+      onAction: startGoogleConnect,
+    },
+    {
+      id: "capture-work",
+      title: "Capture first work",
+      detail: "Use chat, import a document, or scan email to create the first work queue.",
+      done: data.tasks.length > 0 || data.suggestions.length > 0,
+      actionLabel: "Capture",
+      onAction: focusChatInput,
+    },
+    {
+      id: "approve-queue",
+      title: "Review suggestions",
+      detail: "Approve, edit, or dismiss AI-suggested tasks before they enter the list.",
+      done: data.suggestions.some((suggestion) => suggestion.status !== "pending") || data.tasks.some((task) => ["email", "slack", "sms", "document"].includes(task.source)),
+      actionLabel: "Review",
+      onAction: () => setApprovalInboxOpen(true),
+    },
+    {
+      id: "agenda",
+      title: "Build agenda",
+      detail: "Turn open work into a day plan before exporting to calendar.",
+      done: orderedAgenda.length > 0 || agendaApproved,
+      actionLabel: "Build",
+      onAction: () => {
+        setSupportView("agenda");
+        buildAgenda.mutate();
+      },
+    },
+    {
+      id: "position-profile",
+      title: "Confirm role memory",
+      detail: "Open Position Profiles and make sure recurring work has a home.",
+      done: positionProfiles.some((profile) => profile.persisted || profile.currentIncompleteTasks.length > 0 || profile.recurringTasks.length > 0),
+      actionLabel: "Open",
+      onAction: () => setWorkspaceSettingsOpen(true),
+    },
+  ];
+  const showOnboarding = !onboardingDismissed && onboardingSteps.some((step) => !step.done);
   const scrollToReporting = () => {
     setSupportView("reports");
     window.setTimeout(() => {
@@ -6999,10 +7154,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       label: "Chat to task",
       icon: ListPlus,
       primary: true,
-      onClick: () => {
-        const el = document.getElementById("chat-message") as HTMLTextAreaElement | null;
-        el?.focus();
-      },
+      onClick: focusChatInput,
       hint: "Focus chat to dictate a new list",
     },
     {
@@ -7128,6 +7280,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   ];
   const workspaceActions: FunctionAction[] = [
     {
+      id: "setup-checklist",
+      label: "Setup checklist",
+      icon: Sparkles,
+      onClick: () => dismissOnboarding(false),
+      hint: "Show the first-value onboarding checklist",
+    },
+    {
       id: "manager-report",
       label: "Reporting",
       icon: BarChart3,
@@ -7213,6 +7372,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
           {/* Work area — right */}
           <div className="lg:col-span-8 xl:col-span-9">
+            {showOnboarding && (
+              <OnboardingChecklist
+                steps={onboardingSteps}
+                onDismiss={() => dismissOnboarding(true)}
+              />
+            )}
             <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
               <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">

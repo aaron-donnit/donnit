@@ -1049,9 +1049,11 @@ function applyAgendaTaskOrder<T extends { id: string | number }>(tasks: T[], tas
 function toClientWorkspaceState(input: {
   reviewed?: DonnitUserWorkspaceState | null;
   agenda?: DonnitUserWorkspaceState | null;
+  onboarding?: DonnitUserWorkspaceState | null;
 }) {
   const reviewedValue = (input.reviewed?.value ?? {}) as Record<string, unknown>;
   const agendaValue = (input.agenda?.value ?? {}) as Record<string, unknown>;
+  const onboardingValue = (input.onboarding?.value ?? {}) as Record<string, unknown>;
   return {
     reviewedNotificationIds: cleanStringArray(reviewedValue.ids, 200),
     agenda: {
@@ -1060,6 +1062,10 @@ function toClientWorkspaceState(input: {
       approvedAt: typeof agendaValue.approvedAt === "string" ? agendaValue.approvedAt : null,
       preferences: cleanAgendaPreferences(agendaValue.preferences),
       taskOrder: cleanStringArray(agendaValue.taskOrder, 500),
+    },
+    onboarding: {
+      dismissed: onboardingValue.dismissed === true,
+      dismissedAt: typeof onboardingValue.dismissedAt === "string" ? onboardingValue.dismissedAt : null,
     },
   };
 }
@@ -1412,6 +1418,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     subtasks,
     reviewedState,
     agendaState,
+    onboardingState,
   ] = await Promise.all([
     store.listOrgMembers(orgId),
     store.listTasks(orgId),
@@ -1422,6 +1429,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     store.listTaskSubtasks(orgId),
     store.getWorkspaceState(orgId, "reviewed_notifications"),
     store.getWorkspaceState(orgId, "agenda_state"),
+    store.getWorkspaceState(orgId, "onboarding_state"),
   ]);
   const users = members.map((m) => ({
     id: m.user_id,
@@ -1434,7 +1442,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
   }));
   const clientTasks = sortClientTasks(applyRelationshipEvents(tasks.map(toClientTask), events));
   const calendarContext = await tryBuildGoogleCalendarContext(store);
-  const workspaceState = toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState });
+  const workspaceState = toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState, onboarding: onboardingState });
   return {
     authenticated: true,
     bootstrapped: true,
@@ -1647,6 +1655,13 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
         .optional()
         .transform((value) => cleanAgendaPreferences(value)),
       taskOrder: z.array(z.union([z.string(), z.number()])).max(500).optional().transform((items) => (items ?? []).map(String)),
+    }),
+  }),
+  z.object({
+    key: z.literal("onboarding_state"),
+    value: z.object({
+      dismissed: z.boolean(),
+      dismissedAt: z.string().datetime().nullable().optional(),
     }),
   }),
 ]);

@@ -182,3 +182,11 @@ CEO approval criteria:
 
 - A design partner can reach first value in one session.
 - We can measure whether Donnit is creating real behavior change.
+
+Step 8.1 implementation status:
+
+- Added a non-blocking first-value onboarding checklist to the workspace.
+- Checklist drives users through Google connection, first task capture, approval review, agenda creation, and Position Profile confirmation.
+- Added a hamburger menu action to reopen the setup checklist after dismissal.
+- Added durable onboarding dismissal state in `donnit.user_workspace_state`.
+- Added migration `20260508164500_onboarding_workspace_state.sql` to allow `onboarding_state` persistence.

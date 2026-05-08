@@ -201,7 +201,7 @@ export type DonnitUserWorkspaceState = {
   id: string;
   org_id: string;
   user_id: string;
-  state_key: "reviewed_notifications" | "agenda_state";
+  state_key: "reviewed_notifications" | "agenda_state" | "onboarding_state";
   value: Record<string, unknown>;
   created_at: string;
   updated_at: string;
