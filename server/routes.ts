@@ -1138,6 +1138,25 @@ function isWorkspaceAdmin(member: { role?: string | null } | null | undefined) {
   return ["owner", "admin"].includes(String(member?.role ?? ""));
 }
 
+function isTaskSensitive(task: Pick<DonnitTask, "visibility"> | { visibility?: string | null }) {
+  return ["personal", "confidential"].includes(String(task.visibility ?? "work"));
+}
+
+function canViewSensitiveTask(
+  task: Pick<DonnitTask, "assigned_to" | "assigned_by" | "delegated_to" | "collaborator_ids" | "visibility">,
+  actorId: string,
+  actor: { role?: string | null } | null | undefined,
+) {
+  if (!isTaskSensitive(task)) return true;
+  if (isWorkspaceAdmin(actor)) return true;
+  return (
+    task.assigned_to === actorId ||
+    task.assigned_by === actorId ||
+    task.delegated_to === actorId ||
+    (task.collaborator_ids ?? []).includes(actorId)
+  );
+}
+
 function isMemberAdminSchemaError(error: unknown) {
   const raw = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
   const haystack = `${String(raw?.message ?? "")} ${String(raw?.details ?? "")} ${String(raw?.hint ?? "")}`.toLowerCase();
@@ -1535,7 +1554,11 @@ async function buildAuthenticatedBootstrap(req: Request) {
     canAssign: m.can_assign,
     status: (m as { status?: string }).status ?? "active",
   }));
-  const clientTasks = sortClientTasks(applyRelationshipEvents(tasks.map(toClientTask), events));
+  const actor = members.find((member) => member.user_id === auth.userId);
+  const visibleTasks = tasks.filter((task) => canViewSensitiveTask(task, auth.userId, actor));
+  const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
+  const visibleEvents = events.filter((event) => !event.task_id || visibleTaskIds.has(event.task_id));
+  const clientTasks = sortClientTasks(applyRelationshipEvents(visibleTasks.map(toClientTask), visibleEvents));
   const calendarContext = await tryBuildGoogleCalendarContext(store);
   const workspaceState = toClientWorkspaceState({ reviewed: reviewedState, agenda: agendaState, onboarding: onboardingState });
   return {
@@ -1546,7 +1569,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     orgId,
     users,
     tasks: clientTasks,
-    events: events.map((event) => ({
+    events: visibleEvents.map((event) => ({
       id: event.id,
       taskId: event.task_id,
       actorId: event.actor_id,
@@ -3695,7 +3718,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               visibility: ai.visibility ?? fallbackInput.visibility,
             }
           : fallbackInput;
-        const activeProfile = (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === taskInput.assignedToId);
+        const activeProfile =
+          taskInput.visibility === "personal"
+            ? null
+            : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === taskInput.assignedToId);
         const created = await store.createTask(orgId, {
           title: taskInput.title,
           description: taskInput.description,
@@ -3708,7 +3734,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: taskInput.source,
           recurrence: taskInput.recurrence,
           reminder_days_before: taskInput.reminderDaysBefore,
-          position_profile_id: activeProfile?.id ?? null,
+          position_profile_id: taskInput.visibility === "personal" ? null : activeProfile?.id ?? null,
           visibility: taskInput.visibility ?? "work",
           visible_from: visibleFromForRecurringTask({
             recurrence: taskInput.recurrence,
@@ -3802,9 +3828,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const data = parsed.data;
+        const visibility = data.visibility ?? "work";
         const activeProfile = data.positionProfileId
           ? null
-          : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === String(data.assignedToId));
+          : visibility === "personal"
+            ? null
+            : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === String(data.assignedToId));
         const created = await store.createTask(orgId, {
           title: data.title,
           description: data.description ?? "",
@@ -3817,8 +3846,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: data.source,
           recurrence: data.recurrence,
           reminder_days_before: data.reminderDaysBefore ?? 0,
-          position_profile_id: data.positionProfileId ?? activeProfile?.id ?? null,
-          visibility: data.visibility ?? "work",
+          position_profile_id: visibility === "personal" ? null : data.positionProfileId ?? activeProfile?.id ?? null,
+          visibility,
           visible_from: data.visibleFrom ?? visibleFromForRecurringTask({
             recurrence: data.recurrence,
             due_date: data.dueDate ?? null,
@@ -3876,11 +3905,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (data.urgency !== undefined) patch.urgency = data.urgency;
         if (data.dueDate !== undefined) patch.due_date = data.dueDate;
         if (data.estimatedMinutes !== undefined) patch.estimated_minutes = data.estimatedMinutes;
+        if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
         if (data.recurrence !== undefined) patch.recurrence = data.recurrence;
         if (data.reminderDaysBefore !== undefined) patch.reminder_days_before = data.reminderDaysBefore;
-        if (data.visibility !== undefined) patch.visibility = data.visibility;
+        if (data.visibility !== undefined) {
+          patch.visibility = data.visibility;
+          if (data.visibility === "personal") {
+            patch.position_profile_id = null;
+          } else if (data.positionProfileId === undefined && !existing.position_profile_id) {
+            const orgId = existing.org_id;
+            const activeProfile = (await store.listPositionProfiles(orgId)).find(
+              (profile) => profile.current_owner_id === (patch.assigned_to ?? existing.assigned_to),
+            );
+            if (activeProfile) patch.position_profile_id = activeProfile.id;
+          }
+        }
         if (data.visibleFrom !== undefined) patch.visible_from = data.visibleFrom;
-        if (data.positionProfileId !== undefined) patch.position_profile_id = data.positionProfileId;
+        if (data.positionProfileId !== undefined) {
+          patch.position_profile_id = (patch.visibility ?? existing.visibility) === "personal" ? null : data.positionProfileId;
+        }
         if ((data.recurrence !== undefined || data.dueDate !== undefined || data.reminderDaysBefore !== undefined) && data.visibleFrom === undefined) {
           patch.visible_from = visibleFromForRecurringTask({
             recurrence: data.recurrence ?? existing.recurrence,
@@ -3888,7 +3931,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             reminder_days_before: data.reminderDaysBefore ?? existing.reminder_days_before,
           });
         }
-        if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
+        if (
+          data.assignedToId !== undefined &&
+          data.positionProfileId === undefined &&
+          (patch.visibility ?? existing.visibility) !== "personal"
+        ) {
+          const activeProfile = (await store.listPositionProfiles(existing.org_id)).find(
+            (profile) => profile.current_owner_id === patch.assigned_to,
+          );
+          patch.position_profile_id = activeProfile?.id ?? null;
+        }
         const supportsRelationshipColumns = hasTaskRelationshipColumns(existing);
         const nextDelegatedToId = data.delegatedToId === undefined
           ? existing.delegated_to ?? null
@@ -4354,7 +4406,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const profileTasks = tasks.filter((task) => (
         ((task as { position_profile_id?: string | null }).position_profile_id === profile.id ||
           (profile.current_owner_id && task.assigned_to === profile.current_owner_id)) &&
-        ((task as { visibility?: string }).visibility ?? "work") === "work"
+        ((task as { visibility?: string }).visibility ?? "work") !== "personal" &&
+        canViewSensitiveTask(task, auth.userId, actor)
       ));
       res.json({
         ok: true,
@@ -4480,14 +4533,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(404).json({ message: "Target user is not a workspace member." });
           return;
         }
-        const tasks = await store.listTasks(orgId);
+        const tasks = (await store.listTasks(orgId)).filter((task) => canViewSensitiveTask(task, auth.userId, actor));
         const profileId = parsed.data.profileId ?? null;
         const active = tasks.filter(
           (task) =>
             task.assigned_to === fromUserId &&
             task.status !== "completed" &&
             task.status !== "denied" &&
-            ((task as { visibility?: string }).visibility ?? "work") === "work",
+            ((task as { visibility?: string }).visibility ?? "work") !== "personal",
         );
         if (mode === "delegate" && active.some((task) => !hasTaskRelationshipColumns(task))) {
           res.status(409).json({ message: "Apply migration 0008 before delegating position profiles." });
@@ -4524,7 +4577,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const historical = tasks.filter(
             (task) =>
               task.assigned_to === fromUserId &&
-              ((task as { visibility?: string }).visibility ?? "work") === "work" &&
+              ((task as { visibility?: string }).visibility ?? "work") !== "personal" &&
               ((task as { position_profile_id?: string | null }).position_profile_id ?? null) !== profileId,
           );
           for (const task of historical) {
@@ -5061,13 +5114,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.json([]);
           return;
         }
-        const tasks = await store.listTasks(orgId);
+        const [members, tasks] = await Promise.all([
+          store.listOrgMembers(orgId),
+          store.listTasks(orgId),
+        ]);
+        const actor = members.find((member) => member.user_id === auth.userId);
+        const visibleTasks = tasks.filter((task) => canViewSensitiveTask(task, auth.userId, actor));
         const agendaState = await store.getWorkspaceState(orgId, "agenda_state");
         const workspaceState = toClientWorkspaceState({ agenda: agendaState });
         const calendarContext = await tryBuildGoogleCalendarContext(store);
         res.json(
           buildClientAgenda(
-            tasks.map(toClientTask),
+            visibleTasks.map(toClientTask),
             calendarContext?.busyByDate,
             calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
             workspaceState.agenda.preferences,
@@ -5104,7 +5162,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
 
-      const tasks = await store.listTasks(orgId);
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const tasks = (await store.listTasks(orgId)).filter((task) => canViewSensitiveTask(task, auth.userId, actor));
       const calendarContext = await fetchGoogleCalendarContext(access.accessToken);
       const excludedTaskIds = Array.isArray(req.body?.excludedTaskIds)
         ? new Set(req.body.excludedTaskIds.map((id: unknown) => String(id)))

@@ -2293,19 +2293,27 @@ function TaskDetailDialog({
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="task-detail-visibility">Privacy</Label>
-              <select
-                id="task-detail-visibility"
-                value={visibility}
-                onChange={(event) => setVisibility(event.target.value as "work" | "personal" | "confidential")}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-                data-testid="select-task-detail-visibility"
-              >
-                <option value="work">Work / profile memory</option>
-                <option value="personal">Personal</option>
-                <option value="confidential">Confidential</option>
-              </select>
+            <div className="flex min-h-10 flex-wrap items-center gap-3 rounded-md border border-border bg-muted/25 px-3 py-2">
+              <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={visibility === "confidential"}
+                  onChange={(event) => setVisibility(event.target.checked ? "confidential" : "work")}
+                  className="size-4 rounded border-border accent-brand-green"
+                  data-testid="checkbox-task-detail-confidential"
+                />
+                Confidential
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={visibility === "personal"}
+                  onChange={(event) => setVisibility(event.target.checked ? "personal" : "work")}
+                  className="size-4 rounded border-border accent-brand-green"
+                  data-testid="checkbox-task-detail-personal"
+                />
+                Personal
+              </label>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="task-detail-recurrence">Recurring</Label>
@@ -5860,19 +5868,27 @@ function AssignTaskDialog({
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="assign-visibility">Privacy</Label>
-              <select
-                id="assign-visibility"
-                value={visibility}
-                onChange={(event) => setVisibility(event.target.value as "work" | "personal" | "confidential")}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                data-testid="select-assign-visibility"
-              >
-                <option value="work">Work</option>
-                <option value="personal">Personal</option>
-                <option value="confidential">Confidential</option>
-              </select>
+            <div className="flex min-h-10 flex-wrap items-center gap-3 rounded-md border border-border bg-muted/25 px-3 py-2">
+              <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={visibility === "confidential"}
+                  onChange={(event) => setVisibility(event.target.checked ? "confidential" : "work")}
+                  className="size-4 rounded border-border accent-brand-green"
+                  data-testid="checkbox-assign-confidential"
+                />
+                Confidential
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={visibility === "personal"}
+                  onChange={(event) => setVisibility(event.target.checked ? "personal" : "work")}
+                  className="size-4 rounded border-border accent-brand-green"
+                  data-testid="checkbox-assign-personal"
+                />
+                Personal
+              </label>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="assign-recurrence">Repeat</Label>
