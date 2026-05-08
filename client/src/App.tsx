@@ -1705,6 +1705,12 @@ function TaskRow({
             <UserRoundCheck className="size-3.5" />
             {assignee?.name ?? "Unassigned"}
           </span>
+          {task.visibility !== "work" && (
+            <span className="inline-flex items-center gap-1 font-medium text-foreground">
+              <ShieldCheck className="size-3.5" />
+              {task.visibility === "confidential" ? "Confidential" : "Personal"}
+            </span>
+          )}
           {delegate && (
             <span className="inline-flex items-center gap-1">
               <UserPlus className="size-3.5" />
@@ -5714,6 +5720,9 @@ function AssignTaskDialog({
   const [dueDate, setDueDate] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
+  const [visibility, setVisibility] = useState<"work" | "personal" | "confidential">("work");
+  const [recurrence, setRecurrence] = useState<"none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual">("none");
+  const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -5736,8 +5745,9 @@ function AssignTaskDialog({
         assignedToId: assignedTo,
         assignedById: assignedBy,
         source: "manual",
-        recurrence: "none",
-        reminderDaysBefore: 0,
+        visibility,
+        recurrence,
+        reminderDaysBefore,
       });
       return (await res.json()) as Task;
     },
@@ -5755,6 +5765,9 @@ function AssignTaskDialog({
       setDueDate("");
       setEstimatedMinutes(30);
       setUrgency("normal");
+      setVisibility("work");
+      setRecurrence("none");
+      setReminderDaysBefore(0);
       onOpenChange(false);
     },
     onError: (error: unknown) => {
@@ -5772,9 +5785,9 @@ function AssignTaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-lg`}>
         <DialogHeader className={dialogHeaderClass}>
-          <DialogTitle>Assign task</DialogTitle>
+          <DialogTitle>Manual task</DialogTitle>
           <DialogDescription>
-            Create a task for yourself or another workspace member.
+            Create a task directly when chat is not the fastest path.
           </DialogDescription>
         </DialogHeader>
         <div className={dialogBodyClass}>
@@ -5846,6 +5859,52 @@ function AssignTaskDialog({
               </select>
             </div>
           </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-visibility">Privacy</Label>
+              <select
+                id="assign-visibility"
+                value={visibility}
+                onChange={(event) => setVisibility(event.target.value as "work" | "personal" | "confidential")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-assign-visibility"
+              >
+                <option value="work">Work</option>
+                <option value="personal">Personal</option>
+                <option value="confidential">Confidential</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-recurrence">Repeat</Label>
+              <select
+                id="assign-recurrence"
+                value={recurrence}
+                onChange={(event) => setRecurrence(event.target.value as "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                data-testid="select-assign-recurrence"
+              >
+                <option value="none">No</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-reminder">Show early</Label>
+              <Input
+                id="assign-reminder"
+                type="number"
+                min={0}
+                max={365}
+                step={1}
+                value={reminderDaysBefore}
+                onChange={(event) => setReminderDaysBefore(Math.max(0, Number(event.target.value) || 0))}
+                data-testid="input-assign-reminder"
+              />
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="assign-description">Notes</Label>
             <Textarea
@@ -5866,7 +5925,7 @@ function AssignTaskDialog({
           </Button>
           <Button onClick={() => create.mutate()} disabled={!ready || create.isPending} data-testid="button-assign-submit">
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-            Assign task
+            Create task
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -8058,11 +8117,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const addTaskActions: FunctionAction[] = [
     {
       id: "create-todo",
-      label: "Chat to task",
-      icon: ListPlus,
+      label: "Manual task",
+      icon: UserPlus,
       primary: true,
-      onClick: focusChatInput,
-      hint: "Focus chat to dictate a new list",
+      onClick: () => setAssignTaskOpen(true),
+      hint: "Open a form to create a task directly",
     },
     {
       id: "import-document",
@@ -8077,13 +8136,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: MailPlus,
       onClick: () => setManualImportOpen(true),
       hint: "Paste an email into the approval queue",
-    },
-    {
-      id: "assign-task",
-      label: "Assign task",
-      icon: UserPlus,
-      onClick: () => setAssignTaskOpen(true),
-      hint: "Create and assign a task",
     },
   ];
   const dailyActions: FunctionAction[] = [

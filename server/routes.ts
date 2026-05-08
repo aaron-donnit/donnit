@@ -524,11 +524,45 @@ function parseEstimate(message: string) {
   return 30;
 }
 
+function parseTaskVisibility(message: string): "work" | "personal" | "confidential" {
+  const text = message.toLowerCase();
+  if (/\b(confidential|sensitive|privileged|private work|restricted)\b/.test(text)) return "confidential";
+  if (/\b(personal|private|non-work|non work)\b/.test(text)) return "personal";
+  return "work";
+}
+
+function assigneeAliases(name?: string | null, email?: string | null) {
+  const aliases = new Set<string>();
+  const normalizedName = (name ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedEmail = (email ?? "").toLowerCase().trim();
+  if (normalizedName) {
+    aliases.add(normalizedName);
+    for (const part of normalizedName.split(" ")) {
+      if (part.length > 1) aliases.add(part);
+    }
+  }
+  if (normalizedEmail) {
+    aliases.add(normalizedEmail);
+    const [prefix] = normalizedEmail.split("@");
+    if (prefix && prefix.length > 1) aliases.add(prefix);
+  }
+  return Array.from(aliases).filter(Boolean);
+}
+
+function textMentionsAssignee(text: string, name?: string | null, email?: string | null) {
+  const normalized = text.toLowerCase();
+  const tokens = new Set(normalized.match(/[a-z0-9._%+-]+/g) ?? []);
+  return assigneeAliases(name, email).some((alias) => {
+    if (alias.includes("@")) return normalized.includes(alias);
+    return tokens.has(alias) || normalized.includes(`@${alias}`);
+  });
+}
+
 function findAssignee(message: string, users: User[]) {
   const text = message.toLowerCase();
-  const explicit = users.find((user) => text.includes(`@${user.name.toLowerCase()}`) || text.includes(user.email.toLowerCase()));
+  const explicit = users.find((user) => textMentionsAssignee(text, user.name, user.email));
   if (explicit) return explicit;
-  const named = users.find((user) => user.id !== DEMO_USER_ID && text.includes(user.name.toLowerCase()));
+  const named = users.find((user) => user.id !== DEMO_USER_ID && textMentionsAssignee(text, user.name, user.email));
   return named ?? users.find((user) => user.id === DEMO_USER_ID) ?? users[0];
 }
 
@@ -599,6 +633,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     "gi",
   );
   const cleaned = message
+    .replace(/\b(?:confidential|sensitive|privileged|restricted|personal|private|non-work|non work)\b/gi, "")
     .replace(/\bfor me (?:thats|that's|that is)\b/gi, "")
     .replace(/^(?:for me|me)\b[,\s:]*/gi, "")
     .replace(/\bfor me to\s+/gi, "")
@@ -643,7 +678,7 @@ function parseChatTask(message: string, users: User[]): InsertTask {
   const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
   const assignedToId = assignee?.id ?? DEMO_USER_ID;
   const assignedById = DEMO_USER_ID;
-  const title = titleFromMessage(message, [assignee?.name ?? "", assignee?.email ?? ""]) || "Untitled task";
+  const title = titleFromMessage(message, assigneeAliases(assignee?.name, assignee?.email)) || "Untitled task";
   const dueDate = parseDueDate(message);
   const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
 
@@ -659,6 +694,7 @@ function parseChatTask(message: string, users: User[]): InsertTask {
     source: "chat",
     recurrence,
     reminderDaysBefore,
+    visibility: parseTaskVisibility(message),
   };
 }
 
@@ -1637,20 +1673,14 @@ function parseChatTaskAuthenticated(
 ) {
   const text = message.toLowerCase();
   const explicit = members.find((m) => {
-    const name = (m.profile?.full_name ?? "").toLowerCase();
-    const email = (m.profile?.email ?? "").toLowerCase();
-    if (!name && !email) return false;
-    return (name && (text.includes(`@${name}`) || text.includes(name))) || (email && text.includes(email));
+    return textMentionsAssignee(text, m.profile?.full_name, m.profile?.email);
   });
   const assignee = explicit ?? members.find((m) => m.user_id === selfId) ?? members[0];
   const reminderDaysBefore = parseAnnualReminderDays(message);
   const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
   const assignedToId = assignee?.user_id ?? selfId;
   const title =
-    titleFromMessage(message, [
-      assignee?.profile?.full_name ?? "",
-      assignee?.profile?.email ?? "",
-    ]) || "Untitled task";
+    titleFromMessage(message, assigneeAliases(assignee?.profile?.full_name, assignee?.profile?.email)) || "Untitled task";
   const dueDate = parseDueDate(message);
   const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
   return {
@@ -1665,6 +1695,7 @@ function parseChatTaskAuthenticated(
     source: "chat" as const,
     recurrence: recurrence as DonnitTask["recurrence"],
     reminderDaysBefore,
+    visibility: parseTaskVisibility(message),
   };
 }
 
@@ -1962,6 +1993,7 @@ type AiTaskExtraction = {
   dueDate: string | null;
   estimatedMinutes: number;
   assigneeHint: string | null;
+  visibility: "work" | "personal" | "confidential";
   recurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
   reminderDaysBefore: number;
   confidence: "low" | "medium" | "high";
@@ -1990,6 +2022,7 @@ const aiTaskExtractionSchema = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
   estimatedMinutes: z.number().int().min(5).max(1440),
   assigneeHint: z.string().trim().max(160).nullable(),
+  visibility: z.enum(["work", "personal", "confidential"]),
   recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]),
   reminderDaysBefore: z.number().int().min(0).max(365),
   confidence: z.enum(["low", "medium", "high"]),
@@ -2096,6 +2129,7 @@ async function extractTaskWithAi(input: {
                 "Return only schema fields. Use null dueDate when no date is clear.",
                 "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
                 "If the text says to assign someone, put that person in assigneeHint and make the title the work itself.",
+                "If the user marks the task confidential, sensitive, privileged, or restricted, set visibility=confidential. If they mark it personal or private/non-work, set visibility=personal. Otherwise set visibility=work.",
                 "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
                 "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
                 "Descriptions should explain the next step in one or two plain sentences.",
@@ -2152,6 +2186,7 @@ async function extractTaskWithAi(input: {
                 dueDate: { anyOf: [{ type: "string", format: "date" }, { type: "null" }] },
                 estimatedMinutes: { type: "integer" },
                 assigneeHint: { anyOf: [{ type: "string" }, { type: "null" }] },
+                visibility: { type: "string", enum: ["work", "personal", "confidential"] },
                 recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "quarterly", "annual"] },
                 reminderDaysBefore: { type: "integer" },
                 confidence: { type: "string", enum: ["low", "medium", "high"] },
@@ -2167,6 +2202,7 @@ async function extractTaskWithAi(input: {
                 "dueDate",
                 "estimatedMinutes",
                 "assigneeHint",
+                "visibility",
                 "recurrence",
                 "reminderDaysBefore",
                 "confidence",
@@ -2201,11 +2237,13 @@ function matchAiAssignee<T extends { name?: string; email?: string; id?: string 
 ): T | null {
   if (!hint) return null;
   const lowered = hint.toLowerCase();
+  const hintTokens = new Set(lowered.match(/[a-z0-9._%+-]+/g) ?? []);
   return (
     candidates.find((candidate) => {
-      const name = (candidate.name ?? "").toLowerCase();
-      const email = (candidate.email ?? "").toLowerCase();
-      return Boolean((name && lowered.includes(name)) || (email && lowered.includes(email)));
+      return assigneeAliases(candidate.name, candidate.email).some((alias) => {
+        if (alias.includes("@")) return lowered.includes(alias) || hintTokens.has(alias);
+        return lowered === alias || lowered.includes(alias) || hintTokens.has(alias);
+      });
     }) ?? null
   );
 }
@@ -3638,8 +3676,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
         const resolvedTitle = ai
           ? normalizeAiTitle(ai.title, fallbackInput.title, [
-              aiAssignee?.profile?.full_name ?? "",
-              aiAssignee?.profile?.email ?? "",
+              ...assigneeAliases(aiAssignee?.profile?.full_name, aiAssignee?.profile?.email),
             ])
           : fallbackInput.title;
         const taskInput = ai
@@ -3655,6 +3692,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               source: "chat" as const,
               recurrence: ai.recurrence,
               reminderDaysBefore: ai.reminderDaysBefore,
+              visibility: ai.visibility ?? fallbackInput.visibility,
             }
           : fallbackInput;
         const activeProfile = (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === taskInput.assignedToId);
@@ -3671,7 +3709,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           recurrence: taskInput.recurrence,
           reminder_days_before: taskInput.reminderDaysBefore,
           position_profile_id: activeProfile?.id ?? null,
-          visibility: "work",
+          visibility: taskInput.visibility ?? "work",
           visible_from: visibleFromForRecurringTask({
             recurrence: taskInput.recurrence,
             due_date: taskInput.dueDate,
@@ -3710,7 +3748,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const resolvedUrgency =
       resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
     const resolvedTitle = ai
-      ? normalizeAiTitle(ai.title, fallbackInput.title, [aiAssignee?.name ?? "", aiAssignee?.email ?? ""])
+      ? normalizeAiTitle(ai.title, fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
       : fallbackInput.title;
     const taskInput = ai
       ? {
@@ -3725,6 +3763,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: "chat" as const,
           recurrence: ai.recurrence,
           reminderDaysBefore: ai.reminderDaysBefore,
+          visibility: ai.visibility ?? fallbackInput.visibility,
         }
       : fallbackInput;
     const task = await storage.createTask(taskInput);
