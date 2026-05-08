@@ -142,23 +142,32 @@
 .donnit-landing-handoff .brand-mark {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 10px;
   font-family: var(--display);
   font-weight: 800;
   font-size: 22px;
   letter-spacing: -0.035em;
   color: var(--charcoal);
+  white-space: nowrap;
 }
 .donnit-landing-handoff .brand-mark .word { display: inline-block; letter-spacing: inherit; }
 .donnit-landing-handoff .brand-mark .it { color: var(--green); letter-spacing: inherit; margin-left: -0.01em; }
 .donnit-landing-handoff .brand-icon {
-  width: 28px; height: 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   background: var(--green);
   border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--charcoal);
+}
+.donnit-landing-handoff .brand-icon svg {
+  display: block;
+  flex: 0 0 auto;
 }
 .donnit-landing-handoff .nav-list { display: flex; gap: 4px; align-items: center; }
 .donnit-landing-handoff .nav-list a {
@@ -1341,6 +1350,116 @@
   flex-wrap: wrap;
   gap: 16px;
 }
+
+/* =========== Lead form =========== */
+.donnit-landing-handoff .lead-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(28, 31, 36, 0.58);
+  backdrop-filter: blur(10px);
+}
+.donnit-landing-handoff .lead-modal {
+  position: relative;
+  width: min(720px, 100%);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--warm-white);
+  padding: 34px;
+  box-shadow: 0 30px 60px -30px rgba(28, 31, 36, 0.5);
+}
+.donnit-landing-handoff .lead-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  color: var(--charcoal-3);
+  font-size: 24px;
+  line-height: 1;
+}
+.donnit-landing-handoff .lead-close:hover {
+  background: var(--warm-white-2);
+  color: var(--charcoal);
+}
+.donnit-landing-handoff .lead-modal h2 {
+  margin: 10px 0 10px;
+  max-width: 560px;
+  font-family: var(--display);
+  font-size: clamp(30px, 4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--charcoal);
+}
+.donnit-landing-handoff .lead-modal p {
+  margin: 0;
+  color: var(--charcoal-3);
+}
+.donnit-landing-handoff .lead-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 24px;
+}
+.donnit-landing-handoff .lead-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--charcoal);
+}
+.donnit-landing-handoff .lead-form label span {
+  font-weight: 500;
+  color: var(--charcoal-3);
+}
+.donnit-landing-handoff .lead-form .full {
+  grid-column: 1 / -1;
+}
+.donnit-landing-handoff .lead-form input,
+.donnit-landing-handoff .lead-form textarea {
+  width: 100%;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: #fff;
+  padding: 12px 13px;
+  color: var(--charcoal);
+  font: inherit;
+  outline: none;
+}
+.donnit-landing-handoff .lead-form textarea {
+  resize: vertical;
+}
+.donnit-landing-handoff .lead-form input:focus,
+.donnit-landing-handoff .lead-form textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(0, 194, 122, 0.14);
+}
+.donnit-landing-handoff .lead-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.donnit-landing-handoff .lead-status {
+  grid-column: 1 / -1;
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  background: var(--green-pale);
+  color: var(--green-deeper);
+  font-size: 13px;
+  font-weight: 600;
+}
+.donnit-landing-handoff .lead-status.error {
+  background: rgba(255, 92, 53, 0.12);
+  color: #C63D17;
+}
 .donnit-landing-handoff footer.site .legal .smol { font-family: var(--mono); }
 
 /* =========== Reveal animation =========== */
@@ -1376,4 +1495,8 @@
   .donnit-landing-handoff .container, .donnit-landing-handoff .narrow { padding: 0 22px; }
   .donnit-landing-handoff .site-header .inner { padding: 14px 22px; }
   .donnit-landing-handoff .stats-grid { grid-template-columns: 1fr 1fr; }
+  .donnit-landing-handoff .lead-modal { padding: 26px 20px; }
+  .donnit-landing-handoff .lead-form { grid-template-columns: 1fr; }
+  .donnit-landing-handoff .lead-actions { justify-content: stretch; }
+  .donnit-landing-handoff .lead-actions .btn { width: 100%; justify-content: center; }
 }

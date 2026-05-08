@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import "../landing-handoff.css";
 
 /* =========================================================
@@ -6,9 +6,14 @@ import "../landing-handoff.css";
    ========================================================= */
 
 const APP_ROUTE = "#/app";
-const DEMO_MAILTO =
-  "mailto:hello@donnit.ai?subject=Book%20a%20Donnit%20demo&body=I%20want%20to%20see%20how%20Donnit%20can%20help%20my%20team.";
 const CONTACT_MAILTO = "mailto:hello@donnit.ai";
+type LeadIntent = "signup" | "demo";
+type LeadFormResult = {
+  ok: boolean;
+  delivery: "sent" | "mailto";
+  href?: string;
+  message?: string;
+};
 
 /* ---------- icons ---------- */
 const IconCheck = ({ size = 14, stroke = 2.5 }) => (
@@ -65,7 +70,7 @@ function useReveal() {
 }
 
 /* ---------- Header ---------- */
-function Header() {
+function Header({ onLead }: { onLead: (intent: LeadIntent) => void }) {
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const fn = () => setScrolled(window.scrollY > 8);
@@ -89,9 +94,9 @@ function Header() {
         </nav>
         <div className="nav-cta">
           <a href={APP_ROUTE} className="btn btn-ghost">Sign in</a>
-          <a href={APP_ROUTE} className="btn btn-primary btn-arrow">
-            Open Donnit <IconArrow />
-          </a>
+          <button type="button" className="btn btn-primary btn-arrow" onClick={() => onLead("signup")}>
+            Sign Up <IconArrow />
+          </button>
         </div>
       </div>
     </header>
@@ -219,7 +224,7 @@ function TaskRow({ task, onToggle }: { task: { name: string; meta: string; urg: 
 }
 
 /* ---------- Hero ---------- */
-function Hero() {
+function Hero({ onLead }: { onLead: (intent: LeadIntent) => void }) {
   return (
     <section className="hero">
       <div className="container">
@@ -236,7 +241,9 @@ function Hero() {
               Donnit captures every task from chat and email, hands it to the right person, and keeps a complete record of who did what — so when people change roles, go on leave, or move on, the work and the knowledge stay.
             </p>
             <div className="hero-cta">
-              <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Start pilot <IconArrow /></a>
+              <button type="button" className="btn btn-primary btn-arrow" onClick={() => onLead("signup")}>
+                Sign Up <IconArrow />
+              </button>
               <a href="#how" className="btn btn-ghost">Watch the 60-second tour →</a>
             </div>
             <div className="hero-meta">
@@ -707,7 +714,7 @@ function Continuity() {
 }
 
 /* ---------- Pricing ---------- */
-function Pricing() {
+function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
   return (
     <section className="block" id="pricing">
       <div className="container">
@@ -729,7 +736,7 @@ function Pricing() {
               <li>Approval inbox for suggested tasks</li>
             </ul>
             <div className="price-cta">
-              <a href={APP_ROUTE} className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }}>Open Donnit</a>
+              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("signup")}>Sign Up</button>
             </div>
           </div>
 
@@ -747,7 +754,7 @@ function Pricing() {
               <li>Position Profile setup</li>
             </ul>
             <div className="price-cta">
-              <a href={DEMO_MAILTO} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Book a demo</a>
+              <button type="button" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a demo</button>
             </div>
           </div>
 
@@ -764,7 +771,7 @@ function Pricing() {
               <li>Security review package planned</li>
             </ul>
             <div className="price-cta">
-              <a href={DEMO_MAILTO} className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }}>Book a call</a>
+              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a call</button>
             </div>
           </div>
         </div>
@@ -774,15 +781,15 @@ function Pricing() {
 }
 
 /* ---------- Final CTA ---------- */
-function FinalCTA() {
+function FinalCTA({ onLead }: { onLead: (intent: LeadIntent) => void }) {
   return (
     <section className="final-cta">
       <div className="container">
         <h2 className="reveal">Done.<br />Logged. Continuous.</h2>
         <p className="reveal reveal-2">Stop losing work to inboxes, transitions, and tribal knowledge. Donnit keeps the tasks moving and the record intact — start with one role or one team workflow.</p>
         <div className="reveal reveal-3" style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <a href={APP_ROUTE} className="btn btn-primary btn-arrow">Open Donnit <IconArrow /></a>
-          <a href={DEMO_MAILTO} className="btn btn-outline" style={{ borderColor: 'var(--charcoal)' }}>Book a 15-min demo</a>
+          <button type="button" className="btn btn-primary btn-arrow" onClick={() => onLead("signup")}>Sign Up <IconArrow /></button>
+          <button type="button" className="btn btn-outline" style={{ borderColor: 'var(--charcoal)' }} onClick={() => onLead("demo")}>Book a 15-min demo</button>
         </div>
         <div className="meta reveal reveal-4">Start with one workflow · Slack, Gmail, SMS, and chat intake</div>
 
@@ -839,7 +846,7 @@ function Footer() {
           <div className="col">
             <h4>Company</h4>
             <a href={CONTACT_MAILTO}>About</a>
-            <a href={DEMO_MAILTO}>Customers</a>
+            <a href={CONTACT_MAILTO}>Customers</a>
             <a href={CONTACT_MAILTO}>Careers</a>
             <a href={CONTACT_MAILTO}>Press</a>
           </div>
@@ -865,20 +872,135 @@ function Footer() {
   );
 }
 
+function LeadFormModal({
+  open,
+  intent,
+  onClose,
+}: {
+  open: boolean;
+  intent: LeadIntent;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<"idle" | "submitting" | "sent" | "mailto" | "error">("idle");
+  const [statusMessage, setStatusMessage] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setStatus("idle");
+    setStatusMessage("");
+    setMessage(
+      intent === "demo"
+        ? "I would like to book a demo and learn how Donnit can support workforce continuity."
+        : "I would like to sign up for Donnit and learn the best way to get started.",
+    );
+  }, [intent, open]);
+
+  if (!open) return null;
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setStatus("submitting");
+    setStatusMessage("");
+    try {
+      const response = await fetch("/api/sales-leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent,
+          name,
+          email,
+          phone,
+          companyName: companyName.trim() || undefined,
+          message,
+        }),
+      });
+      const result = (await response.json()) as LeadFormResult | { message?: string };
+      if (!response.ok) throw new Error(result.message || "Could not submit the form.");
+      const leadResult = result as LeadFormResult;
+      if (leadResult.delivery === "mailto" && leadResult.href) {
+        window.location.href = leadResult.href;
+        setStatus("mailto");
+        setStatusMessage("Your email app opened with the sales request prepared for sales@donnit.ai.");
+        return;
+      }
+      setStatus("sent");
+      setStatusMessage(leadResult.message || "Thanks. Your request was sent to sales@donnit.ai.");
+    } catch (error) {
+      setStatus("error");
+      setStatusMessage(error instanceof Error ? error.message : "Could not submit the form.");
+    }
+  };
+
+  return (
+    <div className="lead-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="lead-form-title">
+      <div className="lead-modal">
+        <button type="button" className="lead-close" onClick={onClose} aria-label="Close form">×</button>
+        <div className="eyebrow">{intent === "demo" ? "Book a demo" : "Sign up"}</div>
+        <h2 id="lead-form-title">Tell us where to reach you.</h2>
+        <p>Send your details to Donnit sales and we will follow up directly.</p>
+        <form onSubmit={submit} className="lead-form">
+          <label>
+            Name
+            <input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} autoComplete="name" />
+          </label>
+          <label>
+            Email
+            <input value={email} onChange={(event) => setEmail(event.target.value)} required type="email" autoComplete="email" />
+          </label>
+          <label>
+            Phone
+            <input value={phone} onChange={(event) => setPhone(event.target.value)} required minLength={7} autoComplete="tel" />
+          </label>
+          <label>
+            Company Name <span>(Optional)</span>
+            <input value={companyName} onChange={(event) => setCompanyName(event.target.value)} autoComplete="organization" />
+          </label>
+          <label className="full">
+            Short message
+            <textarea value={message} onChange={(event) => setMessage(event.target.value)} required minLength={2} rows={4} />
+          </label>
+          {statusMessage && <div className={`lead-status ${status}`}>{statusMessage}</div>}
+          <div className="lead-actions">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-primary btn-arrow" disabled={status === "submitting"}>
+              {status === "submitting" ? "Sending..." : "Send to sales"} <IconArrow />
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- App ---------- */
 export default function DonnitLandingPage() {
   useReveal();
+  const [leadForm, setLeadForm] = useState<{ open: boolean; intent: LeadIntent }>({
+    open: false,
+    intent: "signup",
+  });
+  const openLeadForm = (intent: LeadIntent) => setLeadForm({ open: true, intent });
   return (
     <div className="donnit-landing-handoff">
-      <Header />
-      <Hero />
+      <Header onLead={openLeadForm} />
+      <Hero onLead={openLeadForm} />
       <Pain />
       <Differentiators />
       <Continuity />
       <ChatCapture />
-      <Pricing />
-      <FinalCTA />
+      <Pricing onLead={openLeadForm} />
+      <FinalCTA onLead={openLeadForm} />
       <Footer />
+      <LeadFormModal
+        open={leadForm.open}
+        intent={leadForm.intent}
+        onClose={() => setLeadForm((current) => ({ ...current, open: false }))}
+      />
     </div>
   );
 }

@@ -1831,6 +1831,15 @@ const suggestionReplySchema = z.object({
   message: z.string().trim().min(2).max(4000),
 });
 
+const salesLeadSchema = z.object({
+  intent: z.enum(["signup", "demo"]).default("signup"),
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().email().max(240),
+  phone: z.string().trim().min(7).max(40),
+  companyName: z.string().trim().max(160).optional(),
+  message: z.string().trim().min(2).max(1200),
+});
+
 function extractOutputText(response: any): string | null {
   if (typeof response?.output_text === "string") return response.output_text;
   const output = Array.isArray(response?.output) ? response.output : [];
@@ -2093,6 +2102,49 @@ async function sendSmsReply(input: { to: string; message: string }) {
   return payload.sid
     ? { ok: true, providerMessageId: payload.sid }
     : { ok: false, reason: payload.error_message ?? "twilio_send_failed" };
+}
+
+function salesLeadText(input: z.infer<typeof salesLeadSchema>) {
+  return [
+    `Intent: ${input.intent === "demo" ? "Book a demo" : "Sign up"}`,
+    `Name: ${input.name}`,
+    `Email: ${input.email}`,
+    `Phone: ${input.phone}`,
+    `Company: ${input.companyName?.trim() || "Not provided"}`,
+    "",
+    "Message:",
+    input.message,
+  ].join("\n");
+}
+
+function salesLeadMailto(input: z.infer<typeof salesLeadSchema>) {
+  const to = process.env.DONNIT_SALES_TO_EMAIL || "sales@donnit.ai";
+  const subject = input.intent === "demo" ? "Donnit demo request" : "Donnit sign up request";
+  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(salesLeadText(input))}`;
+}
+
+async function sendSalesLead(input: z.infer<typeof salesLeadSchema>) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.DONNIT_SALES_FROM_EMAIL;
+  const to = process.env.DONNIT_SALES_TO_EMAIL || "sales@donnit.ai";
+  if (!apiKey || !from) return { ok: false, reason: "sales_email_not_configured" };
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to,
+      reply_to: input.email,
+      subject: input.intent === "demo" ? `Donnit demo request from ${input.name}` : `Donnit sign up request from ${input.name}`,
+      text: salesLeadText(input),
+    }),
+  });
+  if (!response.ok) return { ok: false, reason: `resend_http_${response.status}` };
+  const payload = (await response.json()) as { id?: string };
+  return { ok: true, providerMessageId: payload.id ?? null };
 }
 
 async function resolveDefaultIngestTarget(): Promise<IngestTarget | null> {
@@ -4161,6 +4213,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       message: "The reply was prepared to copy.",
       body: parsed.data.message,
     });
+  });
+
+  app.post("/api/sales-leads", async (req: Request, res: Response) => {
+    const parsed = salesLeadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Name, email, phone, and message are required." });
+      return;
+    }
+    try {
+      const sent = await sendSalesLead(parsed.data);
+      if (sent.ok) {
+        res.json({
+          ok: true,
+          delivery: "sent",
+          target: process.env.DONNIT_SALES_TO_EMAIL || "sales@donnit.ai",
+          providerMessageId: sent.providerMessageId,
+          message: "Thanks. Your request was sent to Donnit sales.",
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        delivery: "mailto",
+        target: process.env.DONNIT_SALES_TO_EMAIL || "sales@donnit.ai",
+        fallbackReason: sent.reason,
+        href: salesLeadMailto(parsed.data),
+        message: "Email sending is not configured yet. Open the prepared email to send your request.",
+      });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   // ------------------------------------------------------------------
