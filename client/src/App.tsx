@@ -3314,12 +3314,15 @@ function TeamViewPanel({
   const visibleTasks = attentionQueue.length > 0 ? attentionQueue : active;
   const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
   const seedDemoTeam = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/admin/seed-demo-team"),
-    onSuccess: async () => {
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/seed-demo-team");
+      return (await res.json()) as { message?: string; tasks?: number; suggestions?: number; positionProfiles?: number };
+    },
+    onSuccess: async (result) => {
       await invalidateWorkspace();
       toast({
-        title: "Demo team added",
-        description: "The Team dashboard now has sample members and tasks to test.",
+        title: "Demo workspace ready",
+        description: result.message ?? "The Team dashboard now has sample members, tasks, approvals, and profiles to test.",
       });
     },
     onError: (error: unknown) => {
@@ -3368,7 +3371,7 @@ function TeamViewPanel({
             <Users className="mx-auto size-6 text-brand-green" />
             <p className="mt-2 text-sm font-medium text-foreground">No team members yet.</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Add sample members to test manager reporting before inviting real users.
+              Add a pilot demo workspace before inviting real users.
             </p>
             <Button
               size="sm"
@@ -3378,7 +3381,7 @@ function TeamViewPanel({
               data-testid="button-seed-demo-team"
             >
               {seedDemoTeam.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-              Add demo team
+              Seed demo workspace
             </Button>
           </div>
         ) : (
@@ -7075,6 +7078,35 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
   });
 
+  const seedDemoWorkspace = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/seed-demo-team");
+      return (await res.json()) as {
+        message?: string;
+        users?: number;
+        tasks?: number;
+        subtasks?: number;
+        suggestions?: number;
+        positionProfiles?: number;
+      };
+    },
+    onSuccess: async (result) => {
+      await invalidateWorkspace();
+      setSupportView("team");
+      toast({
+        title: "Demo workspace ready",
+        description: result.message ?? "Seeded a buyer-ready pilot story with team, approvals, reports, and Position Profiles.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not seed demo workspace",
+        description: apiErrorMessage(error, "Confirm you are an admin and SUPABASE_SERVICE_ROLE_KEY is set."),
+        variant: "destructive",
+      });
+    },
+  });
+
   const metrics = useMemo(() => {
     const tasks = data?.tasks ?? [];
     const suggestions = data?.suggestions ?? [];
@@ -7378,6 +7410,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const adminActions: FunctionAction[] = [
     ...(canManagePositionProfiles
       ? [
+          {
+            id: "seed-demo-workspace",
+            label: "Seed demo workspace",
+            icon: Sparkles,
+            onClick: () => seedDemoWorkspace.mutate(),
+            loading: seedDemoWorkspace.isPending,
+            hint: "Create sample team, tasks, approvals, reports, and Position Profiles",
+          } satisfies FunctionAction,
           {
             id: "position-profiles",
             label: "Position Profiles",

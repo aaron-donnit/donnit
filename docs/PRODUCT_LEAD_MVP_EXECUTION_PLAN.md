@@ -197,3 +197,10 @@ Step 8.2 implementation status:
 - Tracks captured work volume, AI approval quality, automation/source share, work health, agenda habit, and continuity coverage.
 - Surfaces pilot risks such as pending approvals, overdue work, delegated accountability, and high-risk Position Profiles.
 - Keeps the metrics framed around behavior change and workforce continuity, not employee surveillance.
+
+Step 8.3 implementation status:
+
+- Expanded the demo seed into a buyer-ready pilot workspace.
+- Seed now creates sample team members, realistic open/completed tasks, subtasks, pending approval suggestions, and Position Profiles.
+- Added an admin menu action to seed the demo workspace even when team members already exist.
+- Demo data is idempotent so rerunning the action refreshes missing pieces without duplicating existing sample records.

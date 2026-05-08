@@ -1693,13 +1693,41 @@ const positionProfileUpdateSchema = z.object({
   riskSummary: z.string().trim().max(500).optional(),
 });
 
-const demoTeamMembers = [
+type DemoTaskSeed = {
+  title: string;
+  description: string;
+  urgency: "low" | "normal" | "high" | "critical";
+  dueOffset: number;
+  estimatedMinutes: number;
+  source: DonnitTask["source"];
+  status?: DonnitTask["status"];
+  recurrence?: DonnitTask["recurrence"];
+  completedOffset?: number;
+  subtasks?: string[];
+};
+
+type DemoTeamMemberSeed = {
+  key: string;
+  name: string;
+  persona: string;
+  role: "manager" | "member";
+  canAssign: boolean;
+  positionTitle: string;
+  positionRisk: number;
+  positionSummary: string;
+  tasks: DemoTaskSeed[];
+};
+
+const demoTeamMembers: DemoTeamMemberSeed[] = [
   {
     key: "maya",
     name: "Maya Chen",
     persona: "operations",
     role: "manager" as const,
     canAssign: true,
+    positionTitle: "Operations Manager",
+    positionRisk: 42,
+    positionSummary: "Owns weekly coverage planning, vendor coordination, and operational handoff routines.",
     tasks: [
       {
         title: "Confirm Friday client coverage plan",
@@ -1708,6 +1736,7 @@ const demoTeamMembers = [
         dueOffset: 0,
         estimatedMinutes: 45,
         source: "chat" as const,
+        subtasks: ["Review open client items", "Confirm backup owner", "Post coverage summary"],
       },
       {
         title: "Review unread vendor renewal request",
@@ -1716,6 +1745,16 @@ const demoTeamMembers = [
         dueOffset: 2,
         estimatedMinutes: 30,
         source: "email" as const,
+        subtasks: ["Open vendor renewal email", "Confirm renewal amount", "Send decision to finance"],
+      },
+      {
+        title: "Send weekly operations handoff",
+        description: "Recurring Friday handoff that summarizes open blockers, owner changes, and weekend coverage.",
+        urgency: "normal" as const,
+        dueOffset: 5,
+        estimatedMinutes: 40,
+        source: "annual" as const,
+        recurrence: "annual" as const,
       },
     ],
   },
@@ -1725,6 +1764,9 @@ const demoTeamMembers = [
     persona: "client-success",
     role: "member" as const,
     canAssign: false,
+    positionTitle: "Client Success Specialist",
+    positionRisk: 68,
+    positionSummary: "High-risk customer continuity role with overdue renewal work and recurring account knowledge.",
     tasks: [
       {
         title: "Follow up on ACME renewal blockers",
@@ -1733,6 +1775,7 @@ const demoTeamMembers = [
         dueOffset: -1,
         estimatedMinutes: 60,
         source: "slack" as const,
+        subtasks: ["Summarize renewal blockers", "Tag finance owner", "Update ACME account notes"],
       },
       {
         title: "Prepare onboarding notes for replacement coverage",
@@ -1741,6 +1784,17 @@ const demoTeamMembers = [
         dueOffset: 4,
         estimatedMinutes: 50,
         source: "document" as const,
+        subtasks: ["List recurring customer meetings", "Add contract renewal steps", "Attach account links"],
+      },
+      {
+        title: "Complete QBR follow-up summary",
+        description: "Summarized last quarter's customer follow-ups and attached the open action list for the account team.",
+        urgency: "low" as const,
+        dueOffset: -3,
+        estimatedMinutes: 35,
+        source: "manual" as const,
+        status: "completed" as const,
+        completedOffset: -2,
       },
     ],
   },
@@ -1750,6 +1804,9 @@ const demoTeamMembers = [
     persona: "finance",
     role: "member" as const,
     canAssign: false,
+    positionTitle: "Finance Coordinator",
+    positionRisk: 35,
+    positionSummary: "Maintains expense reconciliation, payroll access follow-up, and monthly close support.",
     tasks: [
       {
         title: "Reconcile ChatGPT expense receipt",
@@ -1758,6 +1815,7 @@ const demoTeamMembers = [
         dueOffset: 1,
         estimatedMinutes: 15,
         source: "email" as const,
+        subtasks: ["Confirm receipt amount", "Select expense category", "Attach receipt to monthly report"],
       },
       {
         title: "Respond to payroll access text",
@@ -1766,8 +1824,34 @@ const demoTeamMembers = [
         dueOffset: 0,
         estimatedMinutes: 20,
         source: "sms" as const,
+        subtasks: ["Reply to employee", "Confirm access status", "Note payroll resolution"],
       },
     ],
+  },
+];
+
+const demoApprovalSuggestions = [
+  {
+    key: "board-packet",
+    fromEmail: "chief-of-staff@example.com",
+    subject: "Board packet updates due this week",
+    preview: "Please pull the latest operating metrics into the board packet by Thursday.",
+    body: "Please pull the latest operating metrics into the board packet by Thursday and flag anything missing from Finance.",
+    actionItems: ["Pull operating metrics", "Flag missing Finance inputs"],
+    suggestedTitle: "Update board packet operating metrics",
+    suggestedDueOffset: 3,
+    urgency: "high" as const,
+  },
+  {
+    key: "vendor-security",
+    fromEmail: "security@example.com",
+    subject: "Vendor security questionnaire",
+    preview: "Can someone complete the vendor security questionnaire before procurement review?",
+    body: "Can someone complete the vendor security questionnaire before procurement review next week? The account is waiting on this before signature.",
+    actionItems: ["Complete vendor security questionnaire", "Send answers to procurement"],
+    suggestedTitle: "Complete vendor security questionnaire",
+    suggestedDueOffset: 5,
+    urgency: "normal" as const,
   },
 ];
 
@@ -2849,11 +2933,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const store = new DonnitStore(admin, auth.userId);
       const seededUsers: Array<{ id: string; name: string; email: string }> = [];
       let createdTasks = 0;
+      let createdSubtasks = 0;
+      let completedTasks = 0;
+      let createdSuggestions = 0;
+      let createdProfiles = 0;
       const existingTasks = await store.listTasks(orgId);
+      const allTasks = [...existingTasks];
+      const allSubtasks = await store.listTaskSubtasks(orgId);
+      const existingSuggestions = await store.listEmailSuggestions(orgId);
+      const allPositionProfiles = await store.listPositionProfiles(orgId);
       const dateForOffset = (days: number) => {
         const date = new Date();
         date.setDate(date.getDate() + days);
         return date.toISOString().slice(0, 10);
+      };
+      const timestampForOffset = (days: number) => {
+        const date = new Date();
+        date.setDate(date.getDate() + days);
+        return date.toISOString();
       };
 
       for (const seed of demoTeamMembers) {
@@ -2911,35 +3008,126 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         seededUsers.push({ id: userId, name: seed.name, email });
 
         for (const taskSeed of seed.tasks) {
-          const alreadyExists = existingTasks.some(
+          let task = allTasks.find(
             (task) => task.assigned_to === userId && task.title === taskSeed.title,
           );
-          if (alreadyExists) continue;
-          await store.createTask(orgId, {
-            title: taskSeed.title,
-            description: taskSeed.description,
-            status: taskSeed.source === "chat" ? "pending_acceptance" : "open",
-            urgency: taskSeed.urgency,
-            due_date: dateForOffset(taskSeed.dueOffset),
-            estimated_minutes: taskSeed.estimatedMinutes,
-            assigned_to: userId,
-            assigned_by: auth.userId,
-            source: taskSeed.source,
-            recurrence: "none",
-            reminder_days_before: 0,
-          });
-          createdTasks += 1;
+          if (!task) {
+            task = await store.createTask(orgId, {
+              title: taskSeed.title,
+              description: taskSeed.description,
+              status: taskSeed.status ?? (taskSeed.source === "chat" ? "pending_acceptance" : "open"),
+              urgency: taskSeed.urgency,
+              due_date: dateForOffset(taskSeed.dueOffset),
+              estimated_minutes: taskSeed.estimatedMinutes,
+              assigned_to: userId,
+              assigned_by: auth.userId,
+              source: taskSeed.source,
+              recurrence: taskSeed.recurrence ?? "none",
+              reminder_days_before: taskSeed.recurrence === "annual" ? 14 : 0,
+            });
+            allTasks.push(task);
+            createdTasks += 1;
+          }
+          if (taskSeed.status === "completed" && !task.completed_at) {
+            const completedAt = timestampForOffset(taskSeed.completedOffset ?? 0);
+            const updated = await store.updateTask(task.id, {
+              status: "completed",
+              completed_at: completedAt,
+              completion_notes: "Completed in the demo workspace to show reporting history.",
+            });
+            if (updated) {
+              Object.assign(task, updated);
+              await store.addEvent(orgId, {
+                task_id: task.id,
+                actor_id: auth.userId,
+                type: "completed",
+                note: "Demo workspace seeded a completed task for reporting.",
+              });
+              completedTasks += 1;
+            }
+          }
+          const subtaskTitles = taskSeed.subtasks ?? [];
+          for (let position = 0; position < subtaskTitles.length; position += 1) {
+            const title = subtaskTitles[position];
+            const exists = allSubtasks.some(
+              (subtask) => subtask.task_id === task!.id && subtask.title === title,
+            );
+            if (exists) continue;
+            const subtask = await store.createTaskSubtask(orgId, {
+              task_id: task.id,
+              title,
+              position,
+            });
+            allSubtasks.push(subtask);
+            createdSubtasks += 1;
+          }
         }
+
+        const profileExists = allPositionProfiles.some((profile) => profile.title === seed.positionTitle);
+        if (!profileExists) {
+          const profile = await store.createPositionProfile(orgId, {
+            title: seed.positionTitle,
+            status: "active",
+            current_owner_id: userId,
+            direct_manager_id: auth.userId,
+            risk_score: seed.positionRisk,
+            risk_summary: seed.positionSummary,
+            auto_update_rules: {
+              mode: "demo",
+              reviewHighImpactChanges: true,
+              preserveInstitutionalKnowledge: true,
+            },
+            institutional_memory: {
+              source: "demo_seed",
+              recurringResponsibilities: seed.tasks
+                .filter((task) => task.recurrence !== "none" || task.source === "annual")
+                .map((task) => task.title),
+              howTo:
+                seed.key === "jordan"
+                  ? ["Renewal blockers are usually collected from Slack, then summarized into the account notes before QBR prep."]
+                  : seed.key === "maya"
+                    ? ["Friday coverage plans should identify owner, backup, deadline, and unresolved blocker for each client."]
+                    : ["Expense receipts should be reconciled against the monthly close folder and tagged by vendor."],
+              tools: seed.key === "nina" ? ["Gmail", "Payroll", "Expense system"] : ["Slack", "Gmail", "Calendar"],
+            },
+          });
+          allPositionProfiles.push(profile);
+          createdProfiles += 1;
+        }
+      }
+
+      for (const suggestionSeed of demoApprovalSuggestions) {
+        const messageId = `demo-${suggestionSeed.key}-${orgId}`;
+        const alreadyExists = existingSuggestions.some((suggestion) => suggestion.gmail_message_id === messageId);
+        if (alreadyExists) continue;
+        await store.createEmailSuggestion(orgId, {
+          gmail_message_id: messageId,
+          from_email: suggestionSeed.fromEmail,
+          subject: suggestionSeed.subject,
+          preview: suggestionSeed.preview,
+          body: suggestionSeed.body,
+          received_at: timestampForOffset(-1),
+          action_items: suggestionSeed.actionItems,
+          suggested_title: suggestionSeed.suggestedTitle,
+          suggested_due_date: dateForOffset(suggestionSeed.suggestedDueOffset),
+          urgency: suggestionSeed.urgency,
+          assigned_to: auth.userId,
+        });
+        createdSuggestions += 1;
       }
 
       res.status(201).json({
         ok: true,
         users: seededUsers.length,
         tasks: createdTasks,
+        subtasks: createdSubtasks,
+        suggestions: createdSuggestions,
+        positionProfiles: createdProfiles,
+        completedTasks,
         message:
-          createdTasks > 0
-            ? "Demo team added. Refresh the Team view to test manager reporting."
-            : "Demo team was already present.",
+          createdTasks + createdSuggestions + createdProfiles + createdSubtasks + completedTasks > 0
+            ? "Pilot demo workspace seeded with team members, tasks, approvals, subtasks, reports, and Position Profiles."
+            : "Pilot demo workspace was already present.",
       });
     } catch (error) {
       const payload = serializeSupabaseError(error);
