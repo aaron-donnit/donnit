@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { AuthGate, type AuthedContext } from "@/components/AuthGate";
+import DonnitLandingPage from "@/components/DonnitLandingPage";
 import { supabaseConfig } from "@/lib/supabase";
 import { Toaster } from "@/components/ui/toaster";
 import { ToastAction } from "@/components/ui/toast";
@@ -7497,7 +7498,7 @@ function ProtectedLogPage() {
 function AppRouter() {
   return (
     <Switch>
-      <Route path="/" component={LandingPage} />
+      <Route path="/" component={DonnitLandingPage} />
       <Route path="/app" component={ProtectedCommandCenter} />
       <Route path="/log" component={ProtectedLogPage} />
       <Route component={NotFound} />
