@@ -6445,6 +6445,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaPreferences, setAgendaPreferences] = useState<AgendaPreferences>(DEFAULT_AGENDA_PREFERENCES);
   const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [onboardingManuallyOpen, setOnboardingManuallyOpen] = useState(false);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
@@ -7075,6 +7076,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   };
   const dismissOnboarding = (dismissed: boolean) => {
     setOnboardingDismissed(dismissed);
+    setOnboardingManuallyOpen(false);
     persistWorkspaceState({
       key: "onboarding_state",
       value: {
@@ -7128,7 +7130,21 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       onAction: () => setWorkspaceSettingsOpen(true),
     },
   ];
-  const showOnboarding = !onboardingDismissed && onboardingSteps.some((step) => !step.done);
+  const openOnboardingChecklist = () => {
+    setOnboardingDismissed(false);
+    setOnboardingManuallyOpen(true);
+    persistWorkspaceState({
+      key: "onboarding_state",
+      value: {
+        dismissed: false,
+        dismissedAt: null,
+      },
+    });
+    window.setTimeout(() => {
+      document.getElementById("panel-onboarding-checklist")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+  const showOnboarding = onboardingManuallyOpen || (!onboardingDismissed && onboardingSteps.some((step) => !step.done));
   const scrollToReporting = () => {
     setSupportView("reports");
     window.setTimeout(() => {
@@ -7283,7 +7299,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       id: "setup-checklist",
       label: "Setup checklist",
       icon: Sparkles,
-      onClick: () => dismissOnboarding(false),
+      onClick: openOnboardingChecklist,
       hint: "Show the first-value onboarding checklist",
     },
     {
