@@ -662,6 +662,10 @@ function canManageWorkspaceMembers(user: User | null | undefined) {
   return user?.role === "owner" || user?.role === "admin";
 }
 
+function canViewManagerReports(user: User | null | undefined) {
+  return user?.role === "owner" || user?.role === "admin" || user?.role === "manager";
+}
+
 function isActiveUser(user: User) {
   return user.status !== "inactive";
 }
@@ -5341,7 +5345,6 @@ function SupportRail({
   const activeTeamCount = tasks.filter(
     (task) => String(task.assignedToId) !== String(currentUserId) && task.status !== "completed" && task.status !== "denied",
   ).length;
-  const incompleteCount = tasks.filter((task) => task.status !== "completed" && task.status !== "denied").length;
   const tabs: Array<{
     id: SupportRailView;
     label: string;
@@ -5351,7 +5354,6 @@ function SupportRail({
     { id: "today", label: "Today", icon: CheckCircle2, count: dueTodayCount + approvalCount },
     { id: "agenda", label: "Agenda", icon: CalendarClock, count: agenda.length },
     { id: "team", label: "Team", icon: Users, count: activeTeamCount },
-    { id: "reports", label: "Reports", icon: BarChart3, count: incompleteCount },
   ];
 
   return (
@@ -5430,18 +5432,6 @@ function SupportRail({
         />
       )}
 
-      {view === "reports" && (
-        <div className="space-y-3" data-testid="rail-panel-reports">
-          <ReportingPanel
-            tasks={tasks}
-            suggestions={suggestions}
-            agenda={agenda}
-            positionProfiles={positionProfiles}
-            currentUserId={currentUserId}
-          />
-          <DoneLogPanel events={events} tasks={tasks} users={users} />
-        </div>
-      )}
     </div>
   );
 }
@@ -7407,6 +7397,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [documentImportOpen, setDocumentImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
+  const [managerReportOpen, setManagerReportOpen] = useState(false);
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
@@ -8102,6 +8093,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const activeTask = data.tasks.find((task) => String(task.id) === activeTaskId) ?? null;
   const notificationTask = data.tasks.find((task) => String(task.id) === notificationTaskId) ?? null;
   const canManagePositionProfiles = canAdministerProfiles(currentUser);
+  const canOpenManagerReports = canViewManagerReports(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
   const focusChatInput = () => {
@@ -8188,15 +8180,21 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   };
   const showDemoGuide = demoGuideManuallyOpen || (hasDemoData && !demoGuideDismissed);
   const scrollToReporting = () => {
-    setSupportView("reports");
-    window.setTimeout(() => {
-      document.getElementById("panel-reporting")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+    if (!canOpenManagerReports) {
+      toast({
+        title: "Manager access required",
+        description: "Reporting is available to managers and workspace admins.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setManagerReportOpen(true);
   };
   const goHome = () => {
     setManualImportOpen(false);
     setDocumentImportOpen(false);
     setAssignTaskOpen(false);
+    setManagerReportOpen(false);
     setCalendarExportOpen(false);
     setWorkspaceSettingsOpen(false);
     setApprovalInboxOpen(false);
@@ -8356,13 +8354,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       onClick: openOnboardingChecklist,
       hint: "Show the first-value onboarding checklist",
     },
-    {
-      id: "manager-report",
-      label: "Reporting",
-      icon: BarChart3,
-      onClick: scrollToReporting,
-      hint: "Review manager metrics and source mix",
-    },
+    ...(canOpenManagerReports
+      ? [
+          {
+            id: "manager-report",
+            label: "Reporting",
+            icon: BarChart3,
+            onClick: scrollToReporting,
+            hint: "Review manager metrics and source mix",
+          } satisfies FunctionAction,
+        ]
+      : []),
     {
       id: "view-log",
       label: "View log",
@@ -8596,6 +8598,33 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         users={data.users}
         currentUserId={data.currentUserId}
       />
+      <Dialog open={managerReportOpen && canOpenManagerReports} onOpenChange={setManagerReportOpen}>
+        <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
+          <DialogHeader className={dialogHeaderClass}>
+            <DialogTitle>Manager reporting</DialogTitle>
+            <DialogDescription>
+              Completion, source mix, and continuity signals for managers and admins.
+            </DialogDescription>
+          </DialogHeader>
+          <div className={dialogBodyClass}>
+            <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <ReportingPanel
+                tasks={displayTasks}
+                suggestions={data.suggestions}
+                agenda={orderedAgenda}
+                positionProfiles={positionProfiles}
+                currentUserId={data.currentUserId}
+              />
+              <DoneLogPanel events={data.events} tasks={displayTasks} users={data.users} />
+            </div>
+          </div>
+          <DialogFooter className={dialogFooterClass}>
+            <Button variant="outline" onClick={() => setManagerReportOpen(false)} data-testid="button-manager-report-close">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <WorkspaceSettingsDialog
         open={workspaceSettingsOpen}
         onOpenChange={setWorkspaceSettingsOpen}

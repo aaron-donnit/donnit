@@ -97,6 +97,12 @@ CEO approval criteria:
 - A manager can answer "what needs attention today?" without asking every team member.
 - Team visibility feels operationally helpful, not punitive.
 
+Implementation status:
+
+- Moved manager reporting out of the main support rail and into a permission-gated manager/admin report action.
+- Kept daily work UI focused on Today, Agenda, and Team.
+- Added backlog item: completed-task log entries should open the full task detail view when the viewer owns the task, inherited it through a Position Profile, manages the owner, or is an admin.
+
 ## Step 6: Finish Agenda Intelligence
 
 Goal: make Donnit's daily agenda useful enough to become a repeated habit.
