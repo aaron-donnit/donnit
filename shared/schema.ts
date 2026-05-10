@@ -111,6 +111,7 @@ export const taskCreateRequestSchema = insertTaskSchema.extend({
   positionProfileId: z.string().nullable().optional(),
   visibility: z.enum(["work", "personal", "confidential"]).default("work"),
   visibleFrom: z.string().nullable().optional(),
+  templateId: z.string().nullable().optional(),
   dueDate: z.string().nullable().optional(),
   description: z.string().optional().default(""),
 });
@@ -143,6 +144,16 @@ export const externalTaskSuggestionSchema = z.object({
   channel: z.string().trim().max(120).optional(),
   subject: z.string().trim().max(180).optional(),
   assignedToId: z.union([z.string().min(1), z.number()]).optional(),
+});
+
+export const taskTemplateRequestSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(1000).optional().default(""),
+  triggerPhrases: z.array(z.string().trim().min(2).max(80)).max(20).default([]),
+  defaultUrgency: z.enum(["low", "normal", "high", "critical"]).default("normal"),
+  defaultEstimatedMinutes: z.number().int().min(5).max(1440).default(30),
+  defaultRecurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]).default("none"),
+  subtasks: z.array(z.string().trim().min(2).max(180)).max(50).default([]),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

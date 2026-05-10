@@ -117,6 +117,30 @@ export type DonnitTaskSubtask = {
   created_at: string;
 };
 
+export type DonnitTaskTemplateSubtask = {
+  id: string;
+  template_id: string;
+  org_id: string;
+  title: string;
+  position: number;
+  created_at: string;
+};
+
+export type DonnitTaskTemplate = {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string;
+  trigger_phrases: string[];
+  default_urgency: "low" | "normal" | "high" | "critical";
+  default_estimated_minutes: number;
+  default_recurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  subtasks?: DonnitTaskTemplateSubtask[];
+};
+
 export type DonnitTaskEvent = {
   id: string;
   org_id: string;
@@ -383,6 +407,123 @@ export class DonnitStore {
       .eq("task_id", taskId)
       .eq("id", subtaskId);
     if (error) throw wrapSupabaseError("delete task_subtask failed", error);
+  }
+
+  async listTaskTemplates(orgId: string): Promise<DonnitTaskTemplate[]> {
+    const { data: templates, error } = await this.client
+      .from(DONNIT_TABLES.taskTemplates)
+      .select("*")
+      .eq("org_id", orgId)
+      .order("name", { ascending: true });
+    if (error) {
+      if (isMissingRelationError(error)) return [];
+      throw wrapSupabaseError("list task_templates failed", error);
+    }
+    const { data: subtasks, error: subtasksError } = await this.client
+      .from(DONNIT_TABLES.taskTemplateSubtasks)
+      .select("*")
+      .eq("org_id", orgId)
+      .order("template_id", { ascending: true })
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (subtasksError) {
+      if (isMissingRelationError(subtasksError)) {
+        return ((templates ?? []) as DonnitTaskTemplate[]).map((template) => ({ ...template, subtasks: [] }));
+      }
+      throw wrapSupabaseError("list task_template_subtasks failed", subtasksError);
+    }
+    const byTemplate = new Map<string, DonnitTaskTemplateSubtask[]>();
+    for (const subtask of (subtasks ?? []) as DonnitTaskTemplateSubtask[]) {
+      const list = byTemplate.get(subtask.template_id) ?? [];
+      list.push(subtask);
+      byTemplate.set(subtask.template_id, list);
+    }
+    return ((templates ?? []) as DonnitTaskTemplate[]).map((template) => ({
+      ...template,
+      trigger_phrases: Array.isArray(template.trigger_phrases) ? template.trigger_phrases : [],
+      subtasks: byTemplate.get(template.id) ?? [],
+    }));
+  }
+
+  async createTaskTemplate(
+    orgId: string,
+    input: Omit<DonnitTaskTemplate, "id" | "org_id" | "created_at" | "updated_at" | "subtasks"> & {
+      subtasks?: Array<Pick<DonnitTaskTemplateSubtask, "title" | "position">>;
+    },
+  ): Promise<DonnitTaskTemplate> {
+    const { subtasks = [], ...templateInput } = input;
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskTemplates)
+      .insert({ ...templateInput, org_id: orgId })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create task_template failed", error);
+    const template = data as DonnitTaskTemplate;
+    if (subtasks.length > 0) {
+      const { error: subtasksError } = await this.client
+        .from(DONNIT_TABLES.taskTemplateSubtasks)
+        .insert(
+          subtasks.map((subtask, index) => ({
+            org_id: orgId,
+            template_id: template.id,
+            title: subtask.title,
+            position: subtask.position ?? index,
+          })),
+        );
+      if (subtasksError) throw wrapSupabaseError("create task_template_subtasks failed", subtasksError);
+    }
+    return (await this.listTaskTemplates(orgId)).find((item) => item.id === template.id) ?? template;
+  }
+
+  async updateTaskTemplate(
+    orgId: string,
+    templateId: string,
+    patch: Partial<Omit<DonnitTaskTemplate, "id" | "org_id" | "created_at" | "updated_at" | "subtasks">> & {
+      subtasks?: Array<Pick<DonnitTaskTemplateSubtask, "title" | "position">>;
+    },
+  ): Promise<DonnitTaskTemplate | null> {
+    const { subtasks, ...templatePatch } = patch;
+    const updatePayload = { ...templatePatch, updated_at: new Date().toISOString() };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskTemplates)
+      .update(updatePayload)
+      .eq("org_id", orgId)
+      .eq("id", templateId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("update task_template failed", error);
+    if (!data) return null;
+    if (subtasks) {
+      const { error: deleteError } = await this.client
+        .from(DONNIT_TABLES.taskTemplateSubtasks)
+        .delete()
+        .eq("org_id", orgId)
+        .eq("template_id", templateId);
+      if (deleteError) throw wrapSupabaseError("replace task_template_subtasks failed", deleteError);
+      if (subtasks.length > 0) {
+        const { error: insertError } = await this.client
+          .from(DONNIT_TABLES.taskTemplateSubtasks)
+          .insert(
+            subtasks.map((subtask, index) => ({
+              org_id: orgId,
+              template_id: templateId,
+              title: subtask.title,
+              position: subtask.position ?? index,
+            })),
+          );
+        if (insertError) throw wrapSupabaseError("replace task_template_subtasks failed", insertError);
+      }
+    }
+    return (await this.listTaskTemplates(orgId)).find((item) => item.id === templateId) ?? (data as DonnitTaskTemplate);
+  }
+
+  async deleteTaskTemplate(orgId: string, templateId: string): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.taskTemplates)
+      .delete()
+      .eq("org_id", orgId)
+      .eq("id", templateId);
+    if (error) throw wrapSupabaseError("delete task_template failed", error);
   }
 
   async addEvent(orgId: string, input: Omit<DonnitTaskEvent, "id" | "org_id" | "created_at">): Promise<DonnitTaskEvent> {

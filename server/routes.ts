@@ -6,6 +6,7 @@ import {
   externalTaskSuggestionSchema,
   noteRequestSchema,
   taskCreateRequestSchema,
+  taskTemplateRequestSchema,
   taskUpdateRequestSchema,
 } from "@shared/schema";
 import type { InsertTask, Task, User } from "@shared/schema";
@@ -36,6 +37,7 @@ import {
   type DonnitPositionProfile,
   type DonnitTask,
   type DonnitTaskSubtask,
+  type DonnitTaskTemplate,
   type DonnitUserWorkspaceState,
 } from "./donnit-store";
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
@@ -1055,6 +1057,28 @@ function toClientTaskSubtask(subtask: DonnitTaskSubtask) {
   };
 }
 
+function toClientTaskTemplate(template: DonnitTaskTemplate) {
+  return {
+    id: template.id,
+    name: template.name,
+    description: template.description,
+    triggerPhrases: Array.isArray(template.trigger_phrases) ? template.trigger_phrases : [],
+    defaultUrgency: template.default_urgency,
+    defaultEstimatedMinutes: template.default_estimated_minutes,
+    defaultRecurrence: template.default_recurrence,
+    createdBy: template.created_by,
+    createdAt: template.created_at,
+    updatedAt: template.updated_at,
+    subtasks: (template.subtasks ?? []).map((subtask) => ({
+      id: subtask.id,
+      templateId: subtask.template_id,
+      title: subtask.title,
+      position: subtask.position,
+      createdAt: subtask.created_at,
+    })),
+  };
+}
+
 function toClientPositionProfile(profile: DonnitPositionProfile) {
   return {
     id: profile.id,
@@ -1148,6 +1172,10 @@ function isWorkspaceAdmin(member: { role?: string | null } | null | undefined) {
   return ["owner", "admin"].includes(String(member?.role ?? ""));
 }
 
+function isWorkspaceManagerOrAdmin(member: { role?: string | null } | null | undefined) {
+  return ["owner", "admin", "manager"].includes(String(member?.role ?? ""));
+}
+
 function isTaskSensitive(task: Pick<DonnitTask, "visibility"> | { visibility?: string | null }) {
   return ["personal", "confidential"].includes(String(task.visibility ?? "work"));
 }
@@ -1194,6 +1222,18 @@ async function requireWorkspaceAdminContext(auth: NonNullable<Request["donnitAut
   const actor = members.find((member) => member.user_id === auth.userId);
   if (!isWorkspaceAdmin(actor)) {
     return { ok: false as const, status: 403, message: "Only workspace admins can manage members." };
+  }
+  return { ok: true as const, orgId, members, actor };
+}
+
+async function requireWorkspaceManagerContext(auth: NonNullable<Request["donnitAuth"]>) {
+  const userStore = new DonnitStore(auth.client, auth.userId);
+  const orgId = await userStore.getDefaultOrgId();
+  if (!orgId) return { ok: false as const, status: 409, message: "Workspace not bootstrapped." };
+  const members = await userStore.listOrgMembers(orgId);
+  const actor = members.find((member) => member.user_id === auth.userId);
+  if (!isWorkspaceManagerOrAdmin(actor)) {
+    return { ok: false as const, status: 403, message: "Only managers and workspace admins can manage task templates." };
   }
   return { ok: true as const, orgId, members, actor };
 }
@@ -1308,6 +1348,77 @@ function estimateEmailTaskMinutes(input: {
   if (/reply|respond|follow up|following up/.test(text)) return 15;
   if (input.urgency === "high" || input.urgency === "critical") return 45;
   return 30;
+}
+
+function normalizeTemplateMatchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function templateScore(template: DonnitTaskTemplate, input: { title: string; description?: string | null }) {
+  const haystack = normalizeTemplateMatchText(`${input.title} ${input.description ?? ""}`);
+  const phrases = [
+    ...template.trigger_phrases,
+    template.name,
+  ]
+    .map(normalizeTemplateMatchText)
+    .filter((phrase) => phrase.length >= 2);
+  let score = 0;
+  for (const phrase of phrases) {
+    if (!haystack.includes(phrase)) continue;
+    score = Math.max(score, phrase.length + (template.subtasks?.length ?? 0) * 3);
+  }
+  return score;
+}
+
+function selectTaskTemplate(
+  templates: DonnitTaskTemplate[],
+  input: { title: string; description?: string | null; templateId?: string | null },
+) {
+  if (input.templateId) {
+    return templates.find((template) => template.id === input.templateId) ?? null;
+  }
+  const ranked = templates
+    .map((template) => ({ template, score: templateScore(template, input) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.template ?? null;
+}
+
+async function applyTaskTemplateToTask(
+  store: DonnitStore,
+  orgId: string,
+  task: DonnitTask,
+  input: { templateId?: string | null; description?: string | null } = {},
+) {
+  const templates = await store.listTaskTemplates(orgId);
+  if (templates.length === 0) return null;
+  const template = selectTaskTemplate(templates, {
+    title: task.title,
+    description: input.description ?? task.description,
+    templateId: input.templateId,
+  });
+  if (!template || !template.subtasks || template.subtasks.length === 0) return null;
+  const createdSubtasks = [];
+  for (const subtask of template.subtasks) {
+    createdSubtasks.push(
+      await store.createTaskSubtask(orgId, {
+        task_id: task.id,
+        title: subtask.title,
+        position: subtask.position,
+      }),
+    );
+  }
+  await store.addEvent(orgId, {
+    task_id: task.id,
+    actor_id: task.assigned_by,
+    type: "template_applied",
+    note: `Applied task template: ${template.name}.`,
+  });
+  return { template, subtasks: createdSubtasks };
 }
 
 function buildEmailTaskDescription(input: {
@@ -1539,6 +1650,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     suggestions,
     positionProfiles,
     subtasks,
+    taskTemplates,
     reviewedState,
     agendaState,
     onboardingState,
@@ -1550,6 +1662,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     store.listEmailSuggestions(orgId),
     store.listPositionProfiles(orgId),
     store.listTaskSubtasks(orgId),
+    store.listTaskTemplates(orgId),
     store.getWorkspaceState(orgId, "reviewed_notifications"),
     store.getWorkspaceState(orgId, "agenda_state"),
     store.getWorkspaceState(orgId, "onboarding_state"),
@@ -1611,6 +1724,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     })),
     positionProfiles: positionProfiles.map(toClientPositionProfile),
     subtasks: subtasks.map(toClientTaskSubtask),
+    taskTemplates: taskTemplates.map(toClientTaskTemplate),
     workspaceState,
     agenda: buildClientAgenda(
       clientTasks,
@@ -3971,6 +4085,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               reminder_days_before: merged.reminderDaysBefore,
             }),
           });
+          await applyTaskTemplateToTask(store, orgId, created, { description: merged.description });
           await clearPendingChatTask(store, orgId);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
@@ -4078,6 +4193,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             reminder_days_before: taskInput.reminderDaysBefore,
           }),
         });
+        await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
           content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
@@ -4139,6 +4255,105 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ------------------------------------------------------------------
+  // Task templates
+  // ------------------------------------------------------------------
+  app.post("/api/task-templates", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskTemplateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Template details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceManagerContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const store = new DonnitStore(auth.client, auth.userId);
+      const input = parsed.data;
+      const template = await store.createTaskTemplate(context.orgId, {
+        name: input.name,
+        description: input.description,
+        trigger_phrases: input.triggerPhrases,
+        default_urgency: input.defaultUrgency,
+        default_estimated_minutes: input.defaultEstimatedMinutes,
+        default_recurrence: input.defaultRecurrence,
+        created_by: auth.userId,
+        subtasks: input.subtasks.map((title, index) => ({ title, position: index })),
+      });
+      res.status(201).json(toClientTaskTemplate(template));
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] create task template failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({
+        ...payload,
+        message: "Could not save task template. Apply the task templates Supabase migration if this is the first setup.",
+      });
+    }
+  });
+
+  app.patch("/api/task-templates/:id", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskTemplateRequestSchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Template update details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceManagerContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const input = parsed.data;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const template = await store.updateTaskTemplate(context.orgId, String(req.params.id), {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.triggerPhrases !== undefined ? { trigger_phrases: input.triggerPhrases } : {}),
+        ...(input.defaultUrgency !== undefined ? { default_urgency: input.defaultUrgency } : {}),
+        ...(input.defaultEstimatedMinutes !== undefined ? { default_estimated_minutes: input.defaultEstimatedMinutes } : {}),
+        ...(input.defaultRecurrence !== undefined ? { default_recurrence: input.defaultRecurrence } : {}),
+        ...(input.subtasks !== undefined ? { subtasks: input.subtasks.map((title, index) => ({ title, position: index })) } : {}),
+      });
+      if (!template) {
+        res.status(404).json({ message: "Task template not found." });
+        return;
+      }
+      res.json(toClientTaskTemplate(template));
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] update task template failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({
+        ...payload,
+        message: "Could not update task template. Apply the task templates Supabase migration if this is the first setup.",
+      });
+    }
+  });
+
+  app.delete("/api/task-templates/:id", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceManagerContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const store = new DonnitStore(auth.client, auth.userId);
+      await store.deleteTaskTemplate(context.orgId, String(req.params.id));
+      res.status(204).end();
+    } catch (error) {
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] delete task template failed", { userId: req.donnitAuth?.userId, ...payload });
+      res.status(500).json({
+        ...payload,
+        message: "Could not delete task template.",
+      });
+    }
+  });
+
+  // ------------------------------------------------------------------
   // Tasks
   // ------------------------------------------------------------------
   app.post("/api/tasks", async (req: Request, res: Response) => {
@@ -4182,6 +4397,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             due_date: data.dueDate ?? null,
             reminder_days_before: data.reminderDaysBefore ?? 0,
           }),
+        });
+        await applyTaskTemplateToTask(store, orgId, created, {
+          templateId: data.templateId ?? null,
+          description: data.description ?? "",
         });
         res.status(201).json(toClientTask(created));
         return;
@@ -5211,6 +5430,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: suggestionSource,
           recurrence: "none",
           reminder_days_before: 0,
+        });
+        await applyTaskTemplateToTask(store, suggestion.org_id, task, {
+          description: `${suggestion.subject} ${suggestion.preview} ${(suggestion.action_items ?? []).join(" ")} ${suggestion.body ?? ""}`,
         });
         await store.addEvent(suggestion.org_id, {
           task_id: task.id,

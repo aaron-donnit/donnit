@@ -208,6 +208,19 @@ Step 8.3 implementation status:
 
 - Expanded the demo seed into a buyer-ready pilot workspace.
 - Seed now creates sample team members, realistic open/completed tasks, subtasks, pending approval suggestions, and Position Profiles.
+
+## Added Product Backlog
+
+- Completed-task log drilldown: depending on access, log entries should open the full task detail view from completion time. Allowed viewers: task owner, inherited Position Profile owner, direct manager, and admin.
+- Task templates: admins/managers can create reusable task sequences with trigger words. Matching chat/manual/email/Slack/SMS-created tasks should inherit the saved subtasks.
+
+Task templates implementation status:
+
+- Added Supabase migration `20260510212521_task_templates.sql` for `donnit.task_templates` and `donnit.task_template_subtasks`.
+- Added manager/admin APIs to create, edit, and delete task templates.
+- Added Workspace settings UI for template management.
+- Added manual task template selection.
+- Added automatic template matching so chat-created tasks and approved email/Slack/SMS suggestions attach matching subtasks.
 - Added an admin menu action to seed the demo workspace even when team members already exist.
 - Demo data is idempotent so rerunning the action refreshes missing pieces without duplicating existing sample records.
 - Added an in-app Demo workspace guide that explains the demo data lives in the active workspace and links directly to Team, Approvals, Reports, and Position Profiles.
