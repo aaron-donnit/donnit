@@ -369,6 +369,42 @@ function sendTaskSubtaskError(res: Response, action: "create" | "update" | "dele
   });
 }
 
+function sendTaskTemplateError(res: Response, action: "create" | "update" | "delete", error: unknown) {
+  const described = describeSupabaseError(error);
+  const reason = classifySupabaseError(described, { schema: DONNIT_SCHEMA, table: "task_templates" });
+  const status =
+    reason === "missing_table" || reason === "invalid_column" || reason === "schema_not_exposed"
+      ? 409
+      : reason === "rls_denied" || reason === "permission_denied_grants_missing"
+        ? 403
+        : 500;
+  const message =
+    reason === "missing_table"
+      ? "Task templates need a database update. Apply Supabase migration 20260510214107_task_template_member_access.sql, then try again."
+      : reason === "schema_not_exposed"
+        ? "Task templates are not exposed through Supabase. Add the donnit schema to Supabase API exposed schemas."
+        : reason === "rls_denied"
+          ? "Supabase blocked this template write. Apply migration 20260510214107_task_template_member_access.sql so all workspace members can create templates."
+          : reason === "permission_denied_grants_missing"
+            ? "Supabase table grants are missing for task templates. Re-apply the task templates migration."
+            : described.message ?? `Could not ${action} task template.`;
+  console.error(`[donnit] task_template ${action} failed`, {
+    reason,
+    code: described.code,
+    message: described.message,
+    details: described.details,
+    hint: described.hint,
+  });
+  res.status(status).json({
+    ok: false,
+    reason: `task_templates_${reason}`,
+    message,
+    code: described.code,
+    details: described.details,
+    hint: described.hint,
+  });
+}
+
 const urgencyRank: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -1172,8 +1208,8 @@ function isWorkspaceAdmin(member: { role?: string | null } | null | undefined) {
   return ["owner", "admin"].includes(String(member?.role ?? ""));
 }
 
-function isWorkspaceManagerOrAdmin(member: { role?: string | null } | null | undefined) {
-  return ["owner", "admin", "manager"].includes(String(member?.role ?? ""));
+function isWorkspaceMember(member: { role?: string | null; status?: string | null } | null | undefined) {
+  return Boolean(member?.role) && String(member?.status ?? "active") !== "inactive";
 }
 
 function isTaskSensitive(task: Pick<DonnitTask, "visibility"> | { visibility?: string | null }) {
@@ -1226,14 +1262,14 @@ async function requireWorkspaceAdminContext(auth: NonNullable<Request["donnitAut
   return { ok: true as const, orgId, members, actor };
 }
 
-async function requireWorkspaceManagerContext(auth: NonNullable<Request["donnitAuth"]>) {
+async function requireWorkspaceMemberContext(auth: NonNullable<Request["donnitAuth"]>) {
   const userStore = new DonnitStore(auth.client, auth.userId);
   const orgId = await userStore.getDefaultOrgId();
   if (!orgId) return { ok: false as const, status: 409, message: "Workspace not bootstrapped." };
   const members = await userStore.listOrgMembers(orgId);
   const actor = members.find((member) => member.user_id === auth.userId);
-  if (!isWorkspaceManagerOrAdmin(actor)) {
-    return { ok: false as const, status: 403, message: "Only managers and workspace admins can manage task templates." };
+  if (!isWorkspaceMember(actor)) {
+    return { ok: false as const, status: 403, message: "Only active workspace members can manage task templates." };
   }
   return { ok: true as const, orgId, members, actor };
 }
@@ -4265,7 +4301,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const auth = req.donnitAuth!;
-      const context = await requireWorkspaceManagerContext(auth);
+      const context = await requireWorkspaceMemberContext(auth);
       if (!context.ok) {
         res.status(context.status).json({ message: context.message });
         return;
@@ -4284,12 +4320,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.status(201).json(toClientTaskTemplate(template));
     } catch (error) {
-      const payload = serializeSupabaseError(error);
-      console.error("[donnit] create task template failed", { userId: req.donnitAuth?.userId, ...payload });
-      res.status(500).json({
-        ...payload,
-        message: "Could not save task template. Apply the task templates Supabase migration if this is the first setup.",
-      });
+      sendTaskTemplateError(res, "create", error);
     }
   });
 
@@ -4301,7 +4332,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const auth = req.donnitAuth!;
-      const context = await requireWorkspaceManagerContext(auth);
+      const context = await requireWorkspaceMemberContext(auth);
       if (!context.ok) {
         res.status(context.status).json({ message: context.message });
         return;
@@ -4323,19 +4354,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json(toClientTaskTemplate(template));
     } catch (error) {
-      const payload = serializeSupabaseError(error);
-      console.error("[donnit] update task template failed", { userId: req.donnitAuth?.userId, ...payload });
-      res.status(500).json({
-        ...payload,
-        message: "Could not update task template. Apply the task templates Supabase migration if this is the first setup.",
-      });
+      sendTaskTemplateError(res, "update", error);
     }
   });
 
   app.delete("/api/task-templates/:id", requireDonnitAuth, async (req: Request, res: Response) => {
     try {
       const auth = req.donnitAuth!;
-      const context = await requireWorkspaceManagerContext(auth);
+      const context = await requireWorkspaceMemberContext(auth);
       if (!context.ok) {
         res.status(context.status).json({ message: context.message });
         return;
@@ -4344,12 +4370,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await store.deleteTaskTemplate(context.orgId, String(req.params.id));
       res.status(204).end();
     } catch (error) {
-      const payload = serializeSupabaseError(error);
-      console.error("[donnit] delete task template failed", { userId: req.donnitAuth?.userId, ...payload });
-      res.status(500).json({
-        ...payload,
-        message: "Could not delete task template.",
-      });
+      sendTaskTemplateError(res, "delete", error);
     }
   });
 

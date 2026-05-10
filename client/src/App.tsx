@@ -7448,7 +7448,7 @@ function WorkspaceSettingsDialog({
             />
           )}
 
-          {isAdmin && (
+          {authenticated && (
             <TaskTemplatesPanel
               templates={taskTemplates}
               authenticated={authenticated}

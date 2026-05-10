@@ -1,9 +1,9 @@
--- Donnit: reusable task templates.
+-- Donnit: allow any workspace member to create reusable task templates.
 --
--- Templates let managers/admins define repeatable task sequences such as
--- onboarding, quarterly reviews, renewals, and offboarding. Donnit can match
--- trigger phrases from chat/email/Slack/SMS suggestions and attach the saved
--- subtasks to the created task.
+-- Templates are a personal/team productivity primitive, not an admin-only
+-- control. This migration updates environments that already applied the first
+-- task template migration with manager-only policies. It also creates the
+-- tables if an operator runs only this latest migration in the SQL editor.
 
 create table if not exists donnit.task_templates (
   id uuid primary key default gen_random_uuid(),
@@ -43,29 +43,31 @@ create index if not exists donnit_task_template_subtasks_template_position_idx
 alter table donnit.task_templates enable row level security;
 alter table donnit.task_template_subtasks enable row level security;
 
+grant select, insert, update, delete on donnit.task_templates to authenticated, service_role;
+grant select, insert, update, delete on donnit.task_template_subtasks to authenticated, service_role;
+
 drop policy if exists "donnit members can view task templates" on donnit.task_templates;
 create policy "donnit members can view task templates"
   on donnit.task_templates for select
   using (donnit.is_org_member(task_templates.org_id));
-
-drop policy if exists "donnit members can manage task templates" on donnit.task_templates;
-create policy "donnit members can manage task templates"
-  on donnit.task_templates for all
-  using (donnit.is_org_member(task_templates.org_id))
-  with check (donnit.is_org_member(task_templates.org_id));
 
 drop policy if exists "donnit members can view task template subtasks" on donnit.task_template_subtasks;
 create policy "donnit members can view task template subtasks"
   on donnit.task_template_subtasks for select
   using (donnit.is_org_member(task_template_subtasks.org_id));
 
+drop policy if exists "donnit managers can manage task templates" on donnit.task_templates;
+drop policy if exists "donnit members can manage task templates" on donnit.task_templates;
+create policy "donnit members can manage task templates"
+  on donnit.task_templates for all
+  using (donnit.is_org_member(task_templates.org_id))
+  with check (donnit.is_org_member(task_templates.org_id));
+
+drop policy if exists "donnit managers can manage task template subtasks" on donnit.task_template_subtasks;
 drop policy if exists "donnit members can manage task template subtasks" on donnit.task_template_subtasks;
 create policy "donnit members can manage task template subtasks"
   on donnit.task_template_subtasks for all
   using (donnit.is_org_member(task_template_subtasks.org_id))
   with check (donnit.is_org_member(task_template_subtasks.org_id));
-
-grant select, insert, update, delete on donnit.task_templates to authenticated, service_role;
-grant select, insert, update, delete on donnit.task_template_subtasks to authenticated, service_role;
 
 notify pgrst, 'reload schema';

@@ -65,6 +65,9 @@ function getDb(): BetterSQLite3Database {
       source TEXT NOT NULL DEFAULT 'chat',
       recurrence TEXT NOT NULL DEFAULT 'none',
       reminder_days_before INTEGER NOT NULL DEFAULT 0,
+      position_profile_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'work',
+      visible_from TEXT,
       accepted_at TEXT,
       denied_at TEXT,
       completed_at TEXT,
@@ -108,6 +111,15 @@ function getDb(): BetterSQLite3Database {
   }
   if (!taskColumns.has("collaborator_ids")) {
     sqlite.exec("ALTER TABLE tasks ADD COLUMN collaborator_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!taskColumns.has("position_profile_id")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN position_profile_id TEXT");
+  }
+  if (!taskColumns.has("visibility")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'work'");
+  }
+  if (!taskColumns.has("visible_from")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN visible_from TEXT");
   }
   cachedDb = drizzle(sqlite);
   seedIfEmpty(cachedDb);
