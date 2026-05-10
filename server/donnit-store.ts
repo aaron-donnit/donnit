@@ -411,10 +411,10 @@ export class DonnitStore {
       .from(DONNIT_TABLES.chatMessages)
       .select("*")
       .eq("org_id", orgId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw error;
-    return (data ?? []) as DonnitChatMessage[];
+    return [...((data ?? []) as DonnitChatMessage[])].reverse();
   }
 
   async createChatMessage(orgId: string, input: Omit<DonnitChatMessage, "id" | "org_id" | "user_id" | "created_at">): Promise<DonnitChatMessage> {

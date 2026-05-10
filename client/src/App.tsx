@@ -939,6 +939,13 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       setMessage("");
       await invalidateWorkspace();
     },
+    onError: (error: unknown) => {
+      toast({
+        title: "Chat could not send",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
   });
   useEffect(() => {
     const el = historyRef.current;

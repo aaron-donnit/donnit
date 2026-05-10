@@ -516,7 +516,7 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
 function parseExplicitUrgency(message: string): "low" | "normal" | "high" | "critical" | null {
   const text = message.toLowerCase();
   if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
-  if (/(urgent|asap|high priority|important)/.test(text)) return "high";
+  if (/(urgent|asap|high priority|high urgency|highly urgent|\bhigh\b|important)/.test(text)) return "high";
   if (/(low priority|whenever|someday)/.test(text)) return "low";
   if (/\b(normal|medium|standard|regular priority)\b/.test(text)) return "normal";
   return null;
@@ -1817,6 +1817,7 @@ async function getPendingChatTask(store: DonnitStore, orgId: string) {
   const fromMessages = await getPendingChatTaskFromMessages(store, orgId);
   if (fromMessages === false) return null;
   if (fromMessages) {
+    if (pendingChatTaskExpired(fromMessages)) return null;
     pendingChatTaskMemory.set(key, fromMessages);
     return fromMessages;
   }
@@ -1825,13 +1826,15 @@ async function getPendingChatTask(store: DonnitStore, orgId: string) {
     const value = (state?.value ?? {}) as Record<string, unknown>;
     const parsed = pendingChatTaskSchema.safeParse(value.pendingChatTask);
     if (parsed.success) {
+      if (pendingChatTaskExpired(parsed.data)) return null;
       pendingChatTaskMemory.set(key, parsed.data);
       return parsed.data;
     }
   } catch (error) {
     console.error("[donnit] pending chat task read failed", error instanceof Error ? error.message : String(error));
   }
-  return pendingChatTaskMemory.get(key) ?? null;
+  const cached = pendingChatTaskMemory.get(key) ?? null;
+  return cached && !pendingChatTaskExpired(cached) ? cached : null;
 }
 
 async function setPendingChatTask(store: DonnitStore, orgId: string, task: PendingChatTask) {
@@ -1899,6 +1902,17 @@ function mergePendingChatTask(task: PendingChatTask, message: string): PendingCh
     estimatedMinutes,
     missing,
   };
+}
+
+function pendingChatTaskExpired(task: PendingChatTask) {
+  if (!task.createdAt) return false;
+  const createdAt = new Date(task.createdAt).getTime();
+  if (!Number.isFinite(createdAt)) return false;
+  return Date.now() - createdAt > 30 * 60 * 1000;
+}
+
+function looksLikeNewTaskIntent(message: string) {
+  return /\b(assign|delegate|reassign|add|create|make|log|remind me|schedule|ask)\b/i.test(message);
 }
 
 async function getPendingChatTaskFromMessages(store: DonnitStore, orgId: string) {
@@ -3907,6 +3921,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: null });
         const pending = await getPendingChatTask(store, orgId);
         if (pending) {
+          if (looksLikeNewTaskIntent(parsed.data.message) && !looksLikeClarificationReply(parsed.data.message)) {
+            await clearPendingChatTask(store, orgId);
+          } else {
           if (/\b(cancel|never mind|nevermind|discard|stop)\b/i.test(parsed.data.message)) {
             await clearPendingChatTask(store, orgId);
             const assistant = await store.createChatMessage(orgId, {
@@ -3962,6 +3979,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
           res.status(201).json({ task: toClientTask(created), assistant });
           return;
+          }
         }
         if (looksLikeClarificationReply(parsed.data.message)) {
           const assistant = await store.createChatMessage(orgId, {
