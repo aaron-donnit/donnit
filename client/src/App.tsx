@@ -7082,7 +7082,7 @@ function TaskTemplatesPanel({
     onError: (error: unknown) => {
       toast({
         title: "Could not save template",
-        description: error instanceof Error ? error.message : "Apply the task templates migration, then try again.",
+        description: apiErrorMessage(error, "Apply the task templates migration, then try again."),
         variant: "destructive",
       });
     },
@@ -7100,7 +7100,7 @@ function TaskTemplatesPanel({
     onError: (error: unknown) => {
       toast({
         title: "Could not delete template",
-        description: error instanceof Error ? error.message : "Try again in a moment.",
+        description: apiErrorMessage(error, "Try again in a moment."),
         variant: "destructive",
       });
     },
