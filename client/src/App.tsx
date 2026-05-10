@@ -8365,6 +8365,39 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
       <section className="mx-auto max-w-[1600px] px-4 py-3 lg:px-6">
+        {showOnboarding && (
+          <OnboardingChecklist
+            steps={onboardingSteps}
+            onDismiss={() => dismissOnboarding(true)}
+          />
+        )}
+        {showDemoGuide && (
+          <DemoWorkspaceGuide
+            users={data.users}
+            tasks={data.tasks}
+            suggestions={data.suggestions}
+            positionProfiles={positionProfiles}
+            onOpenTeam={() => setSupportView("team")}
+            onOpenApprovals={() => setApprovalInboxOpen(true)}
+            onOpenReports={scrollToReporting}
+            onOpenPositionProfiles={() => setWorkspaceSettingsOpen(true)}
+            onDismiss={() => {
+              setDemoGuideDismissed(true);
+              setDemoGuideManuallyOpen(false);
+            }}
+          />
+        )}
+        <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
+          <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            <span className="ui-label">Today - {todayLabel}</span>
+            <Stat label="Open" value={metrics.open} />
+            <Stat label="Due today" value={metrics.dueToday} />
+            <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+            <Stat label="Approval queue" value={metrics.emailQueue} />
+            <Stat label="Completed" value={metrics.completed} />
+          </div>
+        </div>
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
           <div className="lg:sticky lg:top-[4.75rem] lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
@@ -8373,39 +8406,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
           {/* Work area — right */}
           <div className="lg:col-span-8 xl:col-span-9">
-            {showOnboarding && (
-              <OnboardingChecklist
-                steps={onboardingSteps}
-                onDismiss={() => dismissOnboarding(true)}
-              />
-            )}
-            {showDemoGuide && (
-              <DemoWorkspaceGuide
-                users={data.users}
-                tasks={data.tasks}
-                suggestions={data.suggestions}
-                positionProfiles={positionProfiles}
-                onOpenTeam={() => setSupportView("team")}
-                onOpenApprovals={() => setApprovalInboxOpen(true)}
-                onOpenReports={scrollToReporting}
-                onOpenPositionProfiles={() => setWorkspaceSettingsOpen(true)}
-                onDismiss={() => {
-                  setDemoGuideDismissed(true);
-                  setDemoGuideManuallyOpen(false);
-                }}
-              />
-            )}
-            <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
-              <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
-              <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                <span className="ui-label">Today - {todayLabel}</span>
-                <Stat label="Open" value={metrics.open} />
-                <Stat label="Due today" value={metrics.dueToday} />
-                <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-                <Stat label="Approval queue" value={metrics.emailQueue} />
-                <Stat label="Completed" value={metrics.completed} />
-              </div>
-            </div>
             <div className="grid gap-4 xl:grid-cols-12">
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
