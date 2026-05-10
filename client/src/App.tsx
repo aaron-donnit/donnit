@@ -1776,17 +1776,44 @@ function TaskList({
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const selectedTask = tasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+  const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
+  const visibleTasks = useMemo(
+    () =>
+      tasks.map((task) =>
+        locallyCompletedIds.has(String(task.id)) && task.status !== "completed"
+          ? { ...task, status: "completed" as const, completedAt: task.completedAt ?? new Date().toISOString() }
+          : task,
+      ),
+    [locallyCompletedIds, tasks],
+  );
+  const selectedTask = visibleTasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+
+  useEffect(() => {
+    setLocallyCompletedIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => !tasks.some((task) => String(task.id) === id && task.status === "completed")));
+      return next.size === current.size ? current : next;
+    });
+  }, [tasks]);
 
   const complete = useMutation({
     mutationFn: async (id: Id) =>
       apiRequest("POST", `/api/tasks/${id}/complete`, { note: "Done. That's one less thing." }),
-    onMutate: (id: Id) => setCompletingId(id),
+    onMutate: (id: Id) => {
+      setCompletingId(id);
+      setLocallyCompletedIds((current) => new Set(current).add(String(id)));
+    },
     onSuccess: async () => {
       await invalidateWorkspace();
       setCompletingId(null);
     },
-    onError: () => setCompletingId(null),
+    onError: (_error, id) => {
+      setLocallyCompletedIds((current) => {
+        const next = new Set(current);
+        next.delete(String(id));
+        return next;
+      });
+      setCompletingId(null);
+    },
   });
 
   // Sort for execution: completion last, then time pressure, urgency, shorter work, and age.
@@ -1826,7 +1853,7 @@ function TaskList({
     return { id: "backlog", label: "Backlog", detail: "No due date yet" };
   };
 
-  const sorted = [...tasks].sort((a, b) => {
+  const sorted = [...visibleTasks].sort((a, b) => {
     const aDone = a.status === "completed" ? 1 : 0;
     const bDone = b.status === "completed" ? 1 : 0;
     if (aDone !== bDone) return aDone - bDone;
@@ -2062,6 +2089,26 @@ function TaskDetailDialog({
     },
   });
 
+  const postpone = useMutation({
+    mutationFn: async (days: 1 | 7) => {
+      if (!task) throw new Error("No task selected.");
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/${days === 1 ? "postpone-day" : "postpone-week"}`, {});
+      return (await res.json()) as Task;
+    },
+    onSuccess: async (updated) => {
+      setDueDate(updated.dueDate ?? "");
+      await invalidateWorkspace();
+      toast({ title: "Due date updated", description: `Moved to ${updated.dueDate ?? "no due date"}.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not push due date",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const donnit = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
@@ -2284,6 +2331,28 @@ function TaskDetailDialog({
                 onChange={(event) => setDueDate(event.target.value)}
                 data-testid="input-task-detail-due"
               />
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => postpone.mutate(1)}
+                  disabled={postpone.isPending}
+                  data-testid="button-task-postpone-day"
+                >
+                  +1 day
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => postpone.mutate(7)}
+                  disabled={postpone.isPending}
+                  data-testid="button-task-postpone-week"
+                >
+                  +1 week
+                </Button>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="task-detail-estimate">Minutes</Label>

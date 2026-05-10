@@ -4501,7 +4501,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function handleTaskAction(
     req: Request,
     res: Response,
-    action: "complete" | "accept" | "deny" | "note" | "request_update",
+    action: "complete" | "accept" | "deny" | "note" | "request_update" | "postpone_day" | "postpone_week",
   ) {
     const note = noteRequestSchema.safeParse(req.body);
 
@@ -4563,6 +4563,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             };
             eventType = "update_requested";
             eventNote = requestedNote;
+            break;
+          }
+          case "postpone_day":
+          case "postpone_week": {
+            const days = action === "postpone_day" ? 1 : 7;
+            const baseDueDate = existing.due_date ?? todayIso();
+            const nextDueDate = addDaysIso(baseDueDate, days);
+            patch = { due_date: nextDueDate };
+            eventType = "due_date_postponed";
+            eventNote = `Due date moved from ${existing.due_date ?? "no due date"} to ${nextDueDate} (+${days} day${days === 1 ? "" : "s"}).`;
             break;
           }
         }
@@ -4641,6 +4651,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         eventNote = requestedNote;
         break;
       }
+      case "postpone_day":
+      case "postpone_week": {
+        const days = action === "postpone_day" ? 1 : 7;
+        const baseDueDate = existingTask.dueDate ?? todayIso();
+        const nextDueDate = addDaysIso(baseDueDate, days);
+        patch = { dueDate: nextDueDate };
+        eventType = "due_date_postponed";
+        eventNote = `Due date moved from ${existingTask.dueDate ?? "no due date"} to ${nextDueDate} (+${days} day${days === 1 ? "" : "s"}).`;
+        break;
+      }
     }
     const task = await storage.updateTask(id, patch);
     if (!task) {
@@ -4654,6 +4674,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/complete", (req, res) => handleTaskAction(req, res, "complete"));
   app.post("/api/tasks/:id/notes", (req, res) => handleTaskAction(req, res, "note"));
   app.post("/api/tasks/:id/request-update", (req, res) => handleTaskAction(req, res, "request_update"));
+  app.post("/api/tasks/:id/postpone-day", (req, res) => handleTaskAction(req, res, "postpone_day"));
+  app.post("/api/tasks/:id/postpone-week", (req, res) => handleTaskAction(req, res, "postpone_week"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
 
