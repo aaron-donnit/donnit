@@ -1960,8 +1960,10 @@ function TaskList({
     return a.createdAt.localeCompare(b.createdAt);
   });
 
-  const open = sorted.filter((t) => t.status !== "completed");
-  const done = sorted.filter((t) => t.status === "completed");
+  const open = sorted.filter((t) => t.status !== "completed" && t.status !== "denied");
+  const done = visibleTasks
+    .filter((t) => t.status === "completed")
+    .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
   const grouped = open.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
     const group = groupForTask(task);
     const existing = groups.find((item) => item.id === group.id);
@@ -2020,11 +2022,12 @@ function TaskList({
 
         {done.length > 0 && (
           <>
-            <div className="mt-4 flex items-center gap-2 px-1">
-              <span className="ui-label">Just done</span>
+            <div className="mt-4 flex items-center gap-2 px-1" data-testid="section-done">
+              <span className="ui-label">Done</span>
               <span className="h-px flex-1 bg-border" />
+              <span className="text-[11px] tabular-nums text-muted-foreground">{done.length}</span>
             </div>
-            {done.slice(0, 3).map((task) => (
+            {done.slice(0, 8).map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}

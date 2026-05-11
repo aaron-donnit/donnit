@@ -4537,19 +4537,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(404).json({ message: "Task not found." });
           return;
         }
+        const relationshipChanged =
+          data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined;
+        const taskCompleted = data.status === "completed";
+        const eventType = relationshipChanged ? "relationships_updated" : taskCompleted ? "completed" : "updated";
+        const eventNote = relationshipChanged
+          ? relationshipEventNote({
+              assignedToId: updated.assigned_to,
+              delegatedToId: nextDelegatedToId,
+              collaboratorIds: nextCollaboratorIds,
+            })
+          : taskCompleted
+            ? data.note || "Task completed."
+            : data.note || "Task details updated.";
         await store.addEvent(updated.org_id, {
           task_id: updated.id,
           actor_id: auth.userId,
-          type: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
-            ? "relationships_updated"
-            : "updated",
-          note: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
-            ? relationshipEventNote({
-                assignedToId: updated.assigned_to,
-                delegatedToId: nextDelegatedToId,
-                collaboratorIds: nextCollaboratorIds,
-              })
-            : data.note || "Task details updated.",
+          type: eventType,
+          note: eventNote,
         });
         res.json(toClientTask(updated));
         return;
@@ -4605,19 +4610,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(404).json({ message: "Task not found." });
       return;
     }
+    const relationshipChanged =
+      data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined;
+    const taskCompleted = data.status === "completed";
+    const eventType = relationshipChanged ? "relationships_updated" : taskCompleted ? "completed" : "updated";
+    const eventNote = relationshipChanged
+      ? relationshipEventNote({
+          assignedToId: task.assignedToId,
+          delegatedToId: task.delegatedToId,
+          collaboratorIds: parseDemoCollaboratorIds(task.collaboratorIds),
+        })
+      : taskCompleted
+        ? data.note || "Task completed."
+        : data.note || "Task details updated.";
     await storage.addEvent({
       taskId: id,
       actorId: DEMO_USER_ID,
-      type: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
-        ? "relationships_updated"
-        : "updated",
-      note: data.assignedToId !== undefined || data.delegatedToId !== undefined || data.collaboratorIds !== undefined
-        ? relationshipEventNote({
-            assignedToId: task.assignedToId,
-            delegatedToId: task.delegatedToId,
-            collaboratorIds: parseDemoCollaboratorIds(task.collaboratorIds),
-          })
-        : data.note || "Task details updated.",
+      type: eventType,
+      note: eventNote,
     });
     res.json(toClientDemoTask(task));
   });
