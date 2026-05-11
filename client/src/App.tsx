@@ -1916,6 +1916,7 @@ function MvpReadinessPanel({
 function TaskRow({
   task,
   users,
+  events = [],
   onComplete,
   onOpen,
   onPin,
@@ -1924,6 +1925,7 @@ function TaskRow({
 }: {
   task: Task;
   users: User[];
+  events?: TaskEvent[];
   onComplete: () => void;
   onOpen: () => void;
   onPin?: () => void;
@@ -1934,6 +1936,9 @@ function TaskRow({
   const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
   const collaboratorCount = task.collaboratorIds?.length ?? 0;
   const isDone = task.status === "completed";
+  const latestUpdateRequest = [...events]
+    .filter((event) => String(event.taskId) === String(task.id) && event.type === "update_requested")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const contextHints = [
     task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"
       ? `${inferTaskCadence(task)} responsibility`
@@ -2049,6 +2054,12 @@ function TaskRow({
           )}
           {task.status !== "open" && task.status !== "completed" && (
             <span className="ui-label">{statusLabels[task.status] ?? task.status}</span>
+          )}
+          {latestUpdateRequest && task.status !== "completed" && (
+            <span className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
+              <Send className="size-3.5" />
+              Update requested
+            </span>
           )}
           <button
             type="button"
@@ -2301,6 +2312,7 @@ function TaskList({
                   key={task.id}
                   task={task}
                   users={users}
+                  events={events}
                   isCompleting={completingId === task.id && complete.isPending}
                   onComplete={() => complete.mutate(task.id)}
                   onOpen={() => setSelectedTaskId(String(task.id))}
@@ -2324,6 +2336,7 @@ function TaskList({
                 key={task.id}
                 task={task}
                 users={users}
+                events={events}
                 isCompleting={false}
                 onComplete={() => undefined}
                 onOpen={() => setSelectedTaskId(String(task.id))}
@@ -2690,6 +2703,14 @@ function TaskDetailDialog({
         .filter((event) => String(event.taskId) === String(task.id))
         .slice(0, 8)
     : [];
+  const latestUpdateRequest = task
+    ? [...events]
+        .filter((event) => String(event.taskId) === String(task.id) && event.type === "update_requested")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    : undefined;
+  const updateRequester = latestUpdateRequest
+    ? users.find((user) => String(user.id) === String(latestUpdateRequest.actorId))
+    : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2704,6 +2725,31 @@ function TaskDetailDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="grid gap-4">
+          {latestUpdateRequest && !readOnly && task.status !== "completed" && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">Update requested</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {updateRequester?.name ?? "Your manager"} asked for an update: {latestUpdateRequest.note}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (!note.trim()) setNote("Update: ");
+                    window.setTimeout(() => document.getElementById("task-detail-note")?.focus(), 0);
+                  }}
+                  data-testid="button-task-respond-update-request"
+                >
+                  <Send className="size-4" />
+                  Respond
+                </Button>
+              </div>
+            </div>
+          )}
           {inheritedContext && (
             <div className="rounded-md border border-brand-green/30 bg-brand-green/10 px-3 py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -6768,7 +6814,7 @@ type DerivedNotification = {
   suggestionId?: Id;
 };
 
-function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): DerivedNotification[] {
+function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[], events: TaskEvent[] = [], currentUserId?: Id): DerivedNotification[] {
   const today = localDateIso();
   const soonIso = addLocalDays(2, today);
   const active = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
@@ -6786,6 +6832,24 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): Deri
   }
 
   for (const task of active) {
+    const latestUpdateRequest = [...events]
+      .filter(
+        (event) =>
+          String(event.taskId) === String(task.id) &&
+          event.type === "update_requested" &&
+          (!currentUserId || String(event.actorId) !== String(currentUserId)),
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (latestUpdateRequest) {
+      items.push({
+        id: `update-request-${task.id}-${latestUpdateRequest.id}`,
+        title: "Update requested",
+        detail: task.title,
+        severity: "normal",
+        source: "task",
+        taskId: task.id,
+      });
+    }
     if (task.dueDate && task.dueDate < today) {
       items.push({
         id: `overdue-${task.id}`,
@@ -9844,8 +9908,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     [],
   );
   const rawNotifications = useMemo(
-    () => buildNotifications(displayTasks, data?.suggestions ?? []),
-    [displayTasks, data?.suggestions],
+    () => buildNotifications(displayTasks, data?.suggestions ?? [], data?.events ?? [], data?.currentUserId),
+    [displayTasks, data?.suggestions, data?.events, data?.currentUserId],
   );
   const notifications = useMemo(
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
