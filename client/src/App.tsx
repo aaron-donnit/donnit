@@ -1751,6 +1751,83 @@ function DemoWorkspaceGuide({
   );
 }
 
+function MvpReadinessPanel({
+  steps,
+  onDismiss,
+}: {
+  steps: OnboardingStep[];
+  onDismiss: () => void;
+}) {
+  const doneCount = steps.filter((step) => step.done).length;
+  const nextStep = steps.find((step) => !step.done);
+  return (
+    <section className="mb-4 rounded-lg border border-border bg-card p-4" data-testid="panel-mvp-readiness">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex size-8 items-center justify-center rounded-md bg-foreground text-background">
+              <ShieldCheck className="size-4" />
+            </span>
+            <div>
+              <p className="display-font text-base font-bold text-foreground">Thursday MVP readiness</p>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Demo path for HR/Ops leaders, people managers, and team leads: task capture, Slack approval, agenda planning, and role continuity.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            {steps.map((step) => (
+              <button
+                key={step.id}
+                type="button"
+                onClick={step.onAction}
+                className={`rounded-md border p-3 text-left transition hover:border-brand-green/70 ${
+                  step.done ? "border-brand-green/40 bg-brand-green/5" : "border-border bg-background"
+                }`}
+                data-testid={`button-mvp-readiness-${step.id}`}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="ui-label">{step.actionLabel}</span>
+                  <span
+                    className={`inline-flex size-5 items-center justify-center rounded-full border ${
+                      step.done ? "border-brand-green bg-brand-green text-white" : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    {step.done ? <Check className="size-3" /> : null}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold leading-snug text-foreground">{step.title}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{step.detail}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-md border border-border bg-background p-3 xl:w-60">
+          <p className="ui-label">Demo confidence</p>
+          <p className="display-font mt-1 text-2xl font-bold text-foreground">
+            {doneCount}/{steps.length}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {doneCount === steps.length
+              ? "Ready to run the seeded MVP story."
+              : `Next: ${nextStep?.title ?? "Finish setup"}`}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {nextStep && !nextStep.done ? (
+              <Button size="sm" onClick={nextStep.onAction} data-testid="button-mvp-readiness-next">
+                {nextStep.actionLabel}
+              </Button>
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={onDismiss} data-testid="button-mvp-readiness-dismiss">
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function TaskRow({
   task,
   users,
@@ -8719,6 +8796,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [onboardingManuallyOpen, setOnboardingManuallyOpen] = useState(false);
   const [demoGuideDismissed, setDemoGuideDismissed] = useState(false);
   const [demoGuideManuallyOpen, setDemoGuideManuallyOpen] = useState(false);
+  const [mvpReadinessDismissed, setMvpReadinessDismissed] = useState(() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return window.localStorage.getItem("donnit.mvpReadinessDismissed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [mvpReadinessManuallyOpen, setMvpReadinessManuallyOpen] = useState(false);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
@@ -9458,6 +9544,19 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     const el = document.getElementById("chat-message") as HTMLTextAreaElement | null;
     el?.focus();
   };
+  const openMvpReadiness = () => {
+    setMvpReadinessDismissed(false);
+    setMvpReadinessManuallyOpen(true);
+    if (typeof window !== "undefined") window.localStorage.removeItem("donnit.mvpReadinessDismissed");
+    window.setTimeout(() => {
+      document.getElementById("panel-mvp-readiness")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+  const dismissMvpReadiness = () => {
+    setMvpReadinessDismissed(true);
+    setMvpReadinessManuallyOpen(false);
+    if (typeof window !== "undefined") window.localStorage.setItem("donnit.mvpReadinessDismissed", "true");
+  };
   const dismissOnboarding = (dismissed: boolean) => {
     setOnboardingDismissed(dismissed);
     setOnboardingManuallyOpen(false);
@@ -9522,6 +9621,59 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       onAction: () => setWorkspaceSettingsOpen(true),
     },
   ];
+  const mvpReadinessSteps: OnboardingStep[] = [
+    {
+      id: "seeded-data",
+      title: "Seeded story",
+      detail: "Use controlled sample members, tasks, Slack items, approvals, and Position Profiles.",
+      done: hasDemoData,
+      actionLabel: hasDemoData ? "Seeded" : "Seed",
+      onAction: () => seedDemoWorkspace.mutate(),
+    },
+    {
+      id: "task-capture",
+      title: "Task capture",
+      detail: "Chat, email, document, or Slack input has produced work in the task list.",
+      done: data.tasks.length > 0 || data.suggestions.length > 0,
+      actionLabel: "Capture",
+      onAction: focusChatInput,
+    },
+    {
+      id: "slack-mvp",
+      title: "Slack MVP",
+      detail: "Slack is configured or represented with Slack-origin approval items.",
+      done: slackMvpReady,
+      actionLabel: slackMvpReady ? "Ready" : "Setup",
+      onAction: () => setWorkspaceSettingsOpen(true),
+    },
+    {
+      id: "approvals",
+      title: "Approval loop",
+      detail: "AI suggestions can be reviewed, edited, approved, or dismissed before becoming tasks.",
+      done: data.suggestions.some((suggestion) => suggestion.status === "pending" || suggestion.status === "approved" || suggestion.status === "dismissed"),
+      actionLabel: "Review",
+      onAction: () => setApprovalInboxOpen(true),
+    },
+    {
+      id: "agenda",
+      title: "Agenda",
+      detail: "Open work can be converted into an approved day plan and exported.",
+      done: orderedAgenda.length > 0 || agendaApproved,
+      actionLabel: "Build",
+      onAction: () => {
+        setSupportView("agenda");
+        buildAgenda.mutate({});
+      },
+    },
+    {
+      id: "continuity",
+      title: "Continuity",
+      detail: "Position Profiles show current work, recurring responsibilities, and a handoff packet.",
+      done: positionProfiles.some((profile) => profile.currentIncompleteTasks.length > 0 || profile.recurringTasks.length > 0 || profile.completedTasks.length > 0),
+      actionLabel: "Profiles",
+      onAction: () => setWorkspaceSettingsOpen(true),
+    },
+  ];
   const openOnboardingChecklist = () => {
     setOnboardingDismissed(false);
     setOnboardingManuallyOpen(true);
@@ -9545,6 +9697,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }, 0);
   };
   const showDemoGuide = demoGuideManuallyOpen || (hasDemoData && !demoGuideDismissed);
+  const showMvpReadiness =
+    mvpReadinessManuallyOpen ||
+    (canOpenManagerReports && !mvpReadinessDismissed && mvpReadinessSteps.some((step) => !step.done));
   const scrollToReporting = () => {
     if (!canOpenManagerReports) {
       toast({
@@ -9733,6 +9888,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     ...(canOpenManagerReports
       ? [
           {
+            id: "mvp-readiness",
+            label: "MVP readiness",
+            icon: ShieldCheck,
+            onClick: openMvpReadiness,
+            hint: "Show the Thursday demo readiness checklist",
+          } satisfies FunctionAction,
+        ]
+      : []),
+    ...(canOpenManagerReports
+      ? [
+          {
             id: "manager-report",
             label: "Reporting",
             icon: BarChart3,
@@ -9812,6 +9978,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
       {/* Workspace: chat left, work area right (To-do dominant) */}
       <section className="mx-auto max-w-[1600px] px-4 py-3 lg:px-6">
+        {showMvpReadiness && (
+          <MvpReadinessPanel
+            steps={mvpReadinessSteps}
+            onDismiss={dismissMvpReadiness}
+          />
+        )}
         {showOnboarding && (
           <OnboardingChecklist
             steps={onboardingSteps}
