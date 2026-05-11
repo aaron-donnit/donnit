@@ -5543,7 +5543,7 @@ function SuggestionCard({
             </Button>
             <Button onClick={() => sendReply.mutate()} disabled={replyBody.trim().length < 2 || sendReply.isPending || draftReply.isPending}>
               {sendReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-              {sourceLabel === "Email" ? "Send / open draft" : "Send reply"}
+              {sourceLabel === "Email" ? "Send" : "Send reply"}
             </Button>
           </DialogFooter>
         </DialogContent>

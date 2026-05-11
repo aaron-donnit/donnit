@@ -433,6 +433,25 @@ function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
   return addDaysIso(localToday, delta);
 }
 
+function endOfMonthIso(monthOffset = 0) {
+  const [yearText, monthText] = todayIso().split("-");
+  const date = new Date(Date.UTC(Number(yearText), Number(monthText) + monthOffset, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function endOfQuarterIso(quarterOffset = 0) {
+  const [yearText, monthText] = todayIso().split("-");
+  const month = Number(monthText);
+  const quarterEndMonth = Math.ceil(month / 3) * 3 + quarterOffset * 3;
+  const date = new Date(Date.UTC(Number(yearText), quarterEndMonth, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function endOfYearIso(yearOffset = 0) {
+  const [yearText] = todayIso().split("-");
+  return toIsoDate(Number(yearText) + yearOffset, 12, 31);
+}
+
 const monthIndexes: Record<string, number> = {
   jan: 1,
   january: 1,
@@ -517,6 +536,15 @@ function parseDueDate(message: string) {
   }
   const natural = parseNaturalDate(text);
   if (natural) return natural;
+  if (/\b(?:eod|cob|close of business|end of day)\b/.test(text)) return todayIso();
+  if (/\b(?:next\s+eow|next\s+end of week|end of next week)\b/.test(text)) return nextWeekdayIso(5, true);
+  if (/\b(?:eow|end of week)\b/.test(text)) return nextWeekdayIso(5);
+  if (/\b(?:next\s+eom|next\s+end of month|end of next month)\b/.test(text)) return endOfMonthIso(1);
+  if (/\b(?:eom|end of month)\b/.test(text)) return endOfMonthIso();
+  if (/\b(?:next\s+eoq|next\s+end of quarter|end of next quarter)\b/.test(text)) return endOfQuarterIso(1);
+  if (/\b(?:eoq|end of quarter)\b/.test(text)) return endOfQuarterIso();
+  if (/\b(?:next\s+eoy|next\s+end of year|end of next year)\b/.test(text)) return endOfYearIso(1);
+  if (/\b(?:eoy|end of year)\b/.test(text)) return endOfYearIso();
   if (text.includes("today")) return todayIso();
   if (text.includes("tomorrow")) return addDays(1);
   if (text.includes("next week")) return addDays(7);
@@ -692,11 +720,12 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
     .replace(/\b(?:i need|need|needs|need to)\s+/gi, "")
     .replace(/\b(?:due|by|before|on)\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/gi, "")
+    .replace(/\b(?:due|by|before|on)\s+(?:eod|cob|close of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year)\b/gi, "")
     .replace(naturalDate, "")
     .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
     .replace(/\b(?:due|by|before|on)?\s*(?:(?:next|this)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
-    .replace(/\b(today|tomorrow|next week|this week|urgent|asap|critical|high priority|low priority)\b/gi, "")
+    .replace(/\b(today|tomorrow|next week|this week|eod|cob|close of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year|urgent|asap|critical|high priority|low priority)\b/gi, "")
     .replace(/\bby\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
     .replace(/\b\d+(?:\.\d+)?\s*(?:min|mins|minutes|hr|hrs|hour|hours)\b/gi, "")
     .replace(/\b\d+\s*days?\s*before\b/gi, "")
@@ -2622,7 +2651,7 @@ async function extractTaskWithAi(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   const sourceInstructions: Record<SuggestionSource | "chat", string> = {
-    chat: "Manager chat input may contain assignment commands, due dates, urgency, and time estimates.",
+    chat: "Manager chat input may contain assignment commands, due dates, urgency, time estimates, and workplace shorthand.",
     email:
       "Email input may be a receipt, invoice, scheduling request, approval request, access notice, customer request, or FYI. Create a task only from the actionable next step implied by the email.",
     slack:
@@ -2631,6 +2660,20 @@ async function extractTaskWithAi(input: {
       "SMS input may be short or fragmented. Infer the intended task conservatively and keep it clear.",
     document:
       "Document input may contain bullet points, meeting notes, policies, or project plans. Extract the clearest actionable item.",
+  };
+  const workplaceAbbreviations = {
+    EOD: "end of day, due today",
+    COB: "close of business, due today",
+    EOW: "end of week, due Friday of the current week unless the user says next EOW",
+    EOM: "end of month",
+    EOQ: "end of quarter",
+    EOY: "end of year",
+    OOO: "out of office",
+    PTO: "paid time off",
+    RIF: "reduction in force",
+    SOW: "statement of work",
+    MSA: "master services agreement",
+    QBR: "quarterly business review",
   };
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
@@ -2656,6 +2699,7 @@ async function extractTaskWithAi(input: {
                 "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
                 "Descriptions should explain the next step in one or two plain sentences.",
                 "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
+                "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
                 "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
                 "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
                 "For email input, set replyNeeded=true only when the sender appears to expect a response; replyIntent should explain the response goal in plain language. Receipts, newsletters, automated notices, and FYI messages usually do not need replies.",
@@ -2674,6 +2718,7 @@ async function extractTaskWithAi(input: {
               availableAssignees: input.memberLabels ?? [],
               today: todayIso(),
               currentYear: new Date().getFullYear(),
+              workplaceAbbreviations,
             }),
           },
         ],
@@ -2795,19 +2840,54 @@ function extractEmailAddress(value: string) {
   return plain?.[0] ?? null;
 }
 
-function fallbackReplyDraft(suggestion: Pick<DonnitEmailSuggestion, "from_email" | "subject" | "suggested_title" | "preview">) {
+function replyScenario(suggestion: Pick<DonnitEmailSuggestion, "subject" | "suggested_title" | "preview"> & { body?: string | null }) {
+  const text = `${suggestion.subject} ${suggestion.suggested_title} ${suggestion.preview} ${suggestion.body ?? ""}`.toLowerCase();
+  if (/\b(schedule|reschedule|meeting|meet|calendar|availability|available|call|demo|appointment|time to connect)\b/.test(text)) {
+    return "scheduling";
+  }
+  if (/\b(approve|approval|sign off|authorize|permission)\b/.test(text)) return "approval";
+  if (/\b(contract|agreement|proposal|sow|msa|terms|redline)\b/.test(text)) return "document_review";
+  if (/\b(invoice|receipt|payment|paid|charge|expense|renewal)\b/.test(text)) return "finance";
+  if (/\b(ticket|case|support|bug|issue|incident|customer)\b/.test(text)) return "support";
+  if (/\b(question|can you|could you|please|need|request)\b/.test(text)) return "request";
+  return "general";
+}
+
+function fallbackReplyDraft(
+  suggestion: Pick<DonnitEmailSuggestion, "from_email" | "subject" | "suggested_title" | "preview"> & { body?: string | null },
+) {
   const senderName =
     suggestion.from_email.match(/^"?([^"<@]+)"?\s*</)?.[1]?.trim() ??
     suggestion.from_email.split("@")[0]?.replace(/[._-]+/g, " ") ??
     "";
   const greeting = senderName ? `Hi ${senderName.split(/\s+/)[0]},` : "Hi,";
-  return [
-    greeting,
-    "",
-    `Thanks for sending this over. I received it and will follow up on ${suggestion.suggested_title.toLowerCase()}.`,
-    "",
-    "Best,",
-  ].join("\n");
+  const scenario = replyScenario(suggestion);
+  const bodyByScenario: Record<string, string> = {
+    scheduling:
+      "Thanks for reaching out. I am happy to schedule time. Please send a few times that work for you, or share a calendar link and I will find a slot.",
+    approval:
+      "Thanks for sending this over. I will review the approval request and follow up with a decision or any questions.",
+    document_review:
+      "Thanks for sharing this. I will review the document and follow up with comments or next steps.",
+    finance:
+      "Thanks for sending this. I will review it for reconciliation or payment handling and follow up if anything else is needed.",
+    support:
+      "Thanks for flagging this. I will review the issue and follow up with the next step.",
+    request:
+      "Thanks for the note. I will review the request and follow up with the next step.",
+    general:
+      "Thanks for sending this. I will review it and follow up shortly.",
+  };
+  return [greeting, "", bodyByScenario[scenario] ?? bodyByScenario.general, "", "Best,"].join("\n");
+}
+
+function draftLooksCopiedOrWeak(draft: string, suggestion: DonnitEmailSuggestion) {
+  const normalizedDraft = draft.toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedSource = `${suggestion.subject} ${suggestion.body}`.toLowerCase().replace(/\s+/g, " ").trim();
+  if (normalizedDraft.length < 40) return true;
+  if (normalizedDraft.includes("donnit interpretation") || normalizedDraft.includes("source excerpt")) return true;
+  const sourceSlice = normalizedSource.slice(0, 180);
+  return sourceSlice.length > 80 && normalizedDraft.includes(sourceSlice);
 }
 
 async function draftSuggestionReplyWithAi(
@@ -2837,7 +2917,14 @@ async function draftSuggestionReplyWithAi(
           {
             role: "system",
             content:
-              "Draft a concise, professional workplace reply for Donnit. The user will edit before sending. Do not invent commitments, prices, dates, attachments, or approvals that are not in the source. Keep it human, useful, and ready to send. Return only the requested JSON fields.",
+              [
+                "Draft a concise, professional workplace reply for Donnit. The user will edit before sending.",
+                "Write as the Donnit user replying to the sender. Do not copy/paste or summarize the original email.",
+                "Respond to the sender's intent. If they ask to schedule, propose a practical scheduling next step instead of repeating the task. If they ask for approval, say you will review and follow up. If they sent a document, say you will review it and send comments or next steps.",
+                "Do not invent commitments, prices, dates, attachments, approvals, calendar availability, or legal conclusions that are not in the source.",
+                "Keep it human, useful, and ready to send. Prefer 2 to 5 sentences plus a simple greeting and signoff.",
+                "Return only the requested JSON fields.",
+              ].join(" "),
           },
           {
             role: "user",
@@ -2853,6 +2940,9 @@ async function draftSuggestionReplyWithAi(
                 urgency: suggestion.urgency,
                 actionItems: suggestion.action_items ?? [],
               },
+              replyScenario: replyScenario(suggestion),
+              guidance:
+                "The reply should be a response the recipient would reasonably expect, not a task description and not a copy of the inbound message.",
               userInstruction: instruction?.trim() || null,
             }),
           },
@@ -2880,9 +2970,13 @@ async function draftSuggestionReplyWithAi(
     const text = extractOutputText(json);
     if (!text) return { message: fallback, rationale: "Donnit used a simple fallback because OpenAI did not return text." };
     const parsed = aiReplyDraftSchema.safeParse(JSON.parse(text));
-    return parsed.success
-      ? parsed.data
-      : { message: fallback, rationale: "Donnit used a simple fallback because the AI draft was incomplete." };
+    if (!parsed.success) {
+      return { message: fallback, rationale: "Donnit used a simple fallback because the AI draft was incomplete." };
+    }
+    if (draftLooksCopiedOrWeak(parsed.data.message, suggestion)) {
+      return { message: fallback, rationale: "Donnit replaced a weak AI draft with a safer contextual response." };
+    }
+    return parsed.data;
   } catch {
     return { message: fallback, rationale: "Donnit used a simple fallback because the AI draft timed out." };
   } finally {
