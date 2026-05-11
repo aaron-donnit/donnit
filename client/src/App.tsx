@@ -1197,7 +1197,7 @@ function LandingPage() {
   const goToLogin = () => {
     window.location.hash = "/app";
   };
-  const integrations = ["Slack", "Gmail", "Outlook", "Teams", "Calendar", "SMS"];
+  const integrations = ["Slack", "Gmail", "Outlook", "Teams", "Calendar", "SMS soon"];
   const proofPoints = [
     "AI task capture",
     "Role memory",
@@ -1453,7 +1453,7 @@ function LandingPage() {
           <div className="mx-auto max-w-3xl text-center">
             <p className="ui-label">Works where work starts</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-              Slack, email, calendar, SMS.
+              Slack, email, and calendar first. SMS next.
             </h2>
           </div>
           <div className="mx-auto mt-8 grid max-w-4xl grid-cols-2 gap-3 sm:grid-cols-3">
@@ -1614,7 +1614,7 @@ function OnboardingChecklist({
               </p>
             </div>
           </div>
-          <div className="mt-4 grid gap-2 md:grid-cols-5">
+          <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
             {steps.map((step) => (
               <button
                 key={step.id}
@@ -1696,6 +1696,9 @@ function DemoWorkspaceGuide({
     ].includes(task.title),
   );
   const pendingApprovals = suggestions.filter((suggestion) => suggestion.status === "pending").length;
+  const slackItems =
+    tasks.filter((task) => task.source === "slack").length +
+    suggestions.filter((suggestion) => suggestion.fromEmail.toLowerCase().startsWith("slack:")).length;
   const demoProfiles = positionProfiles.filter((profile) =>
     ["Operations Manager", "Client Success Specialist", "Finance Coordinator"].includes(profile.title),
   );
@@ -1717,6 +1720,7 @@ function DemoWorkspaceGuide({
                 <span className="rounded-md bg-muted px-2 py-1">{demoTasks.length || tasks.length} demo tasks</span>
                 <span className="rounded-md bg-muted px-2 py-1">{pendingApprovals} pending approvals</span>
                 <span className="rounded-md bg-muted px-2 py-1">{demoProfiles.length} demo profiles</span>
+                <span className="rounded-md bg-muted px-2 py-1">{slackItems} Slack-origin items</span>
               </div>
             </div>
           </div>
@@ -4642,6 +4646,34 @@ function PositionProfilesPanel({
   const visibleProfileCurrentTasks = selectedProfile?.currentIncompleteTasks.filter(profileTaskMatches) ?? [];
   const visibleProfileRecurringTasks = selectedProfile?.recurringTasks.filter(profileTaskMatches) ?? [];
   const visibleProfileCompletedTasks = selectedProfile?.completedTasks.filter(profileTaskMatches) ?? [];
+  const handoffOwner = selectedProfile ? users.find((user) => String(user.id) === String(selectedProfile.currentOwnerId)) : null;
+  const temporaryOwner = selectedProfile ? users.find((user) => String(user.id) === String(selectedProfile.temporaryOwnerId)) : null;
+  const delegateOwner = selectedProfile ? users.find((user) => String(user.id) === String(selectedProfile.delegateUserId)) : null;
+  const handoffReadiness = !selectedProfile
+    ? null
+    : selectedProfile.status === "vacant"
+      ? {
+          label: "Coverage needed",
+          tone: "warning" as const,
+          action: "Assign temporary coverage or transfer the profile before showing this in a live handoff.",
+        }
+      : selectedProfile.riskLevel === "high"
+        ? {
+            label: "Needs manager review",
+            tone: "warning" as const,
+            action: "Review overdue work and add how-to notes for recurring responsibilities.",
+          }
+        : selectedProfile.recurringTasks.length === 0 && selectedProfile.completedTasks.length === 0
+          ? {
+              label: "Learning",
+              tone: "setup" as const,
+              action: "Capture recurring tasks and completion notes so this role has transferable memory.",
+            }
+          : {
+              label: "Handoff ready",
+              tone: "ready" as const,
+              action: "This profile has enough work memory to support a coverage or replacement conversation.",
+            };
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
       key={String(task.id)}
@@ -4883,6 +4915,96 @@ function PositionProfilesPanel({
                   <p className="text-muted-foreground">learned</p>
                 </div>
               </div>
+              {handoffReadiness && (
+                <div className="mt-3 rounded-md border border-brand-green/25 bg-brand-green/5 px-3 py-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-foreground">Handoff packet</p>
+                        <ToolStatusBadge status={handoffReadiness.tone} label={handoffReadiness.label} />
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Built for HR/Ops and people managers: current work, recurring responsibilities, historical context, and coverage controls in one place.
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          selectedProfile.persisted &&
+                          updateProfile.mutate({
+                            id: selectedProfile.id,
+                            patch: {
+                              status: "vacant",
+                              currentOwnerId: null,
+                              temporaryOwnerId: null,
+                              delegateUserId: null,
+                              delegateUntil: null,
+                              riskSummary: "Marked vacant by admin. Use delegate access or transfer when coverage is assigned.",
+                            },
+                          })
+                        }
+                        disabled={!canManageProfiles || !selectedProfile.persisted || updateProfile.isPending}
+                        data-testid="button-handoff-mark-vacant"
+                      >
+                        <AlertTriangle className="size-4" />
+                        Mark vacant
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openAssignment("delegate")}
+                        disabled={!canManageProfiles}
+                        data-testid="button-handoff-delegate"
+                      >
+                        <UserPlus className="size-4" />
+                        Delegate
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => openAssignment("transfer")}
+                        disabled={!canManageProfiles}
+                        data-testid="button-handoff-transfer"
+                      >
+                        <UserCog className="size-4" />
+                        Transfer
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs md:grid-cols-3">
+                    <div className="rounded-md bg-background px-3 py-2">
+                      <p className="ui-label">Coverage</p>
+                      <p className="mt-1 text-foreground">
+                        {selectedProfile.status === "vacant"
+                          ? "Vacant"
+                          : temporaryOwner
+                            ? `Covered by ${temporaryOwner.name}`
+                            : delegateOwner
+                              ? `Delegated to ${delegateOwner.name}`
+                              : `Owned by ${handoffOwner?.name ?? selectedProfile.owner.name}`}
+                      </p>
+                      {selectedProfile.delegateUntil && (
+                        <p className="mt-1 text-muted-foreground">Through {selectedProfile.delegateUntil}</p>
+                      )}
+                    </div>
+                    <div className="rounded-md bg-background px-3 py-2">
+                      <p className="ui-label">Included</p>
+                      <p className="mt-1 text-foreground">
+                        {selectedProfile.currentIncompleteTasks.length} open / {selectedProfile.recurringTasks.length} recurring / {selectedProfile.completedTasks.length} historical
+                      </p>
+                      <p className="mt-1 text-muted-foreground">Personal work excluded; confidential work access-controlled.</p>
+                    </div>
+                    <div className="rounded-md bg-background px-3 py-2">
+                      <p className="ui-label">Next action</p>
+                      <p className="mt-1 leading-5 text-foreground">{handoffReadiness.action}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
               {canManageProfiles && (
                 <div className="mt-3 space-y-1.5">
                   <Label htmlFor="position-profile-rename" className="ui-label">
@@ -7196,8 +7318,8 @@ function CalendarExportDialog({
   );
 }
 
-function ToolStatusBadge({ status }: { status: "ready" | "warning" | "setup" }) {
-  const label = status === "ready" ? "Ready" : status === "warning" ? "Needs attention" : "Setup";
+function ToolStatusBadge({ status, label: customLabel }: { status: "ready" | "warning" | "setup"; label?: string }) {
+  const label = customLabel ?? (status === "ready" ? "Ready" : status === "warning" ? "Needs attention" : "Setup");
   const classes =
     status === "ready"
       ? "border-brand-green/30 bg-brand-green/10 text-brand-green"
@@ -8113,9 +8235,6 @@ function WorkspaceSettingsDialog({
   const slackHealth: "ready" | "warning" | "setup" = slackEventsReady ? (slackBotReady ? "ready" : "warning") : "setup";
   const smsStatus = useSmsIntegrationStatus(authenticated);
   const smsData = smsStatus.data;
-  const smsInboundReady = Boolean(smsData?.inboundConfigured ?? integrations.sms?.inboundConfigured);
-  const smsProviderReady = Boolean(smsData?.signatureConfigured ?? integrations.sms?.signatureConfigured ?? integrations.sms?.providerConfigured);
-  const smsHealth: "ready" | "warning" | "setup" = smsInboundReady ? (smsProviderReady ? "ready" : "warning") : "setup";
   const googleHealthLabel =
     oauthStatus?.health === "ready"
       ? "Ready"
@@ -8188,30 +8307,6 @@ function WorkspaceSettingsDialog({
       toast({
         title: "Slack test failed",
         description: "Donnit could not queue a Slack test suggestion.",
-        variant: "destructive",
-      });
-    },
-  });
-  const testSms = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/integrations/sms/inbound", {
-        text: "Remind me to call the payroll vendor tomorrow, urgent",
-        from: "+15555555555",
-        subject: "SMS integration test",
-      });
-      return (await res.json()) as { ok: boolean };
-    },
-    onSuccess: async () => {
-      await invalidateWorkspace();
-      toast({
-        title: "SMS test queued",
-        description: "Open Approval inbox to review the SMS test suggestion.",
-      });
-    },
-    onError: () => {
-      toast({
-        title: "SMS test failed",
-        description: "Donnit could not queue an SMS test suggestion.",
         variant: "destructive",
       });
     },
@@ -8393,9 +8488,9 @@ function WorkspaceSettingsDialog({
                 detail={
                   slackEventsReady
                     ? slackBotReady
-                      ? `Events are ready. Donnit maps Slack users by profile email/name, then queues suggestions after a ${slackDelay} minute delay.`
-                      : `Events can ingest with the Slack signing secret or ingest token. Add SLACK_BOT_TOKEN for stronger user email mapping.`
-                    : "Slack events are not configured yet. Add SLACK_SIGNING_SECRET or DONNIT_SLACK_WEBHOOK_TOKEN."
+                      ? `MVP channel. Events are ready, user mapping is active, and Donnit queues suggestions after a ${slackDelay} minute delay.`
+                      : `MVP channel. Events can ingest with the Slack signing secret or ingest token. Add SLACK_BOT_TOKEN for stronger user email mapping.`
+                    : "MVP channel. Configure SLACK_SIGNING_SECRET or DONNIT_SLACK_WEBHOOK_TOKEN so Slack messages can become approval suggestions."
                 }
                 actionLabel="Queue test"
                 action={() => testSlack.mutate()}
@@ -8404,17 +8499,11 @@ function WorkspaceSettingsDialog({
               <ConnectedToolRow
                 icon={Send}
                 name="SMS"
-                status={smsHealth}
-                detail={
-                  smsInboundReady
-                    ? smsProviderReady
-                      ? `Inbound SMS is ready. Messages route to ${smsData?.routing.defaultAssigneeConfigured ? "the configured assignee" : "the workspace owner"} for approval.`
-                      : "Inbound SMS token is configured. Add TWILIO_AUTH_TOKEN to verify real Twilio webhooks."
-                    : "No SMS ingest token or Twilio signature verification is configured yet."
-                }
-                actionLabel="Queue test"
-                action={() => testSms.mutate()}
-                loading={testSms.isPending}
+                status="setup"
+                detail={`Coming soon after the MVP. The inbound endpoint exists for testing (${smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}), but Thursday's demo should position SMS as the next mobile command surface.`}
+                actionLabel="Coming soon"
+                action={() => undefined}
+                disabled
               />
             </div>
           </div>
@@ -9359,6 +9448,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const canOpenManagerReports = canViewManagerReports(currentUser);
   const showConnectGmail = Boolean(oauthData?.configured && !oauthData?.connected);
   const needsReconnect = Boolean(oauthData?.requiresReconnect);
+  const slackMvpReady = Boolean(
+    data.integrations.slack?.eventsConfigured ||
+      data.integrations.slack?.webhookConfigured ||
+      data.tasks.some((task) => task.source === "slack") ||
+      data.suggestions.some((suggestion) => suggestion.fromEmail.toLowerCase().startsWith("slack:")),
+  );
   const focusChatInput = () => {
     const el = document.getElementById("chat-message") as HTMLTextAreaElement | null;
     el?.focus();
@@ -9390,6 +9485,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       done: data.tasks.length > 0 || data.suggestions.length > 0,
       actionLabel: "Capture",
       onAction: focusChatInput,
+    },
+    {
+      id: "connect-slack",
+      title: "Include Slack",
+      detail: "Show Slack messages becoming approval-ready task suggestions in the MVP story.",
+      done: slackMvpReady,
+      actionLabel: slackMvpReady ? "Ready" : "Setup",
+      onAction: () => setWorkspaceSettingsOpen(true),
     },
     {
       id: "approve-queue",
@@ -9539,6 +9642,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: MailPlus,
       onClick: () => setManualImportOpen(true),
       hint: "Paste an email into the approval queue",
+    },
+    {
+      id: "slack-mvp",
+      label: slackMvpReady ? "Slack ready" : "Setup Slack",
+      icon: Inbox,
+      primary: !slackMvpReady,
+      onClick: () => setWorkspaceSettingsOpen(true),
+      hint: slackMvpReady
+        ? "Slack is included in the MVP approval workflow"
+        : "Open settings to configure or test Slack ingestion",
     },
     ...(showConnectGmail
       ? [
