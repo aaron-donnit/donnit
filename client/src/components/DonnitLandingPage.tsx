@@ -572,7 +572,7 @@ function ChatCapture() {
               Chat it in.<br />Donnit handles the rest.
             </h2>
             <p style={{ fontSize: 18, color: 'var(--charcoal-3)', margin: '0 0 28px', maxWidth: 480 }}>
-              Type how you talk — we parse the dates, urgency, recipients, and follow-ups. No forms, no dropdowns, no learning curve. Works in the app, in Slack, or via SMS.
+              Type how you talk and Donnit parses the dates, urgency, recipients, and follow-ups. No forms, no dropdowns, no learning curve. Works in the app and Slack, with SMS commands coming next.
             </p>
             <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
               {[
@@ -749,7 +749,7 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
             <ul className="price-features">
               <li>Everything in Individual</li>
               <li>Position Profiles</li>
-              <li>Slack and SMS intake</li>
+              <li>Slack intake and SMS command preview</li>
               <li>Admin portal and manager views</li>
               <li>Task templates and team reporting</li>
             </ul>
@@ -791,7 +791,7 @@ function FinalCTA({ onLead }: { onLead: (intent: LeadIntent) => void }) {
           <button type="button" className="btn btn-primary btn-arrow" onClick={() => onLead("signup")}>Sign Up <IconArrow /></button>
           <button type="button" className="btn btn-outline" style={{ borderColor: 'var(--charcoal)' }} onClick={() => onLead("demo")}>Book a 15-min demo</button>
         </div>
-        <div className="meta reveal reveal-4">Start with one workflow · Slack, Gmail, SMS, and chat intake</div>
+        <div className="meta reveal reveal-4">Start with one workflow: Slack, Gmail, chat intake, and SMS next</div>
 
         <div className="final-stage reveal reveal-4">
           {[12, 28, 44, 60, 76].map((left, i) => (
