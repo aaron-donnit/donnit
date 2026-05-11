@@ -5105,6 +5105,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       try {
         const auth = req.donnitAuth;
         const store = new DonnitStore(auth.client, auth.userId);
+        const adminClient = createSupabaseAdminClient();
+        const writeStore = new DonnitStore(adminClient ?? auth.client, auth.userId);
         const orgId = await store.getDefaultOrgId();
         if (!orgId) {
           res.status(409).json({ message: "Workspace not bootstrapped." });
@@ -5166,10 +5168,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
                   position_profile_id: profileId,
                   visible_from: visibleFromForRecurringTask(task),
                 };
-          const updated = await store.updateTask(task.id, patch);
+          const updated = await writeStore.updateTask(task.id, patch);
           if (!updated) continue;
           updatedCount += 1;
-          await store.addEvent(orgId, {
+          await writeStore.addEvent(orgId, {
             task_id: task.id,
             actor_id: auth.userId,
             type: mode === "transfer" ? "position_profile_transferred" : "position_profile_delegated",
@@ -5184,13 +5186,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               ((task as { position_profile_id?: string | null }).position_profile_id ?? null) !== profileId,
           );
           for (const task of historical) {
-            await store.updateTask(task.id, { position_profile_id: profileId });
+            await writeStore.updateTask(task.id, { position_profile_id: profileId });
           }
         }
         let profile = null;
         if (parsed.data.profileId) {
           const delegateUntilDate = delegateUntil || null;
-          const updatedProfile = await store.updatePositionProfile(orgId, parsed.data.profileId, {
+          const updatedProfile = await writeStore.updatePositionProfile(orgId, parsed.data.profileId, {
             status: mode === "transfer" ? "active" : "covered",
             current_owner_id: mode === "transfer" ? toUserId : fromUserId,
             temporary_owner_id: mode === "transfer" ? null : toUserId,
@@ -5203,7 +5205,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
           if (updatedProfile) {
             profile = toClientPositionProfile(updatedProfile);
-            await store.createPositionProfileAssignment(orgId, {
+            await writeStore.createPositionProfileAssignment(orgId, {
               position_profile_id: updatedProfile.id,
               from_user_id: fromUserId,
               to_user_id: toUserId,
