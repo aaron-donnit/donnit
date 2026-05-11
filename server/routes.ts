@@ -2008,7 +2008,66 @@ function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) 
   return Array.from(missing);
 }
 
-function missingChatQuestion(task: PendingChatTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
+function normalizedProfileSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function profileCandidatesForAssignee(profiles: DonnitPositionProfile[], assignedToId: string) {
+  return profiles.filter(
+    (profile) =>
+      profile.current_owner_id === assignedToId ||
+      profile.temporary_owner_id === assignedToId ||
+      profile.delegate_user_id === assignedToId,
+  );
+}
+
+function profileMatchesText(profile: DonnitPositionProfile, message: string) {
+  const haystack = normalizedProfileSearchText(message);
+  const title = normalizedProfileSearchText(profile.title);
+  if (!haystack || !title) return false;
+  if (haystack.includes(title)) return true;
+  const words = title.split(" ").filter((word) => word.length >= 3);
+  const acronym = words.map((word) => word[0]).join("");
+  if (acronym.length >= 2 && haystack.split(" ").includes(acronym)) return true;
+  return words.length >= 2 && words.every((word) => haystack.includes(word));
+}
+
+function resolveChatPositionProfile(input: {
+  profiles: DonnitPositionProfile[];
+  assignedToId: string;
+  message: string;
+  visibility: "work" | "personal" | "confidential";
+}) {
+  if (input.visibility === "personal") {
+    return { positionProfileId: null as string | null, needsChoice: false, candidates: [] as DonnitPositionProfile[] };
+  }
+  const candidates = profileCandidatesForAssignee(input.profiles, input.assignedToId);
+  if (candidates.length === 0) {
+    return { positionProfileId: null as string | null, needsChoice: false, candidates };
+  }
+  const explicit = candidates.find((profile) => profileMatchesText(profile, input.message));
+  if (explicit) {
+    return { positionProfileId: explicit.id, needsChoice: false, candidates };
+  }
+  if (candidates.length === 1) {
+    return { positionProfileId: candidates[0].id, needsChoice: false, candidates };
+  }
+  return { positionProfileId: null as string | null, needsChoice: true, candidates };
+}
+
+function formatProfileChoices(profiles: DonnitPositionProfile[]) {
+  return profiles.map((profile) => profile.title).slice(0, 5).join(", ");
+}
+
+function missingChatQuestion(
+  task: PendingChatTask,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+  profiles: DonnitPositionProfile[] = [],
+) {
   const assignee = members.find((member) => member.user_id === task.assignedToId);
   const assigneeName = memberDisplayName(assignee ?? {});
   const visibilityText = task.visibility === "confidential"
@@ -2018,6 +2077,24 @@ function missingChatQuestion(task: PendingChatTask, members: Awaited<ReturnType<
       : "";
   const intro = `I can assign ${assigneeName} to ${lowercaseFirst(task.title)}${visibilityText}.`;
   const missing = pendingChatMissing(task);
+  const profileCandidates = missing.includes("positionProfile")
+    ? profileCandidatesForAssignee(profiles, task.assignedToId)
+    : [];
+  const profileQuestion = profileCandidates.length > 0
+    ? ` Which Position Profile should this belong to: ${formatProfileChoices(profileCandidates)}?`
+    : "";
+  if (missing.includes("positionProfile") && missing.includes("dueDate") && missing.includes("urgency")) {
+    return `${intro}${profileQuestion} Also, when is it due, and how urgent is it?`;
+  }
+  if (missing.includes("positionProfile") && missing.includes("dueDate")) {
+    return `${intro}${profileQuestion} Also, when is it due?`;
+  }
+  if (missing.includes("positionProfile") && missing.includes("urgency")) {
+    return `${intro}${profileQuestion} Also, how urgent is it?`;
+  }
+  if (missing.includes("positionProfile")) {
+    return `${intro}${profileQuestion || " Which Position Profile should this belong to?"}`;
+  }
   if (missing.includes("dueDate") && missing.includes("urgency")) {
     return `${intro} When is this due, and how urgent is it?`;
   }
@@ -2049,11 +2126,17 @@ function formatChatDueDate(value: string | null) {
   return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(parsed);
 }
 
-function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
+function chatTaskOutcome(
+  task: DonnitTask,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+  profiles: DonnitPositionProfile[] = [],
+) {
   const assignee = members.find((member) => member.user_id === task.assigned_to);
   const assigneeName = memberDisplayName(assignee ?? {});
   const action = taskActionForSentence(task.title);
   const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}` : "";
+  const positionProfile = profiles.find((profile) => profile.id === ((task as { position_profile_id?: string | null }).position_profile_id ?? null));
+  const profileText = positionProfile ? ` This belongs to the ${positionProfile.title} Position Profile.` : "";
   const urgencyText =
     task.urgency === "critical"
       ? " It is marked critical."
@@ -2066,7 +2149,7 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
       : task.visibility === "personal"
         ? " This task was marked as personal."
         : "";
-  return `I assigned ${assigneeName} to ${action}${dueText}.${urgencyText}${visibilitySentence}`;
+  return `I assigned ${assigneeName} to ${action}${dueText}.${profileText}${urgencyText}${visibilitySentence}`;
 }
 
 function buildPendingFromTaskInput(input: {
@@ -2082,7 +2165,8 @@ function buildPendingFromTaskInput(input: {
   recurrence: DonnitTask["recurrence"];
   reminderDaysBefore: number;
   visibility: "work" | "personal" | "confidential";
-}, missing: Array<"dueDate" | "urgency">): PendingChatTask {
+  positionProfileId?: string | null;
+}, missing: Array<"dueDate" | "urgency" | "positionProfile">): PendingChatTask {
   return {
     title: input.title,
     description: input.description,
@@ -2096,6 +2180,7 @@ function buildPendingFromTaskInput(input: {
     recurrence: input.recurrence,
     reminderDaysBefore: input.reminderDaysBefore,
     visibility: input.visibility,
+    positionProfileId: input.visibility === "personal" ? null : input.positionProfileId ?? null,
     missing,
     createdAt: new Date().toISOString(),
   };
@@ -2174,14 +2259,22 @@ async function clearPendingChatTask(store: DonnitStore, orgId: string) {
   }
 }
 
-function mergePendingChatTask(task: PendingChatTask, message: string): PendingChatTask {
+function mergePendingChatTask(task: PendingChatTask, message: string, profiles: DonnitPositionProfile[] = []): PendingChatTask {
   const dueDate = parseDueDate(message) ?? task.dueDate;
   const explicitUrgency = parseExplicitUrgency(message);
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
   const estimatedMinutes = /\d/.test(message) ? parseEstimate(message) : task.estimatedMinutes;
+  const profileResolution = resolveChatPositionProfile({
+    profiles,
+    assignedToId: task.assignedToId,
+    message,
+    visibility: task.visibility,
+  });
+  const positionProfileId = task.positionProfileId ?? profileResolution.positionProfileId;
   const missing = task.missing.filter((item) => {
     if (item === "dueDate") return !dueDate;
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
+    if (item === "positionProfile") return !positionProfileId;
     return false;
   });
   return {
@@ -2189,6 +2282,7 @@ function mergePendingChatTask(task: PendingChatTask, message: string): PendingCh
     dueDate,
     urgency,
     estimatedMinutes,
+    positionProfileId,
     missing,
   };
 }
@@ -2263,7 +2357,8 @@ const pendingChatTaskSchema = z.object({
   recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]),
   reminderDaysBefore: z.number().int().min(0).max(365),
   visibility: z.enum(["work", "personal", "confidential"]),
-  missing: z.array(z.enum(["dueDate", "urgency"])).default([]),
+  positionProfileId: z.string().nullable().optional(),
+  missing: z.array(z.enum(["dueDate", "urgency", "positionProfile"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -4530,22 +4625,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             return;
           }
 
-          const merged = mergePendingChatTask(pending, parsed.data.message);
+          const positionProfiles = pending.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
+          const merged = mergePendingChatTask(pending, parsed.data.message, positionProfiles);
           if (pendingChatMissing(merged).length > 0) {
             await setPendingChatTask(store, orgId, merged);
             const assistant = await store.createChatMessage(orgId, {
               role: "assistant",
-              content: missingChatQuestion(merged, members),
+              content: missingChatQuestion(merged, members, positionProfiles),
               task_id: null,
             });
             res.json({ assistant, pending: true });
             return;
           }
 
-          const activeProfile =
-            merged.visibility === "personal"
-              ? null
-              : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === merged.assignedToId);
           const created = await store.createTask(orgId, {
             title: merged.title,
             description: merged.description,
@@ -4558,7 +4650,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             source: merged.source,
             recurrence: merged.recurrence,
             reminder_days_before: merged.reminderDaysBefore,
-            position_profile_id: merged.visibility === "personal" ? null : activeProfile?.id ?? null,
+            position_profile_id: merged.visibility === "personal" ? null : merged.positionProfileId ?? null,
             visibility: merged.visibility,
             visible_from: visibleFromForRecurringTask({
               recurrence: merged.recurrence,
@@ -4570,7 +4662,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await clearPendingChatTask(store, orgId);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
-            content: chatTaskOutcome(created, members),
+            content: chatTaskOutcome(created, members, positionProfiles),
             task_id: created.id,
           });
           res.status(201).json({ task: toClientTask(created), assistant });
@@ -4628,32 +4720,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               visibility: ai.visibility ?? fallbackInput.visibility,
             }
           : fallbackInput;
-        const missing: Array<"dueDate" | "urgency"> = [];
+        const positionProfiles = taskInput.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
+        const profileResolution = resolveChatPositionProfile({
+          profiles: positionProfiles,
+          assignedToId: String(taskInput.assignedToId),
+          message: parsed.data.message,
+          visibility: taskInput.visibility ?? "work",
+        });
+        const missing: Array<"dueDate" | "urgency" | "positionProfile"> = [];
         const explicitUrgency = parseExplicitUrgency(parsed.data.message);
         if (!taskInput.dueDate) missing.push("dueDate");
         if (explicitUrgency === null && !(taskInput.dueDate && isPastDue(taskInput.dueDate))) missing.push("urgency");
+        if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
           const pendingTask = buildPendingFromTaskInput(
             {
               ...taskInput,
               assignedToId: String(taskInput.assignedToId),
               assignedById: String(taskInput.assignedById),
+              positionProfileId: profileResolution.positionProfileId,
             },
             missing,
           );
           await setPendingChatTask(store, orgId, pendingTask);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
-            content: missingChatQuestion(pendingTask, members),
+            content: missingChatQuestion(pendingTask, members, positionProfiles),
             task_id: null,
           });
           res.json({ assistant, pending: true });
           return;
         }
-        const activeProfile =
-          taskInput.visibility === "personal"
-            ? null
-            : (await store.listPositionProfiles(orgId)).find((profile) => profile.current_owner_id === taskInput.assignedToId);
         const created = await store.createTask(orgId, {
           title: taskInput.title,
           description: taskInput.description,
@@ -4666,7 +4763,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: taskInput.source,
           recurrence: taskInput.recurrence,
           reminder_days_before: taskInput.reminderDaysBefore,
-          position_profile_id: taskInput.visibility === "personal" ? null : activeProfile?.id ?? null,
+          position_profile_id: taskInput.visibility === "personal" ? null : profileResolution.positionProfileId,
           visibility: taskInput.visibility ?? "work",
           visible_from: visibleFromForRecurringTask({
             recurrence: taskInput.recurrence,
@@ -4677,7 +4774,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
+          content: `${chatTaskOutcome(created, members, positionProfiles)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
           task_id: created.id,
         });
         res.status(201).json({ task: toClientTask(created), assistant });
