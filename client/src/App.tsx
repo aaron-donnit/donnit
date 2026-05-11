@@ -800,6 +800,16 @@ function isActiveUser(user: User) {
   return user.status !== "inactive";
 }
 
+function teamMembersForUser(users: User[], currentUser: User | null | undefined, currentUserId: Id | null | undefined) {
+  if (!currentUser || !currentUserId) return [];
+  if (!["owner", "admin", "manager"].includes(currentUser.role)) return [];
+  return users.filter((user) => {
+    if (!isActiveUser(user)) return false;
+    if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
+    return String(user.managerId) === String(currentUserId);
+  });
+}
+
 function profilePrimaryOwnerId(profile: PositionProfile) {
   return profile.currentOwnerId ?? profile.owner.id;
 }
@@ -1910,6 +1920,7 @@ function TaskRow({
   onOpen,
   onPin,
   isCompleting,
+  readOnly = false,
 }: {
   task: Task;
   users: User[];
@@ -1917,6 +1928,7 @@ function TaskRow({
   onOpen: () => void;
   onPin?: () => void;
   isCompleting: boolean;
+  readOnly?: boolean;
 }) {
   const assignee = users.find((user) => user.id === task.assignedToId);
   const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
@@ -1951,8 +1963,8 @@ function TaskRow({
       <button
         type="button"
         onClick={onComplete}
-        disabled={isCompleting || isDone}
-        aria-label={isDone ? "Completed" : "Mark complete"}
+        disabled={isCompleting || isDone || readOnly}
+        aria-label={readOnly ? "Read-only team task" : isDone ? "Completed" : "Mark complete"}
         className={`check-circle ${isDone ? "is-checked" : ""}`}
         data-testid={`button-complete-${task.id}`}
       >
@@ -2051,6 +2063,7 @@ function TaskRow({
             <button
               type="button"
               onClick={onPin}
+              disabled={readOnly}
               className="inline-flex items-center gap-1 text-xs font-medium text-brand-green underline-offset-2 hover:underline"
               data-testid={`button-work-task-${task.id}`}
             >
@@ -2074,6 +2087,7 @@ function TaskList({
   currentUserId,
   viewLabel,
   onPinTask,
+  readOnly = false,
 }: {
   tasks: Task[];
   users: User[];
@@ -2084,6 +2098,7 @@ function TaskList({
   currentUserId?: Id;
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
+  readOnly?: boolean;
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -2289,7 +2304,8 @@ function TaskList({
                   isCompleting={completingId === task.id && complete.isPending}
                   onComplete={() => complete.mutate(task.id)}
                   onOpen={() => setSelectedTaskId(String(task.id))}
-                  onPin={onPinTask ? () => onPinTask(task.id) : undefined}
+                  onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
+                  readOnly={readOnly}
                 />
               ))}
             </div>
@@ -2311,7 +2327,8 @@ function TaskList({
                 isCompleting={false}
                 onComplete={() => undefined}
                 onOpen={() => setSelectedTaskId(String(task.id))}
-                onPin={onPinTask ? () => onPinTask(task.id) : undefined}
+                onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
+                readOnly={readOnly}
               />
             ))}
           </>
@@ -2324,6 +2341,7 @@ function TaskList({
         events={events}
         authenticated={authenticated}
         positionProfiles={positionProfiles}
+        readOnly={readOnly}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
           if (!open) setSelectedTaskId(null);
@@ -2340,6 +2358,7 @@ function TaskDetailDialog({
   events = [],
   authenticated = false,
   positionProfiles = [],
+  readOnly = false,
   open,
   onOpenChange,
 }: {
@@ -2349,6 +2368,7 @@ function TaskDetailDialog({
   events?: TaskEvent[];
   authenticated?: boolean;
   positionProfiles?: PositionProfile[];
+  readOnly?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -2414,6 +2434,7 @@ function TaskDetailDialog({
   const save = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
         title: title.trim(),
         description: description.trim(),
@@ -2453,6 +2474,7 @@ function TaskDetailDialog({
       collaboratorIds: string[];
     }) => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
         assignedToId: next.assignedToId,
         delegatedToId: next.delegatedToId || null,
@@ -2476,6 +2498,7 @@ function TaskDetailDialog({
   const postpone = useMutation({
     mutationFn: async (days: 1 | 7) => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("POST", `/api/tasks/${task.id}/${days === 1 ? "postpone-day" : "postpone-week"}`, {});
       return (await res.json()) as Task;
     },
@@ -2496,6 +2519,7 @@ function TaskDetailDialog({
   const donnit = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: note.trim() || "Donnit." });
       return (await res.json()) as Task;
     },
@@ -2516,6 +2540,7 @@ function TaskDetailDialog({
   const createSubtask = useMutation({
     mutationFn: async (input: { title: string; position: number }) => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("POST", `/api/tasks/${task.id}/subtasks`, input);
       return (await res.json()) as TaskSubtask;
     },
@@ -2535,6 +2560,7 @@ function TaskDetailDialog({
   const updateSubtask = useMutation({
     mutationFn: async (input: { subtaskId: Id; done: boolean }) => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}/subtasks/${input.subtaskId}`, { done: input.done });
       return (await res.json()) as TaskSubtask;
     },
@@ -2551,6 +2577,7 @@ function TaskDetailDialog({
   const removeSubtask = useMutation({
     mutationFn: async (subtaskId: Id) => {
       if (!task) throw new Error("No task selected.");
+      if (readOnly) throw new Error("This team view is read-only.");
       await apiRequest("DELETE", `/api/tasks/${task.id}/subtasks/${subtaskId}`);
     },
     onSuccess: invalidateWorkspace,
@@ -2672,6 +2699,7 @@ function TaskDetailDialog({
           <DialogDescription>
             Owned by {assignee?.name ?? "Unknown"} - assigned by {assigner?.name ?? "Unknown"}
             {delegate ? `, delegated to ${delegate.name}` : ""}.
+            {readOnly ? " You are viewing this as a manager; changes are disabled." : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -2734,6 +2762,7 @@ function TaskDetailDialog({
               id="task-detail-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
+              disabled={readOnly}
               maxLength={160}
               data-testid="input-task-detail-title"
             />
@@ -2745,6 +2774,7 @@ function TaskDetailDialog({
                 id="task-detail-status"
                 value={status}
                 onChange={(event) => setStatus(event.target.value)}
+                disabled={readOnly}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 data-testid="select-task-detail-status"
               >
@@ -2761,6 +2791,7 @@ function TaskDetailDialog({
                 id="task-detail-urgency"
                 value={urgency}
                 onChange={(event) => setUrgency(event.target.value as "low" | "normal" | "high" | "critical")}
+                disabled={readOnly}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 data-testid="select-task-detail-urgency"
               >
@@ -2777,6 +2808,7 @@ function TaskDetailDialog({
                 type="date"
                 value={dueDate}
                 onChange={(event) => setDueDate(event.target.value)}
+                disabled={readOnly}
                 data-testid="input-task-detail-due"
               />
               <div className="grid grid-cols-2 gap-1.5">
@@ -2785,7 +2817,7 @@ function TaskDetailDialog({
                   variant="outline"
                   size="sm"
                   onClick={() => postpone.mutate(1)}
-                  disabled={postpone.isPending}
+                  disabled={postpone.isPending || readOnly}
                   data-testid="button-task-postpone-day"
                 >
                   +1 day
@@ -2795,7 +2827,7 @@ function TaskDetailDialog({
                   variant="outline"
                   size="sm"
                   onClick={() => postpone.mutate(7)}
-                  disabled={postpone.isPending}
+                  disabled={postpone.isPending || readOnly}
                   data-testid="button-task-postpone-week"
                 >
                   +1 week
@@ -2812,6 +2844,7 @@ function TaskDetailDialog({
                 step={1}
                 value={estimatedMinutes}
                 onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
+                disabled={readOnly}
                 data-testid="input-task-detail-estimate"
               />
             </div>
@@ -2823,6 +2856,7 @@ function TaskDetailDialog({
                   type="checkbox"
                   checked={visibility === "confidential"}
                   onChange={(event) => setVisibility(event.target.checked ? "confidential" : "work")}
+                  disabled={readOnly}
                   className="size-4 rounded border-border accent-brand-green"
                   data-testid="checkbox-task-detail-confidential"
                 />
@@ -2833,6 +2867,7 @@ function TaskDetailDialog({
                   type="checkbox"
                   checked={visibility === "personal"}
                   onChange={(event) => setVisibility(event.target.checked ? "personal" : "work")}
+                  disabled={readOnly}
                   className="size-4 rounded border-border accent-brand-green"
                   data-testid="checkbox-task-detail-personal"
                 />
@@ -2845,6 +2880,7 @@ function TaskDetailDialog({
                 id="task-detail-recurrence"
                 value={recurrence}
                 onChange={(event) => setRecurrence(event.target.value)}
+                disabled={readOnly}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                 data-testid="select-task-detail-recurrence"
               >
@@ -2865,6 +2901,7 @@ function TaskDetailDialog({
                 max={365}
                 value={reminderDaysBefore}
                 onChange={(event) => setReminderDaysBefore(Math.max(0, Number(event.target.value) || 0))}
+                disabled={readOnly}
                 data-testid="input-task-detail-reminder-days"
               />
             </div>
@@ -2876,7 +2913,7 @@ function TaskDetailDialog({
                 id="task-detail-position-profile"
                 value={positionProfileId}
                 onChange={(event) => setPositionProfileId(event.target.value)}
-                disabled={visibility === "personal"}
+                disabled={visibility === "personal" || readOnly}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
                 data-testid="select-task-detail-position-profile"
               >
@@ -2924,6 +2961,7 @@ function TaskDetailDialog({
               id="task-detail-description"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
+              disabled={readOnly}
               className="min-h-[90px]"
               maxLength={2000}
               data-testid="input-task-detail-description"
@@ -2934,6 +2972,7 @@ function TaskDetailDialog({
             label="Notes"
             value={note}
             onChange={setNote}
+            disabled={readOnly}
             placeholder="Add an update, blocker, or completion note."
             className="min-h-[120px]"
             maxLength={1600}
@@ -2953,6 +2992,7 @@ function TaskDetailDialog({
               <Input
                 value={newSubtaskTitle}
                 onChange={(event) => setNewSubtaskTitle(event.target.value)}
+                disabled={readOnly}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
@@ -2967,7 +3007,7 @@ function TaskDetailDialog({
                 type="button"
                 variant="outline"
                 onClick={addSubtask}
-                disabled={!newSubtaskTitle.trim() || createSubtask.isPending}
+                disabled={!newSubtaskTitle.trim() || createSubtask.isPending || readOnly}
               >
                 {createSubtask.isPending ? <Loader2 className="size-4 animate-spin" /> : <ListPlus className="size-4" />}
                 Add
@@ -2984,7 +3024,7 @@ function TaskDetailDialog({
                     <button
                       type="button"
                       onClick={() => toggleSubtask(subtask)}
-                      disabled={updateSubtask.isPending}
+                      disabled={updateSubtask.isPending || readOnly}
                       className={`flex size-6 shrink-0 items-center justify-center rounded-md border ${
                         subtask.done ? "border-brand-green bg-brand-green text-white" : "border-border bg-muted"
                       }`}
@@ -3001,7 +3041,7 @@ function TaskDetailDialog({
                       size="icon"
                       className="size-7"
                       onClick={() => deleteSubtask(subtask.id)}
-                      disabled={removeSubtask.isPending}
+                      disabled={removeSubtask.isPending || readOnly}
                       aria-label="Delete subtask"
                     >
                       <X className="size-3.5" />
@@ -3046,7 +3086,7 @@ function TaskDetailDialog({
           <div className="flex flex-col gap-2 sm:flex-row">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" disabled={updateRelationships.isPending} data-testid="button-task-people-menu">
+                <Button variant="outline" disabled={updateRelationships.isPending || readOnly} data-testid="button-task-people-menu">
                   {updateRelationships.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
@@ -3131,14 +3171,14 @@ function TaskDetailDialog({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button variant="outline" onClick={() => save.mutate()} disabled={!ready || save.isPending} data-testid="button-task-detail-save">
+            <Button variant="outline" onClick={() => save.mutate()} disabled={!ready || save.isPending || readOnly} data-testid="button-task-detail-save">
               {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
               Save changes
             </Button>
           </div>
           <Button
             onClick={() => donnit.mutate()}
-            disabled={donnit.isPending || task.status === "completed"}
+            disabled={donnit.isPending || task.status === "completed" || readOnly}
             data-testid="button-task-donnit"
           >
             {donnit.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
@@ -3159,6 +3199,7 @@ type RichNoteEditorProps = {
   className?: string;
   maxLength?: number;
   testId?: string;
+  disabled?: boolean;
 };
 
 function RichNoteEditor({
@@ -3170,6 +3211,7 @@ function RichNoteEditor({
   className,
   maxLength,
   testId,
+  disabled = false,
 }: RichNoteEditorProps) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const updateSelection = (next: string, start: number, end = start) => {
@@ -3214,19 +3256,19 @@ function RichNoteEditor({
     <div className="space-y-1.5">
       {label && <Label htmlFor={id}>{label}</Label>}
       <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-muted/30 px-2 py-1">
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("**", "**")}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("**", "**")} disabled={disabled}>
           <Bold className="size-3.5" />
           Bold
         </Button>
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines(() => "- ")}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines(() => "- ")} disabled={disabled}>
           <List className="size-3.5" />
           Bullets
         </Button>
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines((index) => `${index + 1}. `)}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines((index) => `${index + 1}. `)} disabled={disabled}>
           <ListOrdered className="size-3.5" />
           Numbered
         </Button>
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("\n\n")}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("\n\n")} disabled={disabled}>
           Space
         </Button>
       </div>
@@ -3238,6 +3280,7 @@ function RichNoteEditor({
         placeholder={placeholder}
         className={className}
         maxLength={maxLength}
+        disabled={disabled}
         data-testid={testId}
       />
     </div>
@@ -3928,6 +3971,7 @@ function AgendaWorkDialog({
         subtasks={subtasks}
         events={events}
         authenticated={authenticated}
+        readOnly
         open={Boolean(selectedTask)}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setSelectedTaskId(null);
@@ -4122,12 +4166,7 @@ function TeamViewPanel({
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canViewTeam = Boolean(currentUser && ["owner", "admin", "manager"].includes(currentUser.role));
-  const teamMembers = users.filter((user) => {
-    if (!currentUser) return false;
-    if (!isActiveUser(user)) return false;
-    if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
-    return String(user.managerId) === String(currentUserId);
-  });
+  const teamMembers = teamMembersForUser(users, currentUser, currentUserId);
   const [selectedUserId, setSelectedUserId] = useState(String(teamMembers[0]?.id ?? ""));
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<"7d" | "30d" | "all">("30d");
@@ -9144,6 +9183,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
   const [mvpReadinessManuallyOpen, setMvpReadinessManuallyOpen] = useState(false);
   const [supportView, setSupportView] = useState<SupportRailView>("today");
+  const [workspaceTaskScope, setWorkspaceTaskScope] = useState<"mine" | "team">("mine");
+  const [selectedTeamViewUserId, setSelectedTeamViewUserId] = useState("");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
   const [reviewedNotificationIds, setReviewedNotificationIds] = useState<Set<string>>(() => {
     try {
@@ -9746,8 +9787,44 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     },
   });
 
+  const displayTasks = useMemo(() => (data?.tasks ?? []).filter(isVisibleWorkTask), [data?.tasks]);
+  const currentWorkspaceUser = useMemo(
+    () => data?.users.find((user) => String(user.id) === String(data.currentUserId)) ?? null,
+    [data?.currentUserId, data?.users],
+  );
+  const managerTeamMembers = useMemo(
+    () => teamMembersForUser(data?.users ?? [], currentWorkspaceUser, data?.currentUserId),
+    [currentWorkspaceUser, data?.currentUserId, data?.users],
+  );
+  const selectedTeamViewUser =
+    managerTeamMembers.find((user) => String(user.id) === selectedTeamViewUserId) ?? managerTeamMembers[0] ?? null;
+  const canUseTeamWorkspaceView = managerTeamMembers.length > 0;
+  const teamWorkspaceViewActive = workspaceTaskScope === "team" && canUseTeamWorkspaceView && Boolean(selectedTeamViewUser);
+  const activeTaskListUserId = teamWorkspaceViewActive && selectedTeamViewUser ? selectedTeamViewUser.id : data?.currentUserId;
+  const scopedDisplayTasks = useMemo(() => {
+    const ownerId = String(activeTaskListUserId ?? "");
+    if (!ownerId) return displayTasks;
+    return displayTasks.filter(
+      (task) =>
+        String(task.assignedToId) === ownerId ||
+        String(task.delegatedToId ?? "") === ownerId ||
+        (task.collaboratorIds ?? []).some((id) => String(id) === ownerId),
+    );
+  }, [activeTaskListUserId, displayTasks]);
+
+  useEffect(() => {
+    if (!canUseTeamWorkspaceView) {
+      if (workspaceTaskScope === "team") setWorkspaceTaskScope("mine");
+      if (selectedTeamViewUserId) setSelectedTeamViewUserId("");
+      return;
+    }
+    if (!selectedTeamViewUserId || !managerTeamMembers.some((user) => String(user.id) === selectedTeamViewUserId)) {
+      setSelectedTeamViewUserId(String(managerTeamMembers[0]?.id ?? ""));
+    }
+  }, [canUseTeamWorkspaceView, managerTeamMembers, selectedTeamViewUserId, workspaceTaskScope]);
+
   const metrics = useMemo(() => {
-    const tasks = (data?.tasks ?? []).filter(isVisibleWorkTask);
+    const tasks = scopedDisplayTasks;
     const suggestions = data?.suggestions ?? [];
     const today = localDateIso();
     const waitingTasks = tasks.filter((t) => t.status === "pending_acceptance").length;
@@ -9759,8 +9836,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       emailQueue: pendingSuggestions,
       completed: tasks.filter((t) => t.status === "completed").length,
     };
-  }, [data?.tasks, data?.suggestions]);
-  const displayTasks = useMemo(() => (data?.tasks ?? []).filter(isVisibleWorkTask), [data?.tasks]);
+  }, [scopedDisplayTasks, data?.suggestions]);
 
   const todayLabel = useMemo(
     () =>
@@ -10345,6 +10421,63 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           />
         )}
         <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
+          {canUseTeamWorkspaceView && (
+            <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/25 px-3 py-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-medium text-foreground">Workspace view</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {teamWorkspaceViewActive && selectedTeamViewUser
+                    ? `Viewing ${selectedTeamViewUser.name}'s tasks as read-only.`
+                    : "Viewing your assigned, delegated, and collaborative tasks."}
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceTaskScope("mine")}
+                    className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
+                      !teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
+                    }`}
+                    data-testid="button-workspace-view-mine"
+                  >
+                    My Tasks
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWorkspaceTaskScope("team");
+                      setSupportView("team");
+                    }}
+                    className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
+                      teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
+                    }`}
+                    data-testid="button-workspace-view-team"
+                  >
+                    My Team
+                  </button>
+                </div>
+                {workspaceTaskScope === "team" && (
+                  <select
+                    value={String(selectedTeamViewUser?.id ?? "")}
+                    onChange={(event) => {
+                      setSelectedTeamViewUserId(event.target.value);
+                      setWorkspaceTaskScope("team");
+                      setSupportView("team");
+                    }}
+                    className="flex h-10 min-w-[220px] rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-testid="select-workspace-team-member"
+                  >
+                    {managerTeamMembers.map((user) => (
+                      <option key={String(user.id)} value={String(user.id)}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          )}
           <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="ui-label">Today - {todayLabel}</span>
@@ -10367,15 +10500,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
                 <TaskList
-                  tasks={displayTasks}
+                  tasks={scopedDisplayTasks}
                   users={data.users}
                   subtasks={data.subtasks ?? []}
                   events={data.events}
                   authenticated={Boolean(data.authenticated)}
                   positionProfiles={positionProfiles}
-                  currentUserId={data.currentUserId}
-                  viewLabel="All workspace work"
+                  currentUserId={activeTaskListUserId}
+                  viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
+                  readOnly={teamWorkspaceViewActive}
                 />
               </div>
               {/* Focused command rail */}
