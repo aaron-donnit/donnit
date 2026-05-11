@@ -9,6 +9,7 @@
 
 const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
 const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "";
+const productionAuthRedirectUrl = "https://donnit-1.vercel.app";
 
 export const supabaseConfig = {
   url,
@@ -153,10 +154,12 @@ export function authRedirectUrl(): string {
     (import.meta.env.VITE_AUTH_REDIRECT_URL as string | undefined) ??
     (import.meta.env.VITE_SITE_URL as string | undefined) ??
     "";
-  if (explicit) return normalizeRedirect(explicit);
+  const explicitRedirect = explicit ? normalizeRedirect(explicit) : "";
+  if (explicitRedirect && !isPreviewProxyRedirect(explicitRedirect)) return explicitRedirect;
   if (typeof window === "undefined") return "";
   const { origin, pathname } = window.location;
-  return normalizeRedirect(`${origin}${pathname}`);
+  const runtimeRedirect = normalizeRedirect(`${origin}${pathname}`);
+  return isPreviewProxyRedirect(runtimeRedirect) ? productionAuthRedirectUrl : runtimeRedirect;
 }
 
 export function signInWithOAuth(provider: "google"): void {
@@ -242,10 +245,12 @@ export function recoveryRedirectUrl(): string {
     (import.meta.env.VITE_AUTH_REDIRECT_URL as string | undefined) ??
     (import.meta.env.VITE_SITE_URL as string | undefined) ??
     "";
-  if (explicit) return normalizeRedirect(explicit);
+  const explicitRedirect = explicit ? normalizeRedirect(explicit) : "";
+  if (explicitRedirect && !isPreviewProxyRedirect(explicitRedirect)) return explicitRedirect;
   if (typeof window === "undefined") return "";
   const { origin, pathname } = window.location;
-  return normalizeRedirect(`${origin}${pathname}`);
+  const runtimeRedirect = normalizeRedirect(`${origin}${pathname}`);
+  return isPreviewProxyRedirect(runtimeRedirect) ? productionAuthRedirectUrl : runtimeRedirect;
 }
 
 function normalizeRedirect(value: string): string {
@@ -268,6 +273,21 @@ function normalizeRedirect(value: string): string {
     return noQuery.replace(/\/+$/, "");
   }
   return noQuery;
+}
+
+function isPreviewProxyRedirect(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return (
+      host === "perplexity.ai" ||
+      host === "www.perplexity.ai" ||
+      host.endsWith(".perplexity.ai") ||
+      host.includes("pplx") ||
+      host.endsWith(".sites.pplx")
+    );
+  } catch {
+    return false;
+  }
 }
 
 // IMPORTANT: GoTrue's `/auth/v1/recover` endpoint reads `redirect_to` from
