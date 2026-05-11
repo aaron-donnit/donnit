@@ -576,6 +576,7 @@ function dueDateAssistantText(dueDate: string | null) {
 
 function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
   const text = message.toLowerCase();
+  if (/\b(?:not urgent|not high priority|no rush|not a rush)\b/.test(text)) return "normal";
   if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
   if (/(urgent|asap|high priority|important)/.test(text)) return "high";
   if (/(low priority|whenever|someday)/.test(text)) return "low";
@@ -584,6 +585,7 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
 
 function parseExplicitUrgency(message: string): "low" | "normal" | "high" | "critical" | null {
   const text = message.toLowerCase();
+  if (/\b(?:not urgent|not high priority|no rush|not a rush)\b/.test(text)) return "normal";
   if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
   if (/(urgent|asap|high priority|high urgency|highly urgent|\bhigh\b|important)/.test(text)) return "high";
   if (/(low priority|whenever|someday)/.test(text)) return "low";
@@ -719,6 +721,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(/\b(?:please\s+)?(?:add|create|make|log)\s+(?:a\s+)?(?:task|todo|to-do)\s+(?:to\s+)?/gi, "")
     .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
     .replace(/\b(?:i need|need|needs|need to)\s+/gi, "")
+    .replace(/\b(?:this\s+is\s+)?(?:not urgent|not high priority|no rush|not a rush)\b/gi, "")
     .replace(/\b(?:due|by|before|on)\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/gi, "")
     .replace(/\b(?:due|by|before|on)\s+(?:eod|cob|close of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year)\b/gi, "")
     .replace(naturalDate, "")
@@ -737,6 +740,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
   const withoutAssignee = stripLeadingUnknownAssignee(stripAssigneePhrases(cleaned, assigneeLabels))
     .replace(/\s+/g, " ")
     .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
+    .replace(/\b(?:,?\s*this\s+is\s+not|,?\s*not)\s*$/i, "")
     .replace(/^to\s+/i, "")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
@@ -2026,6 +2030,17 @@ function lowercaseFirst(value: string) {
   return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
 }
 
+function taskActionForSentence(title: string) {
+  return lowercaseFirst(
+    title
+      .replace(/^to\s+/i, "")
+      .replace(/\b(?:this\s+is\s+)?(?:not urgent|not high priority|no rush|not a rush)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
+      .trim(),
+  );
+}
+
 function formatChatDueDate(value: string | null) {
   if (!value) return "no due date";
   const parsed = new Date(`${value}T12:00:00Z`);
@@ -2036,13 +2051,21 @@ function formatChatDueDate(value: string | null) {
 function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
   const assignee = members.find((member) => member.user_id === task.assigned_to);
   const assigneeName = memberDisplayName(assignee ?? {});
+  const action = taskActionForSentence(task.title);
+  const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}` : "";
+  const urgencyText =
+    task.urgency === "critical"
+      ? " It is marked critical."
+      : task.urgency === "high"
+        ? " It is marked high priority."
+        : "";
   const visibilitySentence =
     task.visibility === "confidential"
       ? " This task was marked as confidential."
       : task.visibility === "personal"
         ? " This task was marked as personal."
         : "";
-  return `${assigneeName} was assigned to ${lowercaseFirst(task.title)} by ${formatChatDueDate(task.due_date)}.${visibilitySentence}`;
+  return `I assigned ${assigneeName} to ${action}${dueText}.${urgencyText}${visibilitySentence}`;
 }
 
 function buildPendingFromTaskInput(input: {
@@ -2628,7 +2651,15 @@ function normalizeAiTitle(title: string, fallback: string, assigneeLabels: strin
     titleFromMessage(title, assigneeLabels) ||
     titleFromMessage(fallback, assigneeLabels) ||
     fallback.trim();
-  return compactTaskText(cleaned.replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+/i, ""), 160);
+  return compactTaskText(
+    cleaned
+      .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+/i, "")
+      .replace(/^to\s+/i, "")
+      .replace(/\b(?:this\s+is\s+)?(?:not urgent|not high priority|no rush|not a rush)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    160,
+  );
 }
 
 function normalizeAiDescription(description: string, fallback: string) {
@@ -2700,6 +2731,7 @@ async function extractTaskWithAi(input: {
                 "Descriptions should explain the next step in one or two plain sentences.",
                 "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
                 "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
+                "When the user says 'not urgent' or 'no rush', set urgency=normal and do not include that phrase in the title.",
                 "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
                 "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
                 "For email input, set replyNeeded=true only when the sender appears to expect a response; replyIntent should explain the response goal in plain language. Receipts, newsletters, automated notices, and FYI messages usually do not need replies.",
