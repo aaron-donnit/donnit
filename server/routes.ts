@@ -5139,15 +5139,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         let updatedCount = 0;
         for (const task of active) {
+          const inheritedContext = {
+            profileTitle,
+            fromUserId,
+            toUserId,
+            mode,
+            delegateUntil: delegateUntil ?? null,
+            inheritedDescription: task.description ?? "",
+            inheritedCompletionNotes: task.completion_notes ?? "",
+            inheritedAt: new Date().toISOString(),
+          };
           const patch: Partial<DonnitTask> =
             mode === "transfer"
               ? {
                   assigned_to: toUserId,
+                  description: "",
+                  completion_notes: "",
                   position_profile_id: profileId,
                   visible_from: visibleFromForRecurringTask(task),
                   ...(hasTaskRelationshipColumns(task) ? { delegated_to: null } : {}),
                 }
-              : { delegated_to: toUserId, position_profile_id: profileId, visible_from: visibleFromForRecurringTask(task) };
+              : {
+                  delegated_to: toUserId,
+                  description: "",
+                  completion_notes: "",
+                  position_profile_id: profileId,
+                  visible_from: visibleFromForRecurringTask(task),
+                };
           const updated = await store.updateTask(task.id, patch);
           if (!updated) continue;
           updatedCount += 1;
@@ -5155,13 +5173,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             task_id: task.id,
             actor_id: auth.userId,
             type: mode === "transfer" ? "position_profile_transferred" : "position_profile_delegated",
-            note: JSON.stringify({
-              profileTitle,
-              fromUserId,
-              toUserId,
-              mode,
-              delegateUntil: delegateUntil ?? null,
-            }),
+            note: JSON.stringify(inheritedContext),
           });
         }
         if (profileId) {

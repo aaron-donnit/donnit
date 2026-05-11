@@ -170,6 +170,17 @@ type TaskEvent = {
   createdAt: string;
 };
 
+type InheritedTaskContext = {
+  profileTitle: string;
+  fromUserId: Id | null;
+  toUserId: Id | null;
+  mode: string;
+  delegateUntil: string | null;
+  inheritedDescription: string;
+  inheritedCompletionNotes: string;
+  inheritedAt: string | null;
+};
+
 type LocalSubtask = {
   id: string;
   taskId: Id;
@@ -427,6 +438,38 @@ function apiErrorMessage(error: unknown, fallback: string) {
   return raw || fallback;
 }
 
+function parseInheritedTaskContext(events: TaskEvent[], taskId: Id): InheritedTaskContext | null {
+  const event = events.find((item) => (
+    String(item.taskId) === String(taskId) &&
+    (item.type === "position_profile_transferred" || item.type === "position_profile_delegated")
+  ));
+  if (!event) return null;
+  try {
+    const parsed = JSON.parse(event.note) as Partial<InheritedTaskContext>;
+    return {
+      profileTitle: typeof parsed.profileTitle === "string" && parsed.profileTitle.trim() ? parsed.profileTitle : "Position Profile",
+      fromUserId: parsed.fromUserId ?? null,
+      toUserId: parsed.toUserId ?? null,
+      mode: typeof parsed.mode === "string" ? parsed.mode : event.type.replace("position_profile_", ""),
+      delegateUntil: typeof parsed.delegateUntil === "string" ? parsed.delegateUntil : null,
+      inheritedDescription: typeof parsed.inheritedDescription === "string" ? parsed.inheritedDescription : "",
+      inheritedCompletionNotes: typeof parsed.inheritedCompletionNotes === "string" ? parsed.inheritedCompletionNotes : "",
+      inheritedAt: typeof parsed.inheritedAt === "string" ? parsed.inheritedAt : event.createdAt,
+    };
+  } catch {
+    return {
+      profileTitle: "Position Profile",
+      fromUserId: null,
+      toUserId: null,
+      mode: event.type.replace("position_profile_", ""),
+      delegateUntil: null,
+      inheritedDescription: "",
+      inheritedCompletionNotes: event.note,
+      inheritedAt: event.createdAt,
+    };
+  }
+}
+
 function titleCase(value: string) {
   return value
     .replace(/[_-]+/g, " ")
@@ -571,7 +614,7 @@ function buildPositionProfiles(
 ): PositionProfile[] {
   const today = new Date().toISOString().slice(0, 10);
   const derivedProfiles: PositionProfile[] = users.map((user) => {
-    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility === "work");
+    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility !== "personal");
     const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
     const completedTasks = owned.filter((task) => task.status === "completed");
     const recurringTasks = owned.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
@@ -664,7 +707,7 @@ function buildPositionProfiles(
     usedRecordIds.add(record.id);
     const profileTasks = tasks.filter(
       (task) =>
-        task.visibility === "work" &&
+        task.visibility !== "personal" &&
         (String(task.positionProfileId ?? "") === record.id || String(task.assignedToId) === String(profile.owner.id)),
     );
     return mergeProfileRecord({ ...profile, currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"), completedTasks: profileTasks.filter((task) => task.status === "completed") }, record);
@@ -1790,6 +1833,7 @@ function TaskList({
   tasks,
   users,
   subtasks = [],
+  events = [],
   authenticated = false,
   viewLabel,
   onPinTask,
@@ -1797,6 +1841,7 @@ function TaskList({
   tasks: Task[];
   users: User[];
   subtasks?: TaskSubtask[];
+  events?: TaskEvent[];
   authenticated?: boolean;
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
@@ -1978,7 +2023,7 @@ function TaskList({
         task={selectedTask}
         users={users}
         subtasks={subtasks}
-        events={[]}
+        events={events}
         authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
@@ -2021,6 +2066,7 @@ function TaskDetailDialog({
   const [note, setNote] = useState("");
   const [localSubtasks, setLocalSubtasks] = useState<LocalSubtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  const [showInheritedHistory, setShowInheritedHistory] = useState(false);
 
   useEffect(() => {
     if (!task) return;
@@ -2038,6 +2084,7 @@ function TaskDetailDialog({
     setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
     setNewSubtaskTitle("");
+    setShowInheritedHistory(false);
     if (authenticated) {
       setLocalSubtasks([]);
       return;
@@ -2211,6 +2258,8 @@ function TaskDetailDialog({
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
   const assigner = users.find((user) => String(user.id) === String(task.assignedById));
   const delegate = users.find((user) => String(user.id) === delegatedToId);
+  const inheritedContext = parseInheritedTaskContext(events, task.id);
+  const inheritedFrom = inheritedContext ? users.find((user) => String(user.id) === String(inheritedContext.fromUserId)) : null;
   const selectedCollaborators = users.filter((user) => collaboratorIds.includes(String(user.id)));
   const collaboratorOptions = activeUsers.filter(
     (user) => String(user.id) !== assignedToId && !collaboratorIds.includes(String(user.id)),
@@ -2307,6 +2356,58 @@ function TaskDetailDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="grid gap-4">
+          {inheritedContext && (
+            <div className="rounded-md border border-brand-green/30 bg-brand-green/10 px-3 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Inherited from {inheritedContext.profileTitle}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This task starts with blank working notes for the new owner. Prior context is preserved separately for reference.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowInheritedHistory((value) => !value)}
+                  data-testid="button-task-inherited-history-toggle"
+                >
+                  {showInheritedHistory ? "Hide history" : "Show history"}
+                </Button>
+              </div>
+              {showInheritedHistory && (
+                <div className="mt-3 grid gap-2 text-xs">
+                  <div className="rounded-md border border-border bg-background px-3 py-2">
+                    <p className="font-medium text-foreground">
+                      Source owner: {inheritedFrom?.name ?? "Previous profile owner"}
+                      {inheritedContext.inheritedAt ? ` · ${new Date(inheritedContext.inheritedAt).toLocaleString()}` : ""}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      Mode: {inheritedContext.mode === "delegate" ? "delegated coverage" : "reassigned profile work"}
+                      {inheritedContext.delegateUntil ? ` through ${inheritedContext.delegateUntil}` : ""}
+                    </p>
+                  </div>
+                  {inheritedContext.inheritedDescription && (
+                    <div className="rounded-md border border-border bg-background px-3 py-2">
+                      <p className="mb-1 font-medium text-foreground">Previous description</p>
+                      <p className="whitespace-pre-wrap text-muted-foreground">{inheritedContext.inheritedDescription}</p>
+                    </div>
+                  )}
+                  {inheritedContext.inheritedCompletionNotes && (
+                    <div className="rounded-md border border-border bg-background px-3 py-2">
+                      <p className="mb-1 font-medium text-foreground">Previous notes</p>
+                      <p className="whitespace-pre-wrap text-muted-foreground">{inheritedContext.inheritedCompletionNotes}</p>
+                    </div>
+                  )}
+                  {!inheritedContext.inheritedDescription && !inheritedContext.inheritedCompletionNotes && (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-muted-foreground">
+                      No prior notes were captured with this handoff.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-title">Title</Label>
             <Input
@@ -3166,6 +3267,7 @@ function AgendaWorkDialog({
   tasks,
   users,
   subtasks = [],
+  events = [],
   authenticated = false,
   onPinTask,
 }: {
@@ -3175,6 +3277,7 @@ function AgendaWorkDialog({
   tasks: Task[];
   users: User[];
   subtasks?: TaskSubtask[];
+  events?: TaskEvent[];
   authenticated?: boolean;
   onPinTask: (taskId: Id) => void;
 }) {
@@ -3310,6 +3413,7 @@ function AgendaWorkDialog({
         task={selectedTask}
         users={users}
         subtasks={subtasks}
+        events={events}
         authenticated={authenticated}
         open={Boolean(selectedTask)}
         onOpenChange={(nextOpen) => {
@@ -4612,7 +4716,7 @@ function PositionProfilesPanel({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Personal and confidential tasks are excluded from this role memory.
+                Personal tasks are excluded. Confidential work stays in role memory but remains access-controlled.
               </p>
               {showProfileHistory && (
                 <div className="mt-3 space-y-2">
@@ -8812,6 +8916,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   tasks={displayTasks}
                   users={data.users}
                   subtasks={data.subtasks ?? []}
+                  events={data.events}
                   authenticated={Boolean(data.authenticated)}
                   viewLabel="All workspace work"
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
@@ -8906,6 +9011,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         tasks={data.tasks}
         users={data.users}
         subtasks={data.subtasks ?? []}
+        events={data.events}
         authenticated={Boolean(data.authenticated)}
         onPinTask={(taskId) => setActiveWorkTask(taskId)}
       />
@@ -8977,6 +9083,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         task={notificationTask}
         users={data.users}
         subtasks={data.subtasks ?? []}
+        events={data.events}
         authenticated={Boolean(data.authenticated)}
         open={Boolean(notificationTask)}
         onOpenChange={(open) => {
