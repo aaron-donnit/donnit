@@ -403,11 +403,23 @@ type PositionProfile = {
   howTo: string[];
   tools: string[];
   stakeholders: string[];
+  accessItems: ProfileAccessItem[];
+  institutionalMemory: Record<string, unknown>;
   riskScore: number;
   riskLevel: "low" | "medium" | "high";
   riskReasons: string[];
   transitionChecklist: string[];
   lastUpdatedAt: string | null;
+};
+
+type ProfileAccessItem = {
+  id: string;
+  toolName: string;
+  loginUrl: string;
+  accountOwner: string;
+  billingNotes: string;
+  status: "active" | "needs_grant" | "needs_reset" | "remove_access" | "pending";
+  updatedAt: string;
 };
 
 type PersistedPositionProfile = {
@@ -595,10 +607,37 @@ function memoryStringArray(memory: Record<string, unknown>, keys: string[]) {
   return [];
 }
 
+function memoryAccessItems(memory: Record<string, unknown>): ProfileAccessItem[] {
+  const value = memory.accessItems;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index): ProfileAccessItem | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const toolName = typeof record.toolName === "string" ? record.toolName.trim() : "";
+      if (!toolName) return null;
+      const status = typeof record.status === "string" && ["active", "needs_grant", "needs_reset", "remove_access", "pending"].includes(record.status)
+        ? record.status as ProfileAccessItem["status"]
+        : "pending";
+      return {
+        id: typeof record.id === "string" && record.id ? record.id : `access-${Date.now()}-${index}`,
+        toolName,
+        loginUrl: typeof record.loginUrl === "string" ? record.loginUrl : "",
+        accountOwner: typeof record.accountOwner === "string" ? record.accountOwner : "",
+        billingNotes: typeof record.billingNotes === "string" ? record.billingNotes : "",
+        status,
+        updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+      };
+    })
+    .filter((item): item is ProfileAccessItem => item !== null)
+    .slice(0, 40);
+}
+
 function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionProfile): PositionProfile {
   const memory = record.institutionalMemory ?? {};
+  const accessItems = memoryAccessItems(memory);
   const howTo = Array.from(new Set([...memoryStringArray(memory, ["howTo", "howToNotes"]), ...profile.howTo])).slice(0, 6);
-  const tools = Array.from(new Set([...memoryStringArray(memory, ["tools", "toolAccess"]), ...profile.tools])).slice(0, 8);
+  const tools = Array.from(new Set([...memoryStringArray(memory, ["tools", "toolAccess"]), ...accessItems.map((item) => item.toolName), ...profile.tools])).slice(0, 8);
   const stakeholders = Array.from(new Set([...memoryStringArray(memory, ["stakeholders", "contacts"]), ...profile.stakeholders])).slice(0, 8);
   const criticalDates = Array.from(new Set([...memoryStringArray(memory, ["criticalDates"]), ...profile.criticalDates])).slice(0, 6);
   const transitionChecklist = Array.from(
@@ -623,6 +662,8 @@ function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionP
     howTo,
     tools,
     stakeholders,
+    accessItems,
+    institutionalMemory: memory,
     criticalDates,
     transitionChecklist,
     riskScore,
@@ -656,6 +697,8 @@ function buildEmptyPositionProfile(record: PersistedPositionProfile, users: User
     howTo: [],
     tools: [],
     stakeholders: [],
+    accessItems: [],
+    institutionalMemory: record.institutionalMemory ?? {},
     riskScore: record.riskScore ?? 0,
     riskLevel: (record.riskScore ?? 0) >= 60 ? "high" : (record.riskScore ?? 0) >= 30 ? "medium" : "low",
     riskReasons: record.riskSummary ? [record.riskSummary] : [],
@@ -748,6 +791,8 @@ function buildPositionProfiles(
       howTo,
       tools: inferToolsFromTasks(owned),
       stakeholders: stakeholderNames,
+      accessItems: [],
+      institutionalMemory: {},
       riskScore,
       riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
       riskReasons,
@@ -4767,6 +4812,8 @@ function PositionProfilesPanel({
               howTo: [],
               tools: [],
               stakeholders: [],
+              accessItems: [],
+              institutionalMemory: {},
               riskScore: 0,
               riskLevel: "low" as const,
               riskReasons: [],
@@ -4817,6 +4864,13 @@ function PositionProfilesPanel({
   const [showProfileHistory, setShowProfileHistory] = useState(false);
   const [profileTaskSearch, setProfileTaskSearch] = useState("");
   const [selectedProfileTaskId, setSelectedProfileTaskId] = useState<string | null>(null);
+  const [accessDraft, setAccessDraft] = useState<{
+    toolName: string;
+    loginUrl: string;
+    accountOwner: string;
+    billingNotes: string;
+    status: ProfileAccessItem["status"];
+  }>({ toolName: "", loginUrl: "", accountOwner: "", billingNotes: "", status: "needs_grant" });
   const assignmentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -5003,6 +5057,56 @@ function PositionProfilesPanel({
     setAssignmentDialogOpen(true);
   };
 
+  const saveAccessInventory = (items: ProfileAccessItem[]) => {
+    if (!selectedProfile) return;
+    if (!authenticated || !selectedProfile.persisted) {
+      toast({
+        title: "Save the Position Profile first",
+        description: "Access inventory is stored on saved admin Position Profiles.",
+      });
+      return;
+    }
+    updateProfile.mutate({
+      id: selectedProfile.id,
+      patch: {
+        institutionalMemory: {
+          ...selectedProfile.institutionalMemory,
+          accessItems: items,
+        },
+      },
+    });
+  };
+  const addAccessItem = () => {
+    if (!selectedProfile) return;
+    const toolName = accessDraft.toolName.trim();
+    if (!toolName) return;
+    saveAccessInventory([
+      ...selectedProfile.accessItems,
+      {
+        id: `access-${Date.now()}`,
+        toolName,
+        loginUrl: accessDraft.loginUrl.trim(),
+        accountOwner: accessDraft.accountOwner.trim(),
+        billingNotes: accessDraft.billingNotes.trim(),
+        status: accessDraft.status,
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+    setAccessDraft({ toolName: "", loginUrl: "", accountOwner: "", billingNotes: "", status: "needs_grant" });
+  };
+  const setAccessStatus = (id: string, status: ProfileAccessItem["status"]) => {
+    if (!selectedProfile) return;
+    saveAccessInventory(
+      selectedProfile.accessItems.map((item) =>
+        item.id === id ? { ...item, status, updatedAt: new Date().toISOString() } : item,
+      ),
+    );
+  };
+  const removeAccessItem = (id: string) => {
+    if (!selectedProfile) return;
+    saveAccessInventory(selectedProfile.accessItems.filter((item) => item.id !== id));
+  };
+
   const assign = useMutation({
     mutationFn: async () => {
       if (!selectedProfile || !targetUserId) throw new Error("Choose a profile and target user.");
@@ -5099,6 +5203,13 @@ function PositionProfilesPanel({
               tone: "ready" as const,
               action: "This profile has enough work memory to support a coverage or replacement conversation.",
             };
+  const accessStatusLabels: Record<ProfileAccessItem["status"], string> = {
+    active: "Active",
+    needs_grant: "Grant access",
+    needs_reset: "Reset needed",
+    remove_access: "Remove access",
+    pending: "Pending",
+  };
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
       key={String(task.id)}
@@ -5570,6 +5681,136 @@ function PositionProfilesPanel({
                   </li>
                 ))}
               </ul>
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                    <KeyRound className="size-4 text-muted-foreground" />
+                    Access inventory
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Admin record for role tools, access owner, billing context, and reset/removal status.
+                  </p>
+                </div>
+                <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
+                  {selectedProfile.accessItems.length}
+                </span>
+              </div>
+              <div className="grid gap-2">
+                {selectedProfile.accessItems.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                    No tools recorded for this role yet.
+                  </p>
+                ) : (
+                  selectedProfile.accessItems.map((item) => (
+                    <div key={item.id} className="rounded-md border border-border bg-muted/30 px-3 py-2">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-foreground">{item.toolName}</p>
+                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                            {item.accountOwner || "No owner noted"}{item.loginUrl ? ` / ${item.loginUrl}` : ""}
+                          </p>
+                        </div>
+                        <span className="rounded-md bg-background px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                          {accessStatusLabels[item.status]}
+                        </span>
+                      </div>
+                      {item.billingNotes && (
+                        <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{item.billingNotes}</p>
+                      )}
+                      {canManageProfiles && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {(["active", "needs_grant", "needs_reset", "remove_access"] as ProfileAccessItem["status"][]).map((status) => (
+                            <Button
+                              key={`${item.id}-${status}`}
+                              type="button"
+                              variant={item.status === status ? "default" : "outline"}
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => setAccessStatus(item.id, status)}
+                              disabled={updateProfile.isPending}
+                              data-testid={`button-profile-access-${status}-${item.id}`}
+                            >
+                              {accessStatusLabels[status]}
+                            </Button>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={() => removeAccessItem(item.id)}
+                            disabled={updateProfile.isPending}
+                            data-testid={`button-profile-access-remove-${item.id}`}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+              {canManageProfiles && (
+                <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/30 px-3 py-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Input
+                      value={accessDraft.toolName}
+                      onChange={(event) => setAccessDraft((current) => ({ ...current, toolName: event.target.value }))}
+                      placeholder="Tool or account"
+                      className="h-8 text-xs"
+                      data-testid="input-profile-access-tool"
+                    />
+                    <Input
+                      value={accessDraft.loginUrl}
+                      onChange={(event) => setAccessDraft((current) => ({ ...current, loginUrl: event.target.value }))}
+                      placeholder="Login URL or vault reference"
+                      className="h-8 text-xs"
+                      data-testid="input-profile-access-url"
+                    />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
+                    <Input
+                      value={accessDraft.accountOwner}
+                      onChange={(event) => setAccessDraft((current) => ({ ...current, accountOwner: event.target.value }))}
+                      placeholder="Owner/contact"
+                      className="h-8 text-xs"
+                      data-testid="input-profile-access-owner"
+                    />
+                    <Input
+                      value={accessDraft.billingNotes}
+                      onChange={(event) => setAccessDraft((current) => ({ ...current, billingNotes: event.target.value }))}
+                      placeholder="Billing or reset notes"
+                      className="h-8 text-xs"
+                      data-testid="input-profile-access-notes"
+                    />
+                    <select
+                      value={accessDraft.status}
+                      onChange={(event) => setAccessDraft((current) => ({ ...current, status: event.target.value as ProfileAccessItem["status"] }))}
+                      className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                      data-testid="select-profile-access-status"
+                    >
+                      <option value="needs_grant">Grant access</option>
+                      <option value="needs_reset">Reset needed</option>
+                      <option value="remove_access">Remove access</option>
+                      <option value="active">Active</option>
+                      <option value="pending">Pending</option>
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={addAccessItem}
+                    disabled={accessDraft.toolName.trim().length < 2 || updateProfile.isPending}
+                    data-testid="button-profile-access-add"
+                  >
+                    {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <ListPlus className="size-4" />}
+                    Add access item
+                  </Button>
+                </div>
+              )}
             </div>
 
             {selectedProfile.currentIncompleteTasks.length > 0 && (

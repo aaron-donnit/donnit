@@ -2499,6 +2499,7 @@ const positionProfileUpdateSchema = z.object({
   delegateUserId: z.string().trim().min(1).nullable().optional(),
   delegateUntil: z.string().trim().max(20).nullable().optional(),
   riskSummary: z.string().trim().max(500).optional(),
+  institutionalMemory: z.record(z.unknown()).optional(),
 });
 
 type DemoTaskSeed = {
@@ -5648,6 +5649,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (parsed.data.delegateUserId !== undefined) patch.delegate_user_id = ensureMember(parsed.data.delegateUserId, "Delegate");
       if (parsed.data.delegateUntil !== undefined) patch.delegate_until = parsed.data.delegateUntil || null;
       if (parsed.data.riskSummary !== undefined) patch.risk_summary = parsed.data.riskSummary;
+      if (parsed.data.institutionalMemory !== undefined) patch.institutional_memory = parsed.data.institutionalMemory;
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ message: "No position profile changes were supplied." });
         return;
