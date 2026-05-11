@@ -2002,10 +2002,36 @@ function parseChatTaskAuthenticated(
   };
 }
 
+type PendingChatMissingField = "title" | "dueDate" | "urgency" | "positionProfile";
+
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
   if (!task.dueDate) missing.add("dueDate");
   return Array.from(missing);
+}
+
+function normalizeTaskTitleForIntent(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/["'.,:;!?()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isGenericAssignmentTitle(title: string) {
+  const normalized = normalizeTaskTitleForIntent(title)
+    .replace(/^(?:assign|delegate|reassign|add|create|make|log)\s+/, "")
+    .replace(/^(?:a|an|the)\s+/, "")
+    .trim();
+  return (
+    !normalized ||
+    /^(?:untitled task|task|todo|to do|to-do|work|item|something|thing|it|this)$/.test(normalized) ||
+    /^(?:task|todo|to do|to-do|work|item)\s+(?:to|for)\s+[a-z][a-z'-]*$/.test(normalized)
+  );
+}
+
+function hasExplicitAssignmentIntent(message: string) {
+  return /\b(?:assign|delegate|reassign)\b/i.test(message);
 }
 
 function normalizedProfileSearchText(value: string) {
@@ -2077,6 +2103,17 @@ function missingChatQuestion(
       : "";
   const intro = `I can assign ${assigneeName} to ${lowercaseFirst(task.title)}${visibilityText}.`;
   const missing = pendingChatMissing(task);
+  const needsTitle = missing.includes("title");
+  if (needsTitle && missing.includes("dueDate") && missing.includes("urgency")) {
+    return `What should ${assigneeName} do, when is it due, and how urgent is it?`;
+  }
+  if (needsTitle && missing.includes("dueDate")) {
+    return `What should ${assigneeName} do, and when is it due?`;
+  }
+  if (needsTitle && missing.includes("urgency")) {
+    return `What should ${assigneeName} do, and how urgent is it?`;
+  }
+  if (needsTitle) return `What should ${assigneeName} do?`;
   const profileCandidates = missing.includes("positionProfile")
     ? profileCandidatesForAssignee(profiles, task.assignedToId)
     : [];
@@ -2166,7 +2203,7 @@ function buildPendingFromTaskInput(input: {
   reminderDaysBefore: number;
   visibility: "work" | "personal" | "confidential";
   positionProfileId?: string | null;
-}, missing: Array<"dueDate" | "urgency" | "positionProfile">): PendingChatTask {
+}, missing: PendingChatMissingField[]): PendingChatTask {
   return {
     title: input.title,
     description: input.description,
@@ -2260,6 +2297,8 @@ async function clearPendingChatTask(store: DonnitStore, orgId: string) {
 }
 
 function mergePendingChatTask(task: PendingChatTask, message: string, profiles: DonnitPositionProfile[] = []): PendingChatTask {
+  const replyTitle = task.missing.includes("title") ? titleFromMessage(message) : task.title;
+  const title = replyTitle && !isGenericAssignmentTitle(replyTitle) ? replyTitle : task.title;
   const dueDate = parseDueDate(message) ?? task.dueDate;
   const explicitUrgency = parseExplicitUrgency(message);
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
@@ -2272,6 +2311,7 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
   });
   const positionProfileId = task.positionProfileId ?? profileResolution.positionProfileId;
   const missing = task.missing.filter((item) => {
+    if (item === "title") return isGenericAssignmentTitle(title);
     if (item === "dueDate") return !dueDate;
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
@@ -2279,6 +2319,8 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
   });
   return {
     ...task,
+    title,
+    description: task.missing.includes("title") ? `${task.description}\n\nClarification: ${message}` : task.description,
     dueDate,
     urgency,
     estimatedMinutes,
@@ -2358,7 +2400,7 @@ const pendingChatTaskSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(365),
   visibility: z.enum(["work", "personal", "confidential"]),
   positionProfileId: z.string().nullable().optional(),
-  missing: z.array(z.enum(["dueDate", "urgency", "positionProfile"])).default([]),
+  missing: z.array(z.enum(["title", "dueDate", "urgency", "positionProfile"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -4683,6 +4725,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
         );
         const fallbackInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
+        const explicitMentionedMember = members.find((member) =>
+          textMentionsAssignee(parsed.data.message.toLowerCase(), member.profile?.full_name, member.profile?.email),
+        );
         const aiAssignee = ai
           ? members.find((member) => {
               const candidate = matchAiAssignee(ai.assigneeHint, [
@@ -4695,7 +4740,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               return Boolean(candidate);
             })
           : null;
-        const assignedToId = aiAssignee?.user_id ?? fallbackInput.assignedToId;
+        const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? fallbackInput.assignedToId;
         const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
         const resolvedUrgency =
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
@@ -4727,8 +4772,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           message: parsed.data.message,
           visibility: taskInput.visibility ?? "work",
         });
-        const missing: Array<"dueDate" | "urgency" | "positionProfile"> = [];
+        const missing: PendingChatMissingField[] = [];
         const explicitUrgency = parseExplicitUrgency(parsed.data.message);
+        if (hasExplicitAssignmentIntent(parsed.data.message) && isGenericAssignmentTitle(taskInput.title)) missing.push("title");
         if (!taskInput.dueDate) missing.push("dueDate");
         if (explicitUrgency === null && !(taskInput.dueDate && isPastDue(taskInput.dueDate))) missing.push("urgency");
         if (profileResolution.needsChoice) missing.push("positionProfile");
