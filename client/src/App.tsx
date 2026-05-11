@@ -3315,42 +3315,54 @@ function AgendaPanel({
                 return (
                   <li
                     key={`${item.taskId}-${item.order}`}
-                    className={`task-row ${urgencyClass(item.urgency)} ${excluded ? "opacity-55" : ""}`}
+                    className={`task-row min-h-[8.75rem] flex-col items-stretch justify-between gap-3 overflow-hidden ${urgencyClass(item.urgency)} ${excluded ? "opacity-55" : ""}`}
                     data-testid={`row-agenda-${item.taskId}`}
                   >
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
-                      {index + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                    <div className="min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="line-clamp-2 min-w-0 text-sm font-medium leading-snug text-foreground">
+                          {item.title}
+                        </p>
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
+                          {index + 1}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-xs leading-snug text-muted-foreground">
+                        {formatAgendaSlot(item)}
                       </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                        <span className="rounded bg-muted px-1.5 py-0.5">{item.estimatedMinutes} min</span>
+                        <span className="rounded bg-muted px-1.5 py-0.5">{urgencyLabel(item.urgency)}</span>
+                        {excluded && <span className="rounded bg-muted px-1.5 py-0.5">Removed</span>}
+                      </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="size-8 p-0"
-                        aria-label="Move task earlier"
-                        onClick={() => onMoveTask(item.taskId, "up")}
-                        disabled={index === 0}
-                      >
-                        <ArrowUp className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="size-8 p-0"
-                        aria-label="Move task later"
-                        onClick={() => onMoveTask(item.taskId, "down")}
-                        disabled={index === agenda.length - 1}
-                      >
-                        <ArrowDown className="size-4" />
-                      </Button>
+                    <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="size-8 p-0"
+                          aria-label="Move task earlier"
+                          onClick={() => onMoveTask(item.taskId, "up")}
+                          disabled={index === 0}
+                        >
+                          <ArrowUp className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="size-8 p-0"
+                          aria-label="Move task later"
+                          onClick={() => onMoveTask(item.taskId, "down")}
+                          disabled={index === agenda.length - 1}
+                        >
+                          <ArrowDown className="size-4" />
+                        </Button>
+                      </div>
                       <Button
                         variant="outline"
                         size="sm"
+                        className="h-8 px-2 text-xs"
                         onClick={() => onToggleTask(item.taskId)}
                         data-testid={`button-agenda-toggle-${item.taskId}`}
                       >
