@@ -3351,6 +3351,11 @@ function FloatingTaskBox({
   users: User[];
   onClose: () => void;
 }) {
+  type CapturedAttachment = {
+    name: string;
+    kind: "Document" | "Image" | "Spreadsheet" | "Other";
+    size: number;
+  };
   const [position, setPosition] = useState(() => ({
     x: typeof window === "undefined" ? 24 : Math.max(8, window.innerWidth - 364),
     y: 92,
@@ -3358,31 +3363,68 @@ function FloatingTaskBox({
   const [minimized, setMinimized] = useState(false);
   const [note, setNote] = useState("");
   const [attachmentName, setAttachmentName] = useState("");
+  const [attachments, setAttachments] = useState<CapturedAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   useEffect(() => {
     setNote(task?.completionNotes ?? "");
+    setAttachmentName("");
+    setAttachments([]);
     setMinimized(false);
   }, [task?.id]);
+
+  const classifyAttachment = (file: File): CapturedAttachment["kind"] => {
+    const lower = file.name.toLowerCase();
+    if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(lower)) return "Image";
+    if (/\.(csv|xls|xlsx|numbers)$/i.test(lower)) return "Spreadsheet";
+    if (file.type.includes("pdf") || /\.(pdf|doc|docx|txt|rtf)$/i.test(lower)) return "Document";
+    return "Other";
+  };
+
+  const attachmentLines = () => [
+    ...(attachmentName.trim() ? [`Attachment noted: ${attachmentName.trim()}`] : []),
+    ...attachments.map((file) => `Attachment captured: [${file.kind}] ${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`),
+  ];
 
   const saveNote = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No active task.");
-      const noteText = attachmentName.trim()
-        ? `${note.trim()}\nAttachment noted: ${attachmentName.trim()}`.trim()
-        : note.trim();
+      const noteText = [note.trim(), ...attachmentLines()].filter(Boolean).join("\n");
       const res = await apiRequest("POST", `/api/tasks/${task.id}/notes`, { note: noteText || "Working update." });
       return (await res.json()) as Task;
     },
     onSuccess: async () => {
       await invalidateWorkspace();
       setAttachmentName("");
+      setAttachments([]);
       toast({ title: "Task note saved", description: "Your work update was added." });
     },
     onError: (error: unknown) => {
       toast({
         title: "Could not save note",
         description: error instanceof Error ? error.message : "Try saving the work note again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const completeTask = useMutation({
+    mutationFn: async () => {
+      if (!task) throw new Error("No active task.");
+      const noteText = [note.trim(), ...attachmentLines()].filter(Boolean).join("\n") || "Donnit.";
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: noteText });
+      return (await res.json()) as Task;
+    },
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Donnit", description: "Task completed from the work box." });
+      onClose();
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not complete task",
+        description: error instanceof Error ? error.message : "Try completing the task again.",
         variant: "destructive",
       });
     },
@@ -3492,16 +3534,75 @@ function FloatingTaskBox({
               data-testid="input-floating-task-attachment"
             />
           </div>
-          <Button
-            size="sm"
-            className="w-full"
-            onClick={() => saveNote.mutate()}
-            disabled={saveNote.isPending}
-            data-testid="button-floating-task-save"
+          <div
+            className={`rounded-md border border-dashed px-3 py-3 text-xs transition ${
+              draggingFiles ? "border-brand-green bg-brand-green/10" : "border-border bg-muted/30"
+            }`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setDraggingFiles(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDraggingFiles(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setDraggingFiles(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const dropped = Array.from(event.dataTransfer.files ?? []).map((file) => ({
+                name: file.name,
+                kind: classifyAttachment(file),
+                size: file.size,
+              }));
+              if (dropped.length > 0) {
+                setAttachments((current) => [...current, ...dropped].slice(0, 8));
+              }
+              setDraggingFiles(false);
+            }}
+            data-testid="dropzone-floating-task-attachments"
           >
-            {saveNote.isPending ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
-            Save update
-          </Button>
+            <div className="flex items-center gap-2 font-medium text-foreground">
+              <Paperclip className="size-3.5" />
+              Drop files to log with this task
+            </div>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+              Names and types are recorded with the update.
+            </p>
+            {attachments.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {attachments.map((file, index) => (
+                  <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1">
+                    <span className="min-w-0 truncate">{file.name}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{file.kind}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => saveNote.mutate()}
+              disabled={saveNote.isPending || completeTask.isPending}
+              data-testid="button-floating-task-save"
+            >
+              {saveNote.isPending ? <Loader2 className="size-4 animate-spin" /> : <FileText className="size-4" />}
+              Save
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => completeTask.mutate()}
+              disabled={saveNote.isPending || completeTask.isPending}
+              data-testid="button-floating-task-complete"
+            >
+              {completeTask.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              Donnit
+            </Button>
+          </div>
         </div>
       )}
     </div>
