@@ -28,6 +28,9 @@ export const DONNIT_TABLES = {
   taskTemplates: "task_templates",
   taskTemplateSubtasks: "task_template_subtasks",
   userWorkspaceState: "user_workspace_state",
+  aiSessions: "ai_sessions",
+  aiModelCalls: "ai_model_calls",
+  aiToolCalls: "ai_tool_calls",
 } as const;
 
 export function getSupabaseConfig() {

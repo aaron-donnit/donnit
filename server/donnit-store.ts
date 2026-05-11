@@ -253,6 +253,56 @@ export type DonnitUserWorkspaceState = {
   updated_at: string;
 };
 
+export type DonnitAiSession = {
+  id: string;
+  org_id: string;
+  user_id: string | null;
+  correlation_id: string;
+  skill_id: string;
+  feature: string;
+  status: "started" | "completed" | "failed" | "cancelled";
+  model_policy: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  estimated_cost_usd: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type DonnitAiModelCallInput = {
+  session_id: string;
+  org_id: string;
+  user_id: string;
+  correlation_id: string;
+  skill_id: string;
+  provider?: "openai";
+  model: string;
+  request_payload: Record<string, unknown>;
+  response_payload: Record<string, unknown>;
+  latency_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  status: "success" | "failed";
+  error_message?: string | null;
+};
+
+export type DonnitAiToolCallInput = {
+  session_id: string;
+  org_id: string;
+  user_id: string;
+  correlation_id: string;
+  tool_name: string;
+  side_effect: "read" | "write";
+  input_payload: Record<string, unknown>;
+  output_payload: Record<string, unknown>;
+  latency_ms: number;
+  status: "success" | "failed" | "permission_denied";
+  error_message?: string | null;
+};
+
 export class DonnitStore {
   constructor(private readonly client: SupabaseClient, public readonly userId: string) {}
 
@@ -753,6 +803,49 @@ export class DonnitStore {
       .single();
     if (error) throw wrapSupabaseError("upsert user_workspace_state failed", error);
     return data as DonnitUserWorkspaceState;
+  }
+
+  // ---- AI observability --------------------------------------------------
+
+  async createAiSession(
+    orgId: string,
+    input: Pick<DonnitAiSession, "correlation_id" | "skill_id" | "feature" | "model_policy" | "metadata">,
+  ): Promise<DonnitAiSession> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.aiSessions)
+      .insert({ ...input, org_id: orgId, user_id: this.userId })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create ai_session failed", error);
+    return data as DonnitAiSession;
+  }
+
+  async updateAiSession(
+    sessionId: string,
+    patch: Partial<Pick<DonnitAiSession, "status" | "estimated_cost_usd" | "metadata" | "completed_at">>,
+  ): Promise<DonnitAiSession | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.aiSessions)
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", sessionId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("update ai_session failed", error);
+    return (data as DonnitAiSession | null) ?? null;
+  }
+
+  async createAiModelCall(input: DonnitAiModelCallInput): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.aiModelCalls)
+      .insert({ ...input, provider: input.provider ?? "openai" });
+    if (error) throw wrapSupabaseError("create ai_model_call failed", error);
+  }
+
+  async createAiToolCall(input: DonnitAiToolCallInput): Promise<void> {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.aiToolCalls)
+      .insert(input);
+    if (error) throw wrapSupabaseError("create ai_tool_call failed", error);
   }
 
   // ---- position_profiles (admin continuity repository) ------------------
