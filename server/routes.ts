@@ -15,12 +15,15 @@ import {
   buildManualEmailCandidate,
   exchangeGmailAuthCode,
   GMAIL_OAUTH_SCOPE,
+  GMAIL_SEND_OAUTH_SCOPE,
   GmailTokenExchangeError,
   getGmailOAuthConfig,
   getIntegrationStatus,
+  hasGmailSendScope,
   hasGoogleCalendarScope,
   refreshGmailAccessToken,
   scanGmailForTaskCandidates,
+  sendGmailThreadReply,
   signGmailOAuthState,
   verifyGmailOAuthState,
 } from "./integrations";
@@ -1139,6 +1142,31 @@ function toClientTaskTemplate(template: DonnitTaskTemplate) {
   };
 }
 
+function toClientEmailSuggestion(s: DonnitEmailSuggestion) {
+  return {
+    id: s.id,
+    gmailMessageId: s.gmail_message_id,
+    gmailThreadId: s.gmail_thread_id ?? null,
+    fromEmail: s.from_email,
+    subject: s.subject,
+    preview: s.preview,
+    body: s.body ?? "",
+    receivedAt: s.received_at,
+    actionItems: Array.isArray(s.action_items) ? s.action_items : [],
+    suggestedTitle: s.suggested_title,
+    suggestedDueDate: s.suggested_due_date,
+    urgency: s.urgency,
+    status: s.status,
+    assignedToId: s.assigned_to,
+    replySuggested: Boolean(s.reply_suggested),
+    replyDraft: s.reply_draft ?? null,
+    replyStatus: s.reply_status ?? "none",
+    replySentAt: s.reply_sent_at ?? null,
+    replyProviderMessageId: s.reply_provider_message_id ?? null,
+    createdAt: s.created_at,
+  };
+}
+
 function toClientPositionProfile(profile: DonnitPositionProfile) {
   return {
     id: profile.id,
@@ -1582,6 +1610,53 @@ async function resolveGoogleCalendarAccess(store: DonnitStore): Promise<
   return { ok: true, accessToken, account };
 }
 
+async function resolveGmailSendAccess(store: DonnitStore): Promise<
+  | { ok: true; accessToken: string; account: NonNullable<Awaited<ReturnType<DonnitStore["getGmailAccount"]>>> }
+  | { ok: false; status: number; reason: string; message: string }
+> {
+  const account = await store.getGmailAccount();
+  if (!account || account.status !== "connected") {
+    return {
+      ok: false,
+      status: 412,
+      reason: "google_oauth_not_connected",
+      message: "Connect Gmail before Donnit can send a reply through the original email thread.",
+    };
+  }
+  if (!hasGmailSendScope(account.scope)) {
+    return {
+      ok: false,
+      status: 412,
+      reason: "gmail_send_scope_missing",
+      message: "Reconnect Gmail so Donnit can send approved replies. This adds Gmail send permission.",
+    };
+  }
+
+  let accessToken = account.access_token;
+  const expiresMs = new Date(account.expires_at).getTime();
+  if (!Number.isFinite(expiresMs) || expiresMs - Date.now() < 60_000) {
+    if (!account.refresh_token) {
+      await store.patchGmailAccount({ status: "error" });
+      return {
+        ok: false,
+        status: 401,
+        reason: "google_oauth_token_invalid",
+        message: "Google authorization expired. Reconnect Gmail and try again.",
+      };
+    }
+    const refreshed = await refreshGmailAccessToken(account.refresh_token);
+    await store.patchGmailAccount({
+      access_token: refreshed.accessToken,
+      expires_at: new Date(refreshed.expiresAt).toISOString(),
+      scope: refreshed.scope || account.scope,
+      token_type: refreshed.tokenType || account.token_type,
+    });
+    accessToken = refreshed.accessToken;
+  }
+
+  return { ok: true, accessToken, account };
+}
+
 function addBusyBlock(busyByDate: Map<string, CalendarBusyBlock[]>, block: CalendarBusyBlock) {
   if (block.endMinute <= block.startMinute) return;
   busyByDate.set(block.date, [...(busyByDate.get(block.date) ?? []), block]);
@@ -1768,21 +1843,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
       taskId: m.task_id,
       createdAt: m.created_at,
     })),
-    suggestions: suggestions.map((s) => ({
-      id: s.id,
-      fromEmail: s.from_email,
-      subject: s.subject,
-      preview: s.preview,
-      body: s.body ?? "",
-      receivedAt: s.received_at,
-      actionItems: Array.isArray(s.action_items) ? s.action_items : [],
-      suggestedTitle: s.suggested_title,
-      suggestedDueDate: s.suggested_due_date,
-      urgency: s.urgency,
-      status: s.status,
-      assignedToId: s.assigned_to,
-      createdAt: s.created_at,
-    })),
+    suggestions: suggestions.map(toClientEmailSuggestion),
     positionProfiles: positionProfiles.map(toClientPositionProfile),
     subtasks: subtasks.map(toClientTaskSubtask),
     taskTemplates: taskTemplates.map(toClientTaskTemplate),
@@ -2444,6 +2505,8 @@ type AiTaskExtraction = {
   visibility: "work" | "personal" | "confidential";
   recurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
   reminderDaysBefore: number;
+  replyNeeded: boolean;
+  replyIntent: string | null;
   confidence: "low" | "medium" | "high";
   rationale: string;
   sourceExcerpt: string;
@@ -2473,6 +2536,8 @@ const aiTaskExtractionSchema = z.object({
   visibility: z.enum(["work", "personal", "confidential"]),
   recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]),
   reminderDaysBefore: z.number().int().min(0).max(365),
+  replyNeeded: z.boolean(),
+  replyIntent: z.string().trim().max(300).nullable(),
   confidence: z.enum(["low", "medium", "high"]),
   rationale: z.string().trim().max(400),
   sourceExcerpt: z.string().trim().max(300),
@@ -2489,6 +2554,15 @@ const suggestionPatchSchema = z.object({
 
 const suggestionReplySchema = z.object({
   message: z.string().trim().min(2).max(4000),
+});
+
+const suggestionDraftReplySchema = z.object({
+  instruction: z.string().trim().max(600).optional(),
+});
+
+const aiReplyDraftSchema = z.object({
+  message: z.string().trim().min(2).max(4000),
+  rationale: z.string().trim().max(400).default(""),
 });
 
 const salesLeadSchema = z.object({
@@ -2584,6 +2658,7 @@ async function extractTaskWithAi(input: {
                 "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
                 "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
                 "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
+                "For email input, set replyNeeded=true only when the sender appears to expect a response; replyIntent should explain the response goal in plain language. Receipts, newsletters, automated notices, and FYI messages usually do not need replies.",
               ].join(" "),
           },
           {
@@ -2637,6 +2712,8 @@ async function extractTaskWithAi(input: {
                 visibility: { type: "string", enum: ["work", "personal", "confidential"] },
                 recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "quarterly", "annual"] },
                 reminderDaysBefore: { type: "integer" },
+                replyNeeded: { type: "boolean" },
+                replyIntent: { anyOf: [{ type: "string" }, { type: "null" }] },
                 confidence: { type: "string", enum: ["low", "medium", "high"] },
                 rationale: { type: "string" },
                 sourceExcerpt: { type: "string" },
@@ -2653,6 +2730,8 @@ async function extractTaskWithAi(input: {
                 "visibility",
                 "recurrence",
                 "reminderDaysBefore",
+                "replyNeeded",
+                "replyIntent",
                 "confidence",
                 "rationale",
                 "sourceExcerpt",
@@ -2707,6 +2786,108 @@ function sourceFromSuggestion(input: { fromEmail: string; subject: string }): Su
 function normalizeReplySubject(subject: string) {
   const trimmed = subject.trim() || "Donnit task follow-up";
   return trimmed.toLowerCase().startsWith("re:") ? trimmed : `Re: ${trimmed}`;
+}
+
+function extractEmailAddress(value: string) {
+  const bracket = value.match(/<([^>\s]+@[^>\s]+)>/);
+  if (bracket) return bracket[1];
+  const plain = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return plain?.[0] ?? null;
+}
+
+function fallbackReplyDraft(suggestion: Pick<DonnitEmailSuggestion, "from_email" | "subject" | "suggested_title" | "preview">) {
+  const senderName =
+    suggestion.from_email.match(/^"?([^"<@]+)"?\s*</)?.[1]?.trim() ??
+    suggestion.from_email.split("@")[0]?.replace(/[._-]+/g, " ") ??
+    "";
+  const greeting = senderName ? `Hi ${senderName.split(/\s+/)[0]},` : "Hi,";
+  return [
+    greeting,
+    "",
+    `Thanks for sending this over. I received it and will follow up on ${suggestion.suggested_title.toLowerCase()}.`,
+    "",
+    "Best,",
+  ].join("\n");
+}
+
+async function draftSuggestionReplyWithAi(
+  suggestion: DonnitEmailSuggestion,
+  instruction?: string,
+): Promise<{ message: string; rationale: string }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const fallback = fallbackReplyDraft(suggestion);
+  if (!apiKey) return { message: fallback, rationale: "OpenAI is not configured, so Donnit prepared a simple professional response." };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+  try {
+    const source = sourceFromSuggestion({
+      fromEmail: suggestion.from_email,
+      subject: suggestion.subject,
+    });
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
+        input: [
+          {
+            role: "system",
+            content:
+              "Draft a concise, professional workplace reply for Donnit. The user will edit before sending. Do not invent commitments, prices, dates, attachments, or approvals that are not in the source. Keep it human, useful, and ready to send. Return only the requested JSON fields.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              source,
+              from: suggestion.from_email,
+              subject: suggestion.subject,
+              sourceBody: suggestion.body,
+              donnitTask: {
+                title: suggestion.suggested_title,
+                rationale: suggestion.preview,
+                dueDate: suggestion.suggested_due_date,
+                urgency: suggestion.urgency,
+                actionItems: suggestion.action_items ?? [],
+              },
+              userInstruction: instruction?.trim() || null,
+            }),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "donnit_reply_draft",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                message: { type: "string" },
+                rationale: { type: "string" },
+              },
+              required: ["message", "rationale"],
+            },
+          },
+        },
+      }),
+    });
+    if (!res.ok) return { message: fallback, rationale: "Donnit used a simple fallback because OpenAI did not return a draft." };
+    const json = await res.json();
+    const text = extractOutputText(json);
+    if (!text) return { message: fallback, rationale: "Donnit used a simple fallback because OpenAI did not return text." };
+    const parsed = aiReplyDraftSchema.safeParse(JSON.parse(text));
+    return parsed.success
+      ? parsed.data
+      : { message: fallback, rationale: "Donnit used a simple fallback because the AI draft was incomplete." };
+  } catch {
+    return { message: fallback, rationale: "Donnit used a simple fallback because the AI draft timed out." };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function parseSlackChannelFromSuggestion(suggestion: Pick<DonnitEmailSuggestion, "subject" | "from_email">) {
@@ -2842,6 +3023,8 @@ async function resolveDefaultIngestTarget(): Promise<IngestTarget | null> {
 }
 
 type TaskSuggestionCandidate = {
+  gmailMessageId?: string | null;
+  gmailThreadId?: string | null;
   fromEmail: string;
   subject: string;
   preview: string;
@@ -2853,27 +3036,54 @@ type TaskSuggestionCandidate = {
   urgency: string;
   estimatedMinutes?: number;
   shouldCreateTask?: boolean;
+  replySuggested?: boolean;
+  replyDraft?: string | null;
+  replyStatus?: "none" | "suggested" | "drafted" | "sent" | "copy" | "failed";
 };
+
+type EnrichedTaskSuggestionCandidate<T extends TaskSuggestionCandidate> = T & {
+  shouldCreateTask?: boolean;
+  replySuggested?: boolean;
+  replyDraft?: string | null;
+  replyStatus?: "none" | "suggested" | "drafted" | "sent" | "copy" | "failed";
+};
+
+function shouldSuggestSourceReply(candidate: TaskSuggestionCandidate, ai: AiTaskExtraction | null, source: SuggestionSource) {
+  if (source !== "email") return source === "slack" || source === "sms";
+  if (ai?.replyNeeded) return true;
+  const text = `${candidate.subject}\n${candidate.preview}\n${candidate.body}`.toLowerCase();
+  if (/\b(no-?reply|do not reply|newsletter|receipt|invoice paid|order confirmation|shipping|tracking)\b/i.test(text)) {
+    return false;
+  }
+  return /\b(can you|could you|please|would you|let me know|thoughts\?|approve|approval|review|respond|reply|follow up|available|schedule|confirm)\b/i.test(text);
+}
 
 function applyAiToCandidate<T extends TaskSuggestionCandidate>(
   candidate: T,
   ai: AiTaskExtraction | null,
   source: SuggestionSource,
-): T & { shouldCreateTask?: boolean } {
-  if (!ai) return candidate;
+): EnrichedTaskSuggestionCandidate<T> {
+  if (!ai) {
+    const replySuggested = shouldSuggestSourceReply(candidate, null, source);
+    return { ...candidate, replySuggested, replyStatus: replySuggested ? "suggested" : "none" };
+  }
   const title = normalizeAiTitle(ai.title, candidate.suggestedTitle);
   const dueDate = ai.dueDate ?? candidate.suggestedDueDate ?? null;
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : ai.urgency;
+  const replySuggested = shouldSuggestSourceReply(candidate, ai, source);
   const actionItems = [
     normalizeAiDescription(ai.description, candidate.preview),
     `Why Donnit suggested this: ${ai.rationale}`,
     `Confidence: ${ai.confidence}`,
     `Estimated time: ${ai.estimatedMinutes} minutes`,
+    ai.replyNeeded && ai.replyIntent ? `Suggested response: ${ai.replyIntent}` : "",
     ai.sourceExcerpt ? `Source excerpt: ${compactTaskText(ai.sourceExcerpt, 240)}` : "",
   ].filter(Boolean);
   return {
     ...candidate,
     shouldCreateTask: ai.shouldCreateTask,
+    replySuggested,
+    replyStatus: replySuggested ? "suggested" : "none",
     preview: ai.rationale || candidate.preview,
     actionItems,
     suggestedTitle: title,
@@ -2891,7 +3101,7 @@ async function enrichSuggestionCandidateWithAi<T extends TaskSuggestionCandidate
   candidate: T,
   source: SuggestionSource,
   context?: { from?: string; channel?: string },
-): Promise<T & { shouldCreateTask?: boolean }> {
+): Promise<EnrichedTaskSuggestionCandidate<T>> {
   const ai = await extractTaskWithAi({
     source,
     text: `${candidate.subject}\n${candidate.preview}\n${candidate.body ?? ""}`.slice(0, 5000),
@@ -3682,6 +3892,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (alreadyExists) continue;
         await store.createEmailSuggestion(orgId, {
           gmail_message_id: messageId,
+          gmail_thread_id: null,
           from_email: suggestionSeed.fromEmail,
           subject: suggestionSeed.subject,
           preview: suggestionSeed.preview,
@@ -3692,6 +3903,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           suggested_due_date: dateForOffset(suggestionSeed.suggestedDueOffset),
           urgency: suggestionSeed.urgency,
           assigned_to: auth.userId,
+          reply_suggested: true,
+          reply_status: "suggested",
         });
         createdSuggestions += 1;
       }
@@ -5342,6 +5555,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               .update(`${parsed.data.fileName}:${candidate.preview}`)
               .digest("hex")
               .slice(0, 24)}`,
+            gmail_thread_id: null,
             from_email: candidate.fromEmail,
             subject: candidate.subject,
             preview: candidate.preview,
@@ -5352,6 +5566,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             suggested_due_date: candidate.suggestedDueDate,
             urgency: candidate.urgency,
             assigned_to: String(candidate.assignedTo),
+            reply_suggested: false,
+            reply_status: "none",
           });
           suggestions.push({
             id: suggestion.id,
@@ -5428,21 +5644,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(404).json({ message: "Suggestion not found." });
           return;
         }
-        res.json({
-          id: updated.id,
-          fromEmail: updated.from_email,
-          subject: updated.subject,
-          preview: updated.preview,
-          body: updated.body ?? "",
-          receivedAt: updated.received_at,
-          actionItems: Array.isArray(updated.action_items) ? updated.action_items : [],
-          suggestedTitle: updated.suggested_title,
-          suggestedDueDate: updated.suggested_due_date,
-          urgency: updated.urgency,
-          status: updated.status,
-          assignedToId: updated.assigned_to,
-          createdAt: updated.created_at,
-        });
+        res.json(toClientEmailSuggestion(updated));
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -5518,7 +5720,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           type: "email_approved",
           note: `Approved ${suggestionSource} task suggestion from ${suggestion.from_email}.`,
         });
-        res.json({ suggestion: updated, task: toClientTask(task) });
+        res.json({ suggestion: updated ? toClientEmailSuggestion(updated) : null, task: toClientTask(task) });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -5543,7 +5745,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(404).json({ message: "Suggestion not found." });
           return;
         }
-        res.json(updated);
+        res.json(toClientEmailSuggestion(updated));
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -5556,6 +5758,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return;
     }
     res.json(suggestion);
+  });
+
+  app.post("/api/suggestions/:id/draft-reply", async (req: Request, res: Response) => {
+    const parsed = suggestionDraftReplySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ message: "Reply instructions are too long." });
+      return;
+    }
+
+    if (req.donnitAuth) {
+      try {
+        const auth = req.donnitAuth;
+        const store = new DonnitStore(auth.client, auth.userId);
+        const suggestion = await store.getEmailSuggestion(String(req.params.id));
+        if (!suggestion) {
+          res.status(404).json({ message: "Suggestion not found." });
+          return;
+        }
+        const source = sourceFromSuggestion({
+          fromEmail: suggestion.from_email,
+          subject: suggestion.subject,
+        });
+        if (source === "document") {
+          res.status(422).json({ message: "Document suggestions do not support outbound replies." });
+          return;
+        }
+        const draft = await draftSuggestionReplyWithAi(suggestion, parsed.data.instruction);
+        let updated: DonnitEmailSuggestion | null = null;
+        try {
+          updated = await store.updateEmailSuggestion(suggestion.id, {
+            reply_suggested: true,
+            reply_draft: draft.message,
+            reply_status: "drafted",
+          });
+        } catch (error) {
+          const payload = serializeSupabaseError(error);
+          res.status(409).json({
+            ok: false,
+            reason: "email_reply_schema_missing",
+            ...payload,
+            message:
+              "Apply the email reply workflow Supabase migration, then redeploy before saving AI reply drafts.",
+          });
+          return;
+        }
+        res.json({
+          ok: true,
+          draft: draft.message,
+          rationale: draft.rationale,
+          suggestion: updated ? toClientEmailSuggestion(updated) : null,
+        });
+        return;
+      } catch (error) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    const id = Number(req.params.id);
+    const suggestions = await storage.listEmailSuggestions();
+    const suggestion = suggestions.find((item) => item.id === id);
+    if (!suggestion) {
+      res.status(404).json({ message: "Suggestion not found." });
+      return;
+    }
+    res.json({
+      ok: true,
+      draft: fallbackReplyDraft({
+        from_email: suggestion.fromEmail,
+        subject: suggestion.subject,
+        suggested_title: suggestion.suggestedTitle,
+        preview: suggestion.preview,
+      }),
+      rationale: "Demo mode prepared a simple professional response.",
+    });
   });
 
   app.post("/api/suggestions/:id/reply", async (req: Request, res: Response) => {
@@ -5582,19 +5859,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
 
         if (source === "email") {
-          if (!suggestion.from_email.includes("@")) {
+          const to = extractEmailAddress(suggestion.from_email);
+          if (!to) {
             res.status(422).json({ message: "This suggestion does not have a replyable email address." });
             return;
           }
           const subject = normalizeReplySubject(suggestion.subject);
+          const access = await resolveGmailSendAccess(store);
+          if (access.ok) {
+            const sent = await sendGmailThreadReply({
+              accessToken: access.accessToken,
+              to,
+              subject,
+              message,
+              threadId: suggestion.gmail_thread_id ?? null,
+              originalMessageId: suggestion.gmail_message_id ?? null,
+            });
+            if (sent.ok) {
+              await store.updateEmailSuggestion(suggestion.id, {
+                reply_draft: message,
+                reply_status: "sent",
+                reply_sent_at: new Date().toISOString(),
+                reply_provider_message_id: sent.providerMessageId,
+              }).catch(() => null);
+              res.json({
+                ok: true,
+                provider: "email",
+                delivery: "sent",
+                target: to,
+                subject,
+                providerMessageId: sent.providerMessageId,
+                message: "Email reply sent through Gmail.",
+              });
+              return;
+            }
+            await store.updateEmailSuggestion(suggestion.id, {
+              reply_draft: message,
+              reply_status: "failed",
+            }).catch(() => null);
+            res.json({
+              ok: true,
+              provider: "email",
+              delivery: "mailto",
+              target: to,
+              subject,
+              href: `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`,
+              fallbackReason: sent.reason,
+              message: `Gmail could not send directly (${sent.message}). Open the prepared email draft instead.`,
+            });
+            return;
+          }
+          await store.updateEmailSuggestion(suggestion.id, {
+            reply_draft: message,
+            reply_status: "copy",
+          }).catch(() => null);
           res.json({
             ok: true,
             provider: "email",
             delivery: "mailto",
-            target: suggestion.from_email,
+            target: to,
             subject,
-            href: `mailto:${encodeURIComponent(suggestion.from_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`,
-            message: "Open your email draft to finish sending.",
+            href: `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`,
+            fallbackReason: access.reason,
+            message: access.reason === "gmail_send_scope_missing"
+              ? "Reconnect Gmail to let Donnit send replies directly. For now, open the prepared draft."
+              : "Connect Gmail to send directly. For now, open the prepared draft.",
           });
           return;
         }
@@ -6120,6 +6449,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           existingKeys.add(key);
           const suggestion = await store.createEmailSuggestion(orgId, {
             gmail_message_id: candidate.gmailMessageId ?? null,
+            gmail_thread_id: candidate.gmailThreadId ?? null,
             from_email: candidate.fromEmail,
             subject: candidate.subject,
             preview: candidate.preview,
@@ -6130,6 +6460,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
             urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
             assigned_to: auth.userId,
+            reply_suggested: Boolean(candidate.replySuggested),
+            reply_status: candidate.replyStatus ?? (candidate.replySuggested ? "suggested" : "none"),
           });
           created.push(suggestion);
         }
@@ -6225,6 +6557,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const account = await store.getGmailAccount();
       const connected = Boolean(account && account.status === "connected");
       const gmailScopeConnected = Boolean(connected && hasOAuthScope(account?.scope, GMAIL_OAUTH_SCOPE));
+      const gmailSendScopeConnected = Boolean(connected && hasOAuthScope(account?.scope, GMAIL_SEND_OAUTH_SCOPE));
       const calendarConnected = Boolean(connected && hasGoogleCalendarScope(account?.scope));
       const requiresReconnect = Boolean(account && account.status === "error");
       const expiresMs = account?.expires_at ? new Date(account.expires_at).getTime() : NaN;
@@ -6238,6 +6571,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               ? "needs_reconnect"
               : !gmailScopeConnected
                 ? "gmail_scope_missing"
+                : !gmailSendScopeConnected
+                  ? "gmail_send_scope_missing"
                 : !calendarConnected
                   ? "calendar_scope_missing"
                   : "ready";
@@ -6246,6 +6581,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         authenticated: true,
         connected,
         gmailScopeConnected,
+        gmailSendScopeConnected,
         calendarConnected,
         calendarRequiresReconnect: connected && !calendarConnected,
         requiresReconnect,
@@ -6609,6 +6945,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const suggestion = await store.createEmailSuggestion(orgId, {
           gmail_message_id: candidate.gmailMessageId ?? null,
+          gmail_thread_id: candidate.gmailThreadId ?? null,
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
@@ -6619,6 +6956,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
           urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
           assigned_to: auth.userId,
+          reply_suggested: Boolean(candidate.replySuggested),
+          reply_status: candidate.replyStatus ?? (candidate.replySuggested ? "suggested" : "none"),
         });
         res.status(201).json({ ok: true, suggestion });
         return;
@@ -6687,6 +7026,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             : await resolveAssignedToFromActor(store, orgId, input.from, auth.userId);
         const suggestion = await store.createEmailSuggestion(orgId, {
           gmail_message_id: externalSuggestionKey(source, candidate),
+          gmail_thread_id: null,
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
@@ -6697,6 +7037,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
           urgency: candidate.urgency,
           assigned_to: assignedTo,
+          reply_suggested: Boolean(candidate.replySuggested),
+          reply_status: candidate.replyStatus ?? (candidate.replySuggested ? "suggested" : "none"),
         });
         res.status(201).json({ ok: true, suggestion });
         return;
@@ -6737,6 +7079,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             : await resolveAssignedToFromActor(store, target.orgId, input.from, target.assignedTo);
         const suggestion = await store.createEmailSuggestion(target.orgId, {
           gmail_message_id: externalSuggestionKey(source, candidate),
+          gmail_thread_id: null,
           from_email: candidate.fromEmail,
           subject: candidate.subject,
           preview: candidate.preview,
@@ -6747,6 +7090,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
           urgency: candidate.urgency,
           assigned_to: assignedTo,
+          reply_suggested: Boolean(candidate.replySuggested),
+          reply_status: candidate.replyStatus ?? (candidate.replySuggested ? "suggested" : "none"),
         });
         res.status(201).json({ ok: true, source, destination: "supabase", suggestion });
         return;

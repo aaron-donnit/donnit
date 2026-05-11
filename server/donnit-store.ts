@@ -62,6 +62,17 @@ function isMissingRelationError(error: unknown) {
   );
 }
 
+function isMissingColumnError(error: unknown) {
+  const raw = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(raw?.code ?? "").toUpperCase();
+  const haystack = `${String(raw?.message ?? "")} ${String(raw?.details ?? "")}`.toLowerCase();
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    haystack.includes("could not find") && haystack.includes("column")
+  );
+}
+
 export type DonnitProfile = {
   id: string;
   full_name: string;
@@ -165,6 +176,7 @@ export type DonnitEmailSuggestion = {
   id: string;
   org_id: string;
   gmail_message_id: string | null;
+  gmail_thread_id?: string | null;
   from_email: string;
   subject: string;
   preview: string;
@@ -176,6 +188,11 @@ export type DonnitEmailSuggestion = {
   urgency: "low" | "normal" | "high" | "critical";
   status: "pending" | "approved" | "dismissed";
   assigned_to: string | null;
+  reply_suggested?: boolean;
+  reply_draft?: string | null;
+  reply_status?: "none" | "suggested" | "drafted" | "sent" | "copy" | "failed";
+  reply_sent_at?: string | null;
+  reply_provider_message_id?: string | null;
   created_at: string;
 };
 
@@ -585,18 +602,30 @@ export class DonnitStore {
       org_id: orgId,
       status: "pending",
     };
-    const { data, error } = await this.client
+    const insertPayload = async (nextPayload: Record<string, unknown>) => this.client
       .from(DONNIT_TABLES.emailSuggestions)
-      .insert(payload)
+      .insert(nextPayload)
       .select("*")
       .single();
+    const { data, error } = await insertPayload(payload);
     if (error) {
       if (isTimestampSyntaxError(error) && payload.received_at !== null) {
-        const { data: retryData, error: retryError } = await this.client
-          .from(DONNIT_TABLES.emailSuggestions)
-          .insert({ ...payload, received_at: null })
-          .select("*")
-          .single();
+        const { data: retryData, error: retryError } = await insertPayload({ ...payload, received_at: null });
+        if (!retryError) return retryData as DonnitEmailSuggestion;
+      }
+      if (isMissingColumnError(error)) {
+        const legacyPayload = { ...payload } as Record<string, unknown>;
+        for (const key of [
+          "gmail_thread_id",
+          "reply_suggested",
+          "reply_draft",
+          "reply_status",
+          "reply_sent_at",
+          "reply_provider_message_id",
+        ]) {
+          delete legacyPayload[key];
+        }
+        const { data: retryData, error: retryError } = await insertPayload(legacyPayload);
         if (!retryError) return retryData as DonnitEmailSuggestion;
       }
       throw error;

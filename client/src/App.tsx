@@ -286,6 +286,8 @@ type ChatMessage = {
 
 type EmailSuggestion = {
   id: Id;
+  gmailMessageId?: string | null;
+  gmailThreadId?: string | null;
   fromEmail: string;
   subject: string;
   preview: string;
@@ -297,6 +299,11 @@ type EmailSuggestion = {
   urgency: string;
   status: string;
   assignedToId: Id | null;
+  replySuggested?: boolean;
+  replyDraft?: string | null;
+  replyStatus?: "none" | "suggested" | "drafted" | "sent" | "copy" | "failed";
+  replySentAt?: string | null;
+  replyProviderMessageId?: string | null;
   createdAt: string;
 };
 
@@ -311,6 +318,13 @@ type SuggestionReplyResult = {
   body?: string;
   fallbackReason?: string;
   providerMessageId?: string | null;
+};
+
+type SuggestionDraftReplyResult = {
+  ok: boolean;
+  draft: string;
+  rationale?: string;
+  suggestion?: EmailSuggestion | null;
 };
 
 type SuggestionPatch = {
@@ -5144,7 +5158,7 @@ function SuggestionCard({
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
-  const [replyBody, setReplyBody] = useState("");
+  const [replyBody, setReplyBody] = useState(suggestion.replyDraft ?? "");
   const [draftTitle, setDraftTitle] = useState(suggestion.suggestedTitle);
   const [draftDueDate, setDraftDueDate] = useState(suggestion.suggestedDueDate ?? "");
   const [draftUrgency, setDraftUrgency] = useState<"low" | "normal" | "high" | "critical">(
@@ -5174,10 +5188,39 @@ function SuggestionCard({
         : suggestion.fromEmail.replace(/^sms:/i, "") || suggestion.fromEmail;
   const replyHelp =
     sourceLabel === "Email"
-      ? "Donnit will open your email draft with the message filled in."
+      ? "Donnit will send through Gmail when permission is connected, or open a prepared draft."
       : sourceLabel === "Slack"
         ? "Donnit will send through Slack when the bot is connected, or prepare the reply to copy."
         : "Donnit will send through Twilio when SMS is configured, or prepare the reply to copy.";
+  const draftReply = useMutation({
+    mutationFn: async (instruction?: string) => {
+      const res = await apiRequest("POST", `/api/suggestions/${suggestion.id}/draft-reply`, {
+        instruction: instruction?.trim() || undefined,
+      });
+      return (await res.json()) as SuggestionDraftReplyResult;
+    },
+    onSuccess: async (result) => {
+      setReplyBody(result.draft);
+      await invalidateWorkspace();
+      toast({
+        title: "Reply drafted",
+        description: "Review it before sending.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not draft reply",
+        description: apiErrorMessage(error, "Try again or write the reply manually."),
+        variant: "destructive",
+      });
+    },
+  });
+  const openReplyDialog = () => {
+    setReplyOpen(true);
+    if (!replyBody.trim() && !suggestion.replyDraft) {
+      draftReply.mutate(undefined);
+    }
+  };
   const sendReply = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/suggestions/${suggestion.id}/reply`, {
@@ -5186,6 +5229,7 @@ function SuggestionCard({
       return (await res.json()) as SuggestionReplyResult;
     },
     onSuccess: async (result) => {
+      await invalidateWorkspace();
       if (result.delivery === "mailto" && result.href) {
         window.location.href = result.href;
         setReplyOpen(false);
@@ -5235,8 +5279,8 @@ function SuggestionCard({
       : "normal",
     );
     setDraftPreview(suggestion.preview ?? "");
-    setReplyBody("");
-  }, [suggestion.id, suggestion.preview, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
+    setReplyBody(suggestion.replyDraft ?? "");
+  }, [suggestion.id, suggestion.preview, suggestion.replyDraft, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
   const saveEdits = () => {
     if (!onSaveEdits || draftTitle.trim().length < 2) return;
     onSaveEdits(suggestion.id, {
@@ -5376,6 +5420,27 @@ function SuggestionCard({
         </div>
       )}
 
+      {canReplyToSource && (suggestion.replySuggested || sourceLabel === "Email") && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-sm border border-brand-green/20 bg-brand-green/5 px-2 py-2 text-xs">
+          <div className="min-w-0">
+            <p className="font-medium text-foreground">Need to respond?</p>
+            <p className="text-muted-foreground">
+              Donnit can draft a reply from the original message and this task.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={openReplyDialog}
+            disabled={draftReply.isPending}
+            data-testid={`button-suggestion-draft-reply-inline-${suggestion.id}`}
+          >
+            {draftReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            Draft
+          </Button>
+        </div>
+      )}
+
       <div className="mt-2 flex flex-wrap gap-2">
         {editing ? (
           <>
@@ -5430,10 +5495,12 @@ function SuggestionCard({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => setReplyOpen(true)}
+            onClick={openReplyDialog}
+            disabled={draftReply.isPending}
             data-testid={`button-suggestion-reply-${suggestion.id}`}
           >
-            <Send className="size-4" /> Reply
+            {draftReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+            Reply
           </Button>
         )}
       </div>
@@ -5447,10 +5514,16 @@ function SuggestionCard({
             </DialogDescription>
           </DialogHeader>
           <div className={dialogBodyClass}>
+            {draftReply.isPending && (
+              <div className="mb-3 flex items-center gap-2 rounded-sm border border-brand-green/20 bg-brand-green/5 px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="size-4 animate-spin text-brand-green" />
+                Donnit is drafting a response from the source message.
+              </div>
+            )}
             <Textarea
               value={replyBody}
               onChange={(event) => setReplyBody(event.target.value)}
-              placeholder="Thanks. I received this and will follow up shortly."
+              placeholder="Donnit will draft a response here, or you can write your own."
               className="min-h-[140px]"
               maxLength={4000}
               data-testid={`input-suggestion-reply-${suggestion.id}`}
@@ -5460,9 +5533,17 @@ function SuggestionCard({
             <Button variant="outline" onClick={() => setReplyOpen(false)} disabled={sendReply.isPending}>
               Cancel
             </Button>
-            <Button onClick={() => sendReply.mutate()} disabled={replyBody.trim().length < 2 || sendReply.isPending}>
+            <Button
+              variant="outline"
+              onClick={() => draftReply.mutate("Regenerate this reply with a concise professional tone.")}
+              disabled={draftReply.isPending || sendReply.isPending}
+            >
+              {draftReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              Regenerate
+            </Button>
+            <Button onClick={() => sendReply.mutate()} disabled={replyBody.trim().length < 2 || sendReply.isPending || draftReply.isPending}>
               {sendReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-              {sourceLabel === "Email" ? "Open draft" : "Send reply"}
+              {sourceLabel === "Email" ? "Send / open draft" : "Send reply"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7691,6 +7772,7 @@ function WorkspaceSettingsDialog({
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
   const gmailReady = Boolean(oauthStatus?.connected && oauthStatus.gmailScopeConnected && !oauthStatus.tokenExpiresSoon);
+  const gmailSendReady = Boolean(oauthStatus?.connected && oauthStatus.gmailSendScopeConnected);
   const slackStatus = useSlackIntegrationStatus(authenticated);
   const slackData = slackStatus.data;
   const slackEventsReady = Boolean(slackData?.eventsConfigured ?? integrations.slack?.eventsConfigured);
@@ -7708,6 +7790,8 @@ function WorkspaceSettingsDialog({
         ? "Calendar permission missing"
         : oauthStatus?.health === "gmail_scope_missing"
           ? "Gmail permission missing"
+          : oauthStatus?.health === "gmail_send_scope_missing"
+            ? "Gmail send permission missing"
           : oauthStatus?.health === "needs_reconnect"
             ? "Reconnect required"
             : oauthStatus?.health === "oauth_not_configured"
@@ -7850,10 +7934,10 @@ function WorkspaceSettingsDialog({
               <ConnectedToolRow
                 icon={MailPlus}
                 name="Gmail"
-                status={gmailReady ? "ready" : needsGoogleReconnect || oauthStatus?.health === "gmail_scope_missing" ? "warning" : "setup"}
+                status={gmailReady ? (gmailSendReady ? "ready" : "warning") : needsGoogleReconnect || oauthStatus?.health === "gmail_scope_missing" ? "warning" : "setup"}
                 detail={
                   gmailReady
-                    ? `Scanning ${oauthStatus?.email ?? "connected Gmail"}. Last scan: ${oauthStatus?.lastScannedAt ? formatReceivedAt(oauthStatus.lastScannedAt) : "not yet scanned"}.`
+                    ? `${gmailSendReady ? "Scanning and replies are connected" : "Scanning works; reconnect Google to send approved replies from Donnit"}. Last scan: ${oauthStatus?.lastScannedAt ? formatReceivedAt(oauthStatus.lastScannedAt) : "not yet scanned"}.`
                     : needsGoogleReconnect
                       ? "Google authorization needs to be refreshed before scanning email."
                       : oauthStatus?.health === "gmail_scope_missing"
@@ -8038,11 +8122,12 @@ type GmailOAuthStatus = {
   authenticated: boolean;
   connected: boolean;
   gmailScopeConnected?: boolean;
+  gmailSendScopeConnected?: boolean;
   calendarConnected?: boolean;
   calendarRequiresReconnect?: boolean;
   requiresReconnect?: boolean;
   tokenExpiresSoon?: boolean;
-  health?: "ready" | "oauth_not_configured" | "not_connected" | "needs_reconnect" | "gmail_scope_missing" | "calendar_scope_missing";
+  health?: "ready" | "oauth_not_configured" | "not_connected" | "needs_reconnect" | "gmail_scope_missing" | "gmail_send_scope_missing" | "calendar_scope_missing";
   email?: string | null;
   connectedAt?: string | null;
   expiresAt?: string | null;
@@ -8532,6 +8617,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         description =
           serverMessage ??
           "Donnit's Gmail authorization is missing the gmail.readonly scope. Reconnect Gmail and accept the 'Read your email' permission on Google's consent screen.";
+        action = { label: "Reconnect Gmail", run: startGoogleConnect };
+      } else if (reason === "gmail_send_scope_missing") {
+        title = "Reconnect Gmail with send access";
+        description =
+          serverMessage ??
+          "Donnit can scan email, but needs Gmail send permission before approved replies can be sent from Donnit.";
         action = { label: "Reconnect Gmail", run: startGoogleConnect };
       } else if (reason === "gmail_api_not_enabled") {
         title = "Enable Gmail API in Google Cloud";

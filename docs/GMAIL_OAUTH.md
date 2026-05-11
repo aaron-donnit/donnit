@@ -39,9 +39,13 @@ scan Gmail in production until all of them are complete.
    address.
 4. Authorized domains: add `donnit.ai` (and any other production domain you
    intend to host on).
-5. **Scopes** → **Add or remove scopes** → add
-   `https://www.googleapis.com/auth/gmail.readonly`. Donnit only ever reads;
-   it does not need send/modify scopes.
+5. **Scopes** -> **Add or remove scopes** -> add:
+   - `https://www.googleapis.com/auth/gmail.readonly`
+   - `https://www.googleapis.com/auth/gmail.send`
+   - `https://www.googleapis.com/auth/calendar.events`
+
+   Donnit reads unread Gmail to suggest tasks, sends only user-approved email
+   replies, and writes approved agenda blocks to Google Calendar.
 6. **Test users** (while the app is in Testing): add the Gmail addresses of
    Aaron and any other internal testers. Once the consent screen is published
    and verified, this list is no longer required.

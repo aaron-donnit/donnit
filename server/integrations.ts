@@ -15,11 +15,16 @@ export const APPROVED_REMINDER_ORDER = ["due_date", "urgency", "assignment_accep
 // expose a first-party Gmail OAuth path the operator can configure with
 // their own Google Cloud credentials. See docs/GMAIL_OAUTH.md.
 export const GMAIL_OAUTH_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+export const GMAIL_SEND_OAUTH_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 export const GOOGLE_CALENDAR_OAUTH_SCOPE = "https://www.googleapis.com/auth/calendar.events";
-export const GOOGLE_OAUTH_SCOPES = [GMAIL_OAUTH_SCOPE, GOOGLE_CALENDAR_OAUTH_SCOPE] as const;
+export const GOOGLE_OAUTH_SCOPES = [GMAIL_OAUTH_SCOPE, GMAIL_SEND_OAUTH_SCOPE, GOOGLE_CALENDAR_OAUTH_SCOPE] as const;
 
 export function hasGoogleCalendarScope(scope: string | null | undefined) {
   return Boolean(scope?.split(/\s+/).includes(GOOGLE_CALENDAR_OAUTH_SCOPE));
+}
+
+export function hasGmailSendScope(scope: string | null | undefined) {
+  return Boolean(scope?.split(/\s+/).includes(GMAIL_SEND_OAUTH_SCOPE));
 }
 
 export function getIntegrationStatus() {
@@ -419,6 +424,7 @@ export async function refreshGmailAccessToken(refreshToken: string): Promise<Gma
 
 type GmailEmail = {
   email_id?: string;
+  thread_id?: string | null;
   from_?: string;
   subject?: string;
   snippet?: string;
@@ -842,6 +848,7 @@ function toCandidate(email: GmailEmail) {
   const interpretation = interpretEmail(email, sanitizedBody, extractedActionItems);
   return {
     gmailMessageId: email.email_id ?? null,
+    gmailThreadId: email.thread_id ?? null,
     fromEmail: email.from_ ?? "Unknown sender",
     subject: email.subject ?? "No subject",
     preview: interpretation.rationale.slice(0, 240),
@@ -868,6 +875,7 @@ export function buildManualEmailCandidate(input: {
   const preview = body.slice(0, 240);
   const email: GmailEmail = {
     email_id: synthetic,
+    thread_id: null,
     from_: from,
     subject,
     snippet: preview,
@@ -1134,6 +1142,94 @@ async function gmailApiFetch<T>(
   throw new GmailApiError(summary);
 }
 
+function sanitizeMimeHeader(value: string) {
+  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function encodeBase64Url(input: string) {
+  return Buffer.from(input, "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+type GmailSendResponse = {
+  id?: string;
+  threadId?: string;
+};
+
+export type GmailReplySendResult =
+  | { ok: true; providerMessageId: string | null; threadId: string | null }
+  | { ok: false; reason: string; message: string };
+
+export async function sendGmailThreadReply(input: {
+  accessToken: string;
+  to: string;
+  subject: string;
+  message: string;
+  threadId?: string | null;
+  originalMessageId?: string | null;
+}): Promise<GmailReplySendResult> {
+  const headers: GmailApiHeader[] = [];
+  if (input.originalMessageId) {
+    try {
+      const original = await gmailApiFetch<GmailApiMessage>(
+        input.accessToken,
+        `/gmail/v1/users/me/messages/${encodeURIComponent(input.originalMessageId)}`,
+        { query: { format: "metadata" } },
+      );
+      headers.push(...(original.payload?.headers ?? []));
+    } catch {
+      // Threading is still best-effort with Gmail's threadId.
+    }
+  }
+  const originalRfcMessageId = pickHeader(headers, "Message-ID");
+  const references = pickHeader(headers, "References");
+  const mimeHeaders = [
+    `To: ${sanitizeMimeHeader(input.to)}`,
+    `Subject: ${sanitizeMimeHeader(input.subject)}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+  ];
+  if (originalRfcMessageId) {
+    mimeHeaders.push(`In-Reply-To: ${sanitizeMimeHeader(originalRfcMessageId)}`);
+    mimeHeaders.push(
+      `References: ${sanitizeMimeHeader([references, originalRfcMessageId].filter(Boolean).join(" "))}`,
+    );
+  }
+  const raw = encodeBase64Url(`${mimeHeaders.join("\r\n")}\r\n\r\n${input.message.trim()}\r\n`);
+  const payload: Record<string, unknown> = { raw };
+  if (input.threadId) payload.threadId = input.threadId;
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${input.accessToken}`,
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    const sent = (await res.json()) as GmailSendResponse;
+    return {
+      ok: true,
+      providerMessageId: sent.id ?? null,
+      threadId: sent.threadId ?? input.threadId ?? null,
+    };
+  }
+  const text = await res.text().catch(() => "");
+  const summary = parseGmailErrorBody(res.status, text);
+  return {
+    ok: false,
+    reason: summary.reason ?? summary.status ?? `gmail_send_http_${res.status}`,
+    message:
+      summary.message ??
+      "Google rejected the reply send request. Reconnect Gmail and try again.",
+  };
+}
+
 // Map a Google error envelope to one of our typed scan-failure reasons.
 // Order matters: we look at errors[].reason first (Google's most specific
 // machine-readable signal), then status, then HTTP code.
@@ -1331,8 +1427,9 @@ export async function scanGmailViaOAuth(accessToken: string): Promise<GmailScanR
       ? new Date(Number(msg.internalDate)).toISOString()
       : null;
     const body = extractMessageBody(msg.payload);
-    const candidate = toCandidate({
+      const candidate = toCandidate({
         email_id: msg.id,
+        thread_id: msg.threadId,
         from_: from,
         subject,
         snippet: msg.snippet ?? "",
