@@ -10,6 +10,7 @@ import {
   ArrowUp,
   BarChart3,
   Bell,
+  Bold,
   BriefcaseBusiness,
   CalendarClock,
   CalendarCheck,
@@ -25,7 +26,9 @@ import {
   History,
   Inbox,
   KeyRound,
+  List,
   ListChecks,
+  ListOrdered,
   ListPlus,
   Loader2,
   MailPlus,
@@ -2636,18 +2639,16 @@ function TaskDetailDialog({
               data-testid="input-task-detail-description"
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="task-detail-note">Notes</Label>
-            <Textarea
-              id="task-detail-note"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder="Add an update, blocker, or completion note."
-              className="min-h-[80px]"
-              maxLength={1000}
-              data-testid="input-task-detail-note"
-            />
-          </div>
+          <RichNoteEditor
+            id="task-detail-note"
+            label="Notes"
+            value={note}
+            onChange={setNote}
+            placeholder="Add an update, blocker, or completion note."
+            className="min-h-[120px]"
+            maxLength={1600}
+            testId="input-task-detail-note"
+          />
           <div className="rounded-md border border-border bg-background px-3 py-3">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div>
@@ -2859,6 +2860,100 @@ function TaskDetailDialog({
   );
 }
 
+type RichNoteEditorProps = {
+  id: string;
+  label?: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  maxLength?: number;
+  testId?: string;
+};
+
+function RichNoteEditor({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  className,
+  maxLength,
+  testId,
+}: RichNoteEditorProps) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const updateSelection = (next: string, start: number, end = start) => {
+    onChange(next);
+    window.requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(start, end);
+    });
+  };
+  const insertText = (before: string, after = "") => {
+    const el = ref.current;
+    if (!el) {
+      onChange(`${value}${before}${after}`);
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selected = value.slice(start, end);
+    const next = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`;
+    updateSelection(next, start + before.length, start + before.length + selected.length);
+  };
+  const prefixLines = (prefixer: (index: number) => string) => {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const lineEndIndex = value.indexOf("\n", end);
+    const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+    const block = value.slice(lineStart, lineEnd);
+    const lines = block.split("\n");
+    const nextBlock = lines
+      .map((line, index) => {
+        const stripped = line.replace(/^\s*(?:[-*]|\d+[.)])\s+/, "");
+        return stripped.trim().length === 0 ? line : `${prefixer(index)}${stripped}`;
+      })
+      .join("\n");
+    const next = `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`;
+    updateSelection(next, lineStart, lineStart + nextBlock.length);
+  };
+  return (
+    <div className="space-y-1.5">
+      {label && <Label htmlFor={id}>{label}</Label>}
+      <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-muted/30 px-2 py-1">
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("**", "**")}>
+          <Bold className="size-3.5" />
+          Bold
+        </Button>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines(() => "- ")}>
+          <List className="size-3.5" />
+          Bullets
+        </Button>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => prefixLines((index) => `${index + 1}. `)}>
+          <ListOrdered className="size-3.5" />
+          Numbered
+        </Button>
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => insertText("\n\n")}>
+          Space
+        </Button>
+      </div>
+      <Textarea
+        ref={ref}
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={className}
+        maxLength={maxLength}
+        data-testid={testId}
+      />
+    </div>
+  );
+}
+
 function FloatingTaskBox({
   task,
   users,
@@ -2986,20 +3081,16 @@ function FloatingTaskBox({
               {task.description}
             </p>
           )}
-          <div className="space-y-1.5">
-            <Label htmlFor="floating-task-note" className="ui-label">
-              Work note
-            </Label>
-            <Textarea
-              id="floating-task-note"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder="Add an update, blocker, or next step."
-              className="h-24 resize-none text-xs"
-              maxLength={1000}
-              data-testid="input-floating-task-note"
-            />
-          </div>
+          <RichNoteEditor
+            id="floating-task-note"
+            label="Work note"
+            value={note}
+            onChange={setNote}
+            placeholder="Add an update, blocker, or next step."
+            className="h-28 resize-none text-xs"
+            maxLength={1600}
+            testId="input-floating-task-note"
+          />
           <div className="space-y-1.5">
             <Label htmlFor="floating-task-attachment" className="ui-label">
               Attachment note
@@ -5138,6 +5229,22 @@ function parseSuggestionInsight(actionItems: string[]) {
   };
 }
 
+const EMAIL_SIGNATURE_TEMPLATES = [
+  { id: "none", label: "No signature", body: "" },
+  { id: "best", label: "Best", body: "Best," },
+  { id: "thanks", label: "Thanks", body: "Thanks," },
+  { id: "donnit", label: "Donnit", body: "Best,\nDonnit" },
+  { id: "followup", label: "Follow-up", body: "Thanks,\nI will follow up shortly." },
+];
+
+function applyEmailSignature(message: string, signature: string) {
+  const cleanMessage = message
+    .replace(/\n{2,}(best|thanks|regards|sincerely),?\s*(?:\n[\w\s.-]{1,80})?\s*$/i, "")
+    .trimEnd();
+  if (!signature.trim()) return cleanMessage;
+  return `${cleanMessage}\n\n${signature.trim()}`;
+}
+
 function SuggestionCard({
   suggestion,
   onApprove,
@@ -5159,6 +5266,10 @@ function SuggestionCard({
   const [editing, setEditing] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState(suggestion.replyDraft ?? "");
+  const [replySignatureId, setReplySignatureId] = useState(() => {
+    if (typeof window === "undefined") return "best";
+    return window.localStorage.getItem("donnit.emailSignatureTemplate") ?? "best";
+  });
   const [draftTitle, setDraftTitle] = useState(suggestion.suggestedTitle);
   const [draftDueDate, setDraftDueDate] = useState(suggestion.suggestedDueDate ?? "");
   const [draftUrgency, setDraftUrgency] = useState<"low" | "normal" | "high" | "critical">(
@@ -5200,7 +5311,8 @@ function SuggestionCard({
       return (await res.json()) as SuggestionDraftReplyResult;
     },
     onSuccess: async (result) => {
-      setReplyBody(result.draft);
+      const signature = EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === replySignatureId)?.body ?? "";
+      setReplyBody(applyEmailSignature(result.draft, signature));
       await invalidateWorkspace();
       toast({
         title: "Reply drafted",
@@ -5219,6 +5331,16 @@ function SuggestionCard({
     setReplyOpen(true);
     if (!replyBody.trim() && !suggestion.replyDraft) {
       draftReply.mutate(undefined);
+    }
+  };
+  const updateReplySignature = (templateId: string) => {
+    setReplySignatureId(templateId);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("donnit.emailSignatureTemplate", templateId);
+    }
+    const signature = EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === templateId)?.body ?? "";
+    if (replyBody.trim()) {
+      setReplyBody((current) => applyEmailSignature(current, signature));
     }
   };
   const sendReply = useMutation({
@@ -5520,6 +5642,24 @@ function SuggestionCard({
                 Donnit is drafting a response from the source message.
               </div>
             )}
+            <div className="mb-3 grid gap-1.5">
+              <Label htmlFor={`select-suggestion-signature-${suggestion.id}`} className="ui-label">
+                Signature
+              </Label>
+              <select
+                id={`select-suggestion-signature-${suggestion.id}`}
+                value={replySignatureId}
+                onChange={(event) => updateReplySignature(event.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground"
+                data-testid={`select-suggestion-signature-${suggestion.id}`}
+              >
+                {EMAIL_SIGNATURE_TEMPLATES.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <Textarea
               value={replyBody}
               onChange={(event) => setReplyBody(event.target.value)}

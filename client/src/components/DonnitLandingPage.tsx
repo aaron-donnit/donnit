@@ -720,19 +720,19 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
       <div className="container">
         <div className="block-head center reveal">
           <div className="eyebrow" style={{textAlign:'center'}}>Pricing</div>
-          <h2>Start small. <span className="green">Prove value.</span></h2>
-          <p>Begin with one role, one team, or one transition workflow. We will publish plan details as the pilot program moves toward general availability.</p>
+          <h2>Simple pricing for the way <span className="green">work is captured.</span></h2>
+          <p>Start with personal task capture, add workforce continuity when the role itself needs memory, then scale with enterprise controls when the organization is ready.</p>
         </div>
         <div className="price-grid">
           <div className="price-card reveal">
-            <div className="price-name">Individual pilot</div>
-            <div className="price-desc">For testing AI capture, agenda building, and personal task continuity.</div>
-            <div className="price-amount" style={{fontSize: 38}}>Early access</div>
-            <div className="price-period">start with one workflow</div>
+            <div className="price-name">Individual</div>
+            <div className="price-desc">For one person who wants Donnit to capture and organize daily work.</div>
+            <div className="price-amount"><span className="currency">$</span>5</div>
+            <div className="price-period">per month</div>
             <ul className="price-features">
-              <li>Chat &amp; email capture</li>
-              <li>Personal log + reminders</li>
-              <li>Slack &amp; Gmail connect</li>
+              <li>Task management workspace</li>
+              <li>Auto-import from email</li>
+              <li>Chat to task and manual input</li>
               <li>Approval inbox for suggested tasks</li>
             </ul>
             <div className="price-cta">
@@ -741,17 +741,17 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
           </div>
 
           <div className="price-card featured reveal reveal-2">
-            <span className="price-tag">Best pilot fit</span>
-            <div className="price-name">Team pilot</div>
-            <div className="price-desc">For managers testing task capture, delegation, team visibility, and handoffs.</div>
-            <div className="price-amount" style={{fontSize: 38}}>Guided setup</div>
-            <div className="price-period">connect a real team workflow</div>
+            <span className="price-tag">Full suite</span>
+            <div className="price-name">Business</div>
+            <div className="price-desc">For teams using Donnit as a workforce continuity system.</div>
+            <div className="price-amount"><span className="currency">$</span>19</div>
+            <div className="price-period">per profile / month</div>
             <ul className="price-features">
-              <li>Everything in Individual pilot</li>
-              <li>Accept / deny assignment flow</li>
-              <li>Manager log &amp; team rollups</li>
-              <li>Org-wide Slack &amp; calendar sync</li>
-              <li>Position Profile setup</li>
+              <li>Everything in Individual</li>
+              <li>Position Profiles</li>
+              <li>Slack and SMS intake</li>
+              <li>Admin portal and manager views</li>
+              <li>Task templates and team reporting</li>
             </ul>
             <div className="price-cta">
               <button type="button" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a demo</button>
@@ -760,18 +760,18 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
 
           <div className="price-card reveal reveal-3">
             <div className="price-name">Enterprise</div>
-            <div className="price-desc">For larger teams evaluating workforce continuity, access control, and audit needs.</div>
-            <div className="price-amount" style={{fontSize: 38}}>Let's talk</div>
-            <div className="price-period">SSO · audit · custom retention</div>
+            <div className="price-desc">For larger organizations with security, implementation, and procurement needs.</div>
+            <div className="price-amount enterprise-price">Contact us</div>
+            <div className="price-period">SSO / audit / custom retention</div>
             <ul className="price-features">
-              <li>Everything in Team</li>
+              <li>Everything in Business</li>
               <li>SAML SSO &amp; SCIM provisioning</li>
               <li>Audit log export &amp; retention</li>
               <li>Dedicated success manager</li>
-              <li>Security review package planned</li>
+              <li>Security review package</li>
             </ul>
             <div className="price-cta">
-              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a call</button>
+              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Contact us</button>
             </div>
           </div>
         </div>

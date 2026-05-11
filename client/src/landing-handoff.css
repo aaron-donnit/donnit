@@ -43,6 +43,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  padding-top: 82px;
 }
 
 .donnit-landing-handoff a { color: inherit; text-decoration: none; }
@@ -119,8 +120,10 @@
 
 /* =========== Header =========== */
 .donnit-landing-handoff .site-header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 50;
   backdrop-filter: blur(14px);
   background: rgba(247, 245, 240, 0.78);
@@ -1084,6 +1087,7 @@
   gap: 4px;
 }
 .donnit-landing-handoff .price-amount .currency { font-size: 22px; color: var(--charcoal-3); font-weight: 600; }
+.donnit-landing-handoff .price-amount.enterprise-price { font-size: 38px; letter-spacing: -0.02em; }
 .donnit-landing-handoff .price-period { font-size: 13px; color: var(--charcoal-3); margin-bottom: 26px; margin-top: 2px; }
 .donnit-landing-handoff .price-features { list-style: none; padding: 0; margin: 0 0 26px; display: flex; flex-direction: column; gap: 10px; }
 .donnit-landing-handoff .price-features li {
@@ -1496,6 +1500,7 @@
 }
 
 @media (max-width: 640px) {
+  .donnit-landing-handoff { padding-top: 72px; }
   .donnit-landing-handoff .container, .donnit-landing-handoff .narrow { padding: 0 22px; }
   .donnit-landing-handoff .site-header .inner { padding: 14px 22px; }
   .donnit-landing-handoff .stats-grid { grid-template-columns: 1fr 1fr; }
