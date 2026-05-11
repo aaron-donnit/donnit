@@ -3315,33 +3315,30 @@ function AgendaPanel({
                 return (
                   <li
                     key={`${item.taskId}-${item.order}`}
-                    className={`task-row min-h-[8.75rem] flex-col items-stretch justify-between gap-3 overflow-hidden ${urgencyClass(item.urgency)} ${excluded ? "opacity-55" : ""}`}
+                    className={`task-row flex-col items-stretch gap-2 overflow-hidden px-3 py-3 ${urgencyClass(item.urgency)} ${excluded ? "opacity-55" : ""}`}
                     data-testid={`row-agenda-${item.taskId}`}
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="line-clamp-2 min-w-0 text-sm font-medium leading-snug text-foreground">
-                          {item.title}
-                        </p>
-                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
-                          {index + 1}
-                        </span>
-                      </div>
-                      <p className="mt-2 line-clamp-2 text-xs leading-snug text-muted-foreground">
-                        {formatAgendaSlot(item)}
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <p className="line-clamp-1 min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
+                        {item.title}
                       </p>
-                      <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                        <span className="rounded bg-muted px-1.5 py-0.5">{item.estimatedMinutes} min</span>
-                        <span className="rounded bg-muted px-1.5 py-0.5">{urgencyLabel(item.urgency)}</span>
-                        {excluded && <span className="rounded bg-muted px-1.5 py-0.5">Removed</span>}
-                      </div>
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-[11px] font-bold tabular-nums">
+                        {index + 1}
+                      </span>
                     </div>
-                    <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+                    <div className="min-w-0 text-xs leading-snug text-muted-foreground">
+                      <p className="truncate">{formatAgendaSlot(item)}</p>
+                      <p className="mt-0.5 truncate">
+                        {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
+                        {excluded ? " / Removed" : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 border-t border-border pt-1.5">
                       <div className="flex items-center gap-1">
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="size-8 p-0"
+                          className="size-7 p-0"
                           aria-label="Move task earlier"
                           onClick={() => onMoveTask(item.taskId, "up")}
                           disabled={index === 0}
@@ -3351,7 +3348,7 @@ function AgendaPanel({
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="size-8 p-0"
+                          className="size-7 p-0"
                           aria-label="Move task later"
                           onClick={() => onMoveTask(item.taskId, "down")}
                           disabled={index === agenda.length - 1}
@@ -3362,7 +3359,7 @@ function AgendaPanel({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 px-2 text-xs"
+                        className="h-7 px-2 text-xs"
                         onClick={() => onToggleTask(item.taskId)}
                         data-testid={`button-agenda-toggle-${item.taskId}`}
                       >
