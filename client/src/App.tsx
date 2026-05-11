@@ -179,6 +179,7 @@ type User = {
   email: string;
   role: string;
   persona: string;
+  emailSignature?: string | null;
   managerId: Id | null;
   canAssign: boolean;
   status?: "active" | "inactive";
@@ -5231,15 +5232,34 @@ function parseSuggestionInsight(actionItems: string[]) {
 
 const EMAIL_SIGNATURE_TEMPLATES = [
   { id: "none", label: "No signature", body: "" },
+  { id: "custom", label: "Custom signature", body: "" },
   { id: "best", label: "Best", body: "Best," },
   { id: "thanks", label: "Thanks", body: "Thanks," },
   { id: "donnit", label: "Donnit", body: "Best,\nDonnit" },
   { id: "followup", label: "Follow-up", body: "Thanks,\nI will follow up shortly." },
 ];
 
+const EMAIL_SIGNATURE_TEMPLATE_KEY = "donnit.emailSignatureTemplate";
+const EMAIL_SIGNATURE_CUSTOM_KEY = "donnit.emailSignatureCustom";
+
+function readCustomEmailSignature() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(EMAIL_SIGNATURE_CUSTOM_KEY) ?? "";
+}
+
+function readPreferredEmailSignatureTemplate() {
+  if (typeof window === "undefined") return "best";
+  return window.localStorage.getItem(EMAIL_SIGNATURE_TEMPLATE_KEY) ?? (readCustomEmailSignature().trim() ? "custom" : "best");
+}
+
+function resolveEmailSignature(templateId: string, customSignature: string) {
+  if (templateId === "custom") return customSignature;
+  return EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === templateId)?.body ?? "";
+}
+
 function applyEmailSignature(message: string, signature: string) {
   const cleanMessage = message
-    .replace(/\n{2,}(best|thanks|regards|sincerely),?\s*(?:\n[\w\s.-]{1,80})?\s*$/i, "")
+    .replace(/\n{2,}(best regards|best|thanks|thank you|regards|sincerely),?\s*(?:\n[\w\s.,&'-]{1,120}){0,4}\s*$/i, "")
     .trimEnd();
   if (!signature.trim()) return cleanMessage;
   return `${cleanMessage}\n\n${signature.trim()}`;
@@ -5266,10 +5286,8 @@ function SuggestionCard({
   const [editing, setEditing] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState(suggestion.replyDraft ?? "");
-  const [replySignatureId, setReplySignatureId] = useState(() => {
-    if (typeof window === "undefined") return "best";
-    return window.localStorage.getItem("donnit.emailSignatureTemplate") ?? "best";
-  });
+  const [customSignature, setCustomSignature] = useState(readCustomEmailSignature);
+  const [replySignatureId, setReplySignatureId] = useState(readPreferredEmailSignatureTemplate);
   const [draftTitle, setDraftTitle] = useState(suggestion.suggestedTitle);
   const [draftDueDate, setDraftDueDate] = useState(suggestion.suggestedDueDate ?? "");
   const [draftUrgency, setDraftUrgency] = useState<"low" | "normal" | "high" | "critical">(
@@ -5311,7 +5329,9 @@ function SuggestionCard({
       return (await res.json()) as SuggestionDraftReplyResult;
     },
     onSuccess: async (result) => {
-      const signature = EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === replySignatureId)?.body ?? "";
+      const latestCustomSignature = readCustomEmailSignature();
+      if (latestCustomSignature !== customSignature) setCustomSignature(latestCustomSignature);
+      const signature = resolveEmailSignature(replySignatureId, latestCustomSignature);
       setReplyBody(applyEmailSignature(result.draft, signature));
       await invalidateWorkspace();
       toast({
@@ -5328,6 +5348,10 @@ function SuggestionCard({
     },
   });
   const openReplyDialog = () => {
+    const latestCustomSignature = readCustomEmailSignature();
+    setCustomSignature(latestCustomSignature);
+    const preferredTemplate = readPreferredEmailSignatureTemplate();
+    setReplySignatureId(preferredTemplate);
     setReplyOpen(true);
     if (!replyBody.trim() && !suggestion.replyDraft) {
       draftReply.mutate(undefined);
@@ -5336,9 +5360,9 @@ function SuggestionCard({
   const updateReplySignature = (templateId: string) => {
     setReplySignatureId(templateId);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("donnit.emailSignatureTemplate", templateId);
+      window.localStorage.setItem(EMAIL_SIGNATURE_TEMPLATE_KEY, templateId);
     }
-    const signature = EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === templateId)?.body ?? "";
+    const signature = resolveEmailSignature(templateId, customSignature);
     if (replyBody.trim()) {
       setReplyBody((current) => applyEmailSignature(current, signature));
     }
@@ -5659,6 +5683,11 @@ function SuggestionCard({
                   </option>
                 ))}
               </select>
+              {replySignatureId === "custom" && !customSignature.trim() && (
+                <p className="text-[11px] text-muted-foreground">
+                  Add your custom signature in Workspace settings.
+                </p>
+              )}
             </div>
             <Textarea
               value={replyBody}
@@ -7949,6 +7978,17 @@ function WorkspaceSettingsDialog({
     if (typeof window === "undefined") return 2;
     return Number(window.localStorage.getItem("donnit.unreadDelayMinutes") ?? "2") || 2;
   });
+  const [emailSignature, setEmailSignature] = useState(() => currentUser?.emailSignature ?? readCustomEmailSignature());
+  useEffect(() => {
+    const nextSignature = currentUser?.emailSignature ?? readCustomEmailSignature();
+    setEmailSignature(nextSignature);
+    if (typeof window !== "undefined" && nextSignature.trim()) {
+      window.localStorage.setItem(EMAIL_SIGNATURE_CUSTOM_KEY, nextSignature);
+      if (!window.localStorage.getItem(EMAIL_SIGNATURE_TEMPLATE_KEY)) {
+        window.localStorage.setItem(EMAIL_SIGNATURE_TEMPLATE_KEY, "custom");
+      }
+    }
+  }, [currentUser?.id, currentUser?.emailSignature]);
   const slackDelay = slackData?.unreadDelayMinutes ?? integrations.slack?.unreadDelayMinutes ?? unreadDelayMinutes;
   const updateAutoEmailScan = (value: boolean) => {
     setAutoEmailScan(value);
@@ -8012,6 +8052,32 @@ function WorkspaceSettingsDialog({
       });
     },
   });
+  const saveEmailSignature = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", "/api/profile/signature", {
+        emailSignature,
+      });
+      return (await res.json()) as { ok: boolean; emailSignature: string };
+    },
+    onSuccess: async (result) => {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(EMAIL_SIGNATURE_CUSTOM_KEY, result.emailSignature ?? emailSignature.trim());
+        window.localStorage.setItem(EMAIL_SIGNATURE_TEMPLATE_KEY, "custom");
+      }
+      await invalidateWorkspace();
+      toast({
+        title: "Signature saved",
+        description: "Generated replies will use your custom signature by default.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save signature",
+        description: apiErrorMessage(error, "Apply the latest Supabase migration, then try again."),
+        variant: "destructive",
+      });
+    },
+  });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
@@ -8044,6 +8110,47 @@ function WorkspaceSettingsDialog({
               <p className="mt-1 text-sm font-medium text-foreground">
                 {googleHealthLabel}
               </p>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">Email signature</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Donnit adds this to generated email replies when you choose your custom signature.
+              </p>
+            </div>
+            <div className="grid gap-3 px-3 py-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="workspace-email-signature" className="ui-label">
+                  Personal default
+                </Label>
+                <Textarea
+                  id="workspace-email-signature"
+                  value={emailSignature}
+                  onChange={(event) => setEmailSignature(event.target.value)}
+                  placeholder={`Best regards,\n${currentUser?.name ?? "Your name"}\nCEO & Founder, Donnit`}
+                  className="min-h-[110px] text-sm"
+                  maxLength={1000}
+                  disabled={!authenticated || saveEmailSignature.isPending}
+                  data-testid="input-email-signature"
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Each user controls their own signature. Admins do not need to set this for the team.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => saveEmailSignature.mutate()}
+                  disabled={!authenticated || saveEmailSignature.isPending}
+                  data-testid="button-save-email-signature"
+                >
+                  {saveEmailSignature.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                  Save signature
+                </Button>
+              </div>
             </div>
           </div>
 
@@ -9045,6 +9152,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     );
     if (!taskStillActive) setActiveWorkTask(null);
   }, [activeTaskId, data?.tasks]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const signature = data?.users
+      ?.find((user) => String(user.id) === String(data.currentUserId))
+      ?.emailSignature?.trim();
+    if (!signature) return;
+    window.localStorage.setItem(EMAIL_SIGNATURE_CUSTOM_KEY, signature);
+    if (!window.localStorage.getItem(EMAIL_SIGNATURE_TEMPLATE_KEY)) {
+      window.localStorage.setItem(EMAIL_SIGNATURE_TEMPLATE_KEY, "custom");
+    }
+  }, [data?.currentUserId, data?.users]);
 
   if (isLoading) {
     return (

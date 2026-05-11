@@ -1842,6 +1842,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     email: m.profile?.email ?? "",
     role: m.role,
     persona: m.profile?.persona ?? "operator",
+    emailSignature: m.profile?.email_signature ?? "",
     managerId: m.manager_id,
     canAssign: m.can_assign,
     status: (m as { status?: string }).status ?? "active",
@@ -2317,6 +2318,10 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
     }),
   }),
 ]);
+
+const profileSignatureSchema = z.object({
+  emailSignature: z.string().max(1000).default("").transform((value) => value.trim()),
+});
 
 const memberRoleSchema = z.enum(["owner", "admin", "manager", "member", "viewer"]);
 const memberStatusSchema = z.enum(["active", "inactive"]);
@@ -3786,6 +3791,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     res.json(await buildDemoBootstrap());
+  });
+
+  app.patch("/api/profile/signature", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = profileSignatureSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Signature payload is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const profile = await store.updateProfileSignature(parsed.data.emailSignature);
+      res.json({
+        ok: true,
+        emailSignature: profile.email_signature ?? "",
+        profile: {
+          id: profile.id,
+          fullName: profile.full_name,
+          email: profile.email,
+          emailSignature: profile.email_signature ?? "",
+        },
+      });
+    } catch (error) {
+      const described = describeSupabaseError(error);
+      const reason = classifySupabaseError(described, { schema: DONNIT_SCHEMA, table: "profiles" });
+      if (reason === "invalid_column") {
+        res.status(409).json({
+          ok: false,
+          reason: "profile_signature_schema_missing",
+          message: "Email signatures are not available yet. Apply Supabase migration 20260511165451_profile_email_signature.sql, then redeploy.",
+          code: described.code,
+          details: described.details,
+          hint: described.hint,
+        });
+        return;
+      }
+      const payload = serializeSupabaseError(error);
+      console.error("[donnit] profile signature update failed", {
+        reason,
+        userId: req.donnitAuth?.userId,
+        ...payload,
+      });
+      res.status(reason === "rls_denied" || reason === "permission_denied_grants_missing" ? 403 : 500).json({ ok: false, ...payload });
+    }
   });
 
   app.patch("/api/workspace-state", requireDonnitAuth, async (req: Request, res: Response) => {

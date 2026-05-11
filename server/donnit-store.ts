@@ -79,6 +79,7 @@ export type DonnitProfile = {
   email: string;
   default_org_id: string | null;
   persona: string;
+  email_signature?: string | null;
   created_at: string;
 };
 
@@ -279,6 +280,17 @@ export class DonnitStore {
   async getDefaultOrgId(): Promise<string | null> {
     const profile = await this.getProfile();
     return profile?.default_org_id ?? null;
+  }
+
+  async updateProfileSignature(emailSignature: string): Promise<DonnitProfile> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.profiles)
+      .update({ email_signature: emailSignature })
+      .eq("id", this.userId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data as DonnitProfile;
   }
 
   async listOrgMembers(orgId: string): Promise<Array<DonnitMember & { profile: DonnitProfile | null }>> {
