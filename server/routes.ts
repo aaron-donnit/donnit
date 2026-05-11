@@ -794,6 +794,12 @@ type AgendaPreferences = {
   afternoonPreference: AgendaPreference;
 };
 
+type AgendaSchedule = {
+  autoBuildEnabled: boolean;
+  buildTime: string;
+  lastAutoBuildDate: string | null;
+};
+
 const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
   workdayStart: "09:00",
   workdayEnd: "17:00",
@@ -804,6 +810,12 @@ const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
   focusBlockMinutes: 90,
   morningPreference: "deep_work",
   afternoonPreference: "communications",
+};
+
+const DEFAULT_AGENDA_SCHEDULE: AgendaSchedule = {
+  autoBuildEnabled: false,
+  buildTime: "07:30",
+  lastAutoBuildDate: null,
 };
 
 function parseClockMinute(value: unknown, fallback: string) {
@@ -849,6 +861,18 @@ function cleanAgendaPreferences(value: unknown): AgendaPreferences {
     focusBlockMinutes: clampNumber(input.focusBlockMinutes, DEFAULT_AGENDA_PREFERENCES.focusBlockMinutes, 30, 180),
     morningPreference: cleanAgendaPreference(input.morningPreference, DEFAULT_AGENDA_PREFERENCES.morningPreference),
     afternoonPreference: cleanAgendaPreference(input.afternoonPreference, DEFAULT_AGENDA_PREFERENCES.afternoonPreference),
+  };
+}
+
+function cleanAgendaSchedule(value: unknown): AgendaSchedule {
+  const input = (value ?? {}) as Record<string, unknown>;
+  const buildTime = typeof input.buildTime === "string" && /^\d{1,2}:\d{2}$/.test(input.buildTime)
+    ? input.buildTime
+    : DEFAULT_AGENDA_SCHEDULE.buildTime;
+  return {
+    autoBuildEnabled: input.autoBuildEnabled === true,
+    buildTime,
+    lastAutoBuildDate: typeof input.lastAutoBuildDate === "string" ? input.lastAutoBuildDate : null,
   };
 }
 
@@ -1171,6 +1195,7 @@ function toClientWorkspaceState(input: {
       approvedAt: typeof agendaValue.approvedAt === "string" ? agendaValue.approvedAt : null,
       preferences: cleanAgendaPreferences(agendaValue.preferences),
       taskOrder: cleanStringArray(agendaValue.taskOrder, 500),
+      schedule: cleanAgendaSchedule(agendaValue.schedule),
     },
     onboarding: {
       dismissed: onboardingValue.dismissed === true,
@@ -2161,6 +2186,14 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
         .optional()
         .transform((value) => cleanAgendaPreferences(value)),
       taskOrder: z.array(z.union([z.string(), z.number()])).max(500).optional().transform((items) => (items ?? []).map(String)),
+      schedule: z
+        .object({
+          autoBuildEnabled: z.boolean().optional(),
+          buildTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+          lastAutoBuildDate: z.string().nullable().optional(),
+        })
+        .optional()
+        .transform((value) => cleanAgendaSchedule(value)),
     }),
   }),
   z.object({

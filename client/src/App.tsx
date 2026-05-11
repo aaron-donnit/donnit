@@ -114,6 +114,12 @@ type AgendaPreferences = {
   afternoonPreference: AgendaPreference;
 };
 
+type AgendaSchedule = {
+  autoBuildEnabled: boolean;
+  buildTime: string;
+  lastAutoBuildDate: string | null;
+};
+
 const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
   workdayStart: "09:00",
   workdayEnd: "17:00",
@@ -124,6 +130,12 @@ const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
   focusBlockMinutes: 90,
   morningPreference: "deep_work",
   afternoonPreference: "communications",
+};
+
+const DEFAULT_AGENDA_SCHEDULE: AgendaSchedule = {
+  autoBuildEnabled: false,
+  buildTime: "07:30",
+  lastAutoBuildDate: null,
 };
 
 const CLIENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
@@ -145,6 +157,17 @@ function addLocalDays(days: number, baseDate = localDateIso()) {
   if (Number.isNaN(parsed.getTime())) return baseDate;
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
+}
+
+function localTimeHHMM(value = new Date(), timeZone = CLIENT_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(value);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("hour")}:${get("minute")}`;
 }
 
 type User = {
@@ -245,6 +268,7 @@ type WorkspaceState = {
     approvedAt: string | null;
     preferences: AgendaPreferences;
     taskOrder: string[];
+    schedule: AgendaSchedule;
   };
   onboarding: {
     dismissed: boolean;
@@ -803,6 +827,21 @@ function normalizeAgendaPreferences(input?: Partial<AgendaPreferences> | null): 
     minimumBlockMinutes: Number(input?.minimumBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.minimumBlockMinutes),
     focusBlockMinutes: Number(input?.focusBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.focusBlockMinutes),
   };
+}
+
+function normalizeAgendaSchedule(input?: Partial<AgendaSchedule> | null): AgendaSchedule {
+  const buildTime = /^\d{1,2}:\d{2}$/.test(String(input?.buildTime ?? ""))
+    ? String(input?.buildTime)
+    : DEFAULT_AGENDA_SCHEDULE.buildTime;
+  return {
+    autoBuildEnabled: input?.autoBuildEnabled === true,
+    buildTime,
+    lastAutoBuildDate: typeof input?.lastAutoBuildDate === "string" ? input.lastAutoBuildDate : null,
+  };
+}
+
+function isTimeAtOrAfter(current: string, target: string) {
+  return current.localeCompare(target) >= 0;
 }
 
 function orderAgendaItems(agenda: AgendaItem[], taskOrder: string[]) {
@@ -3018,10 +3057,12 @@ function AgendaPanel({
   excludedTaskIds,
   approved,
   preferences,
+  schedule,
   onBuild,
   onToggleTask,
   onMoveTask,
   onPreferencesChange,
+  onScheduleChange,
   onApprove,
   onOpenWork,
   onExport,
@@ -3031,10 +3072,12 @@ function AgendaPanel({
   excludedTaskIds: Set<string>;
   approved: boolean;
   preferences: AgendaPreferences;
+  schedule: AgendaSchedule;
   onBuild: () => void;
   onToggleTask: (taskId: Id) => void;
   onMoveTask: (taskId: Id, direction: "up" | "down") => void;
   onPreferencesChange: (preferences: AgendaPreferences) => void;
+  onScheduleChange: (schedule: AgendaSchedule) => void;
   onApprove: () => void;
   onOpenWork: () => void;
   onExport: () => void;
@@ -3045,6 +3088,9 @@ function AgendaPanel({
   const scheduledCount = includedAgenda.filter((item) => item.scheduleStatus === "scheduled").length;
   const updatePreference = <K extends keyof AgendaPreferences>(key: K, value: AgendaPreferences[K]) => {
     onPreferencesChange({ ...preferences, [key]: value });
+  };
+  const updateSchedule = <K extends keyof AgendaSchedule>(key: K, value: AgendaSchedule[K]) => {
+    onScheduleChange({ ...schedule, [key]: value });
   };
   return (
     <div className="panel overflow-hidden" data-testid="panel-agenda" id="panel-agenda">
@@ -3092,10 +3138,49 @@ function AgendaPanel({
         </div>
       </div>
       <div className="px-4 py-3">
-        {agenda.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Build an agenda after tasks are added.</p>
-        ) : (
-          <div className="space-y-3">
+        <div className="space-y-3">
+          <details className="rounded-md border border-border bg-background px-3 py-2" open={schedule.autoBuildEnabled}>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-foreground">
+              <span className="inline-flex items-center gap-2">
+                <CalendarCheck className="size-4 text-brand-green" />
+                Daily approval draft
+              </span>
+              <span className="text-xs font-normal text-muted-foreground">
+                {schedule.autoBuildEnabled ? `On at ${schedule.buildTime}` : "Off"}
+              </span>
+            </summary>
+            <div className="mt-3 grid gap-3">
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                <span>
+                  <span className="block font-medium text-foreground">Auto-build each morning</span>
+                  <span className="block text-xs text-muted-foreground">Donnit drafts the agenda for approval once per day when you open the workspace.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={schedule.autoBuildEnabled}
+                  onChange={(event) => updateSchedule("autoBuildEnabled", event.target.checked)}
+                  className="size-4 accent-brand-green"
+                  data-testid="checkbox-agenda-auto-build"
+                />
+              </label>
+              <div>
+                <Label className="text-[11px]">Draft time</Label>
+                <Input
+                  type="time"
+                  value={schedule.buildTime}
+                  onChange={(event) => updateSchedule("buildTime", event.target.value)}
+                  data-testid="input-agenda-auto-build-time"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Last auto-draft: {schedule.lastAutoBuildDate ?? "not yet"}
+                </p>
+              </div>
+            </div>
+          </details>
+          {agenda.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Build an agenda after tasks are added.</p>
+          ) : (
+            <>
             <details className="rounded-md border border-border bg-background px-3 py-2">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-foreground">
                 <span className="inline-flex items-center gap-2">
@@ -3276,8 +3361,9 @@ function AgendaPanel({
                 );
               })}
             </ol>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -5609,11 +5695,13 @@ function SupportRail({
   excludedTaskIds,
   agendaApproved,
   agendaPreferences,
+  agendaSchedule,
   onOpenInbox,
   onBuildAgenda,
   onToggleAgendaTask,
   onMoveAgendaTask,
   onUpdateAgendaPreferences,
+  onUpdateAgendaSchedule,
   onApproveAgenda,
   onOpenAgendaWork,
   onExportAgenda,
@@ -5633,11 +5721,13 @@ function SupportRail({
   excludedTaskIds: Set<string>;
   agendaApproved: boolean;
   agendaPreferences: AgendaPreferences;
+  agendaSchedule: AgendaSchedule;
   onOpenInbox: () => void;
   onBuildAgenda: () => void;
   onToggleAgendaTask: (taskId: Id) => void;
   onMoveAgendaTask: (taskId: Id, direction: "up" | "down") => void;
   onUpdateAgendaPreferences: (preferences: AgendaPreferences) => void;
+  onUpdateAgendaSchedule: (schedule: AgendaSchedule) => void;
   onApproveAgenda: () => void;
   onOpenAgendaWork: () => void;
   onExportAgenda: () => void;
@@ -5717,10 +5807,12 @@ function SupportRail({
           excludedTaskIds={excludedTaskIds}
           approved={agendaApproved}
           preferences={agendaPreferences}
+          schedule={agendaSchedule}
           onBuild={onBuildAgenda}
           onToggleTask={onToggleAgendaTask}
           onMoveTask={onMoveAgendaTask}
           onPreferencesChange={onUpdateAgendaPreferences}
+          onScheduleChange={onUpdateAgendaSchedule}
           onApprove={onApproveAgenda}
           onOpenWork={onOpenAgendaWork}
           onExport={onExportAgenda}
@@ -8025,6 +8117,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaExcludedTaskIds, setAgendaExcludedTaskIds] = useState<Set<string>>(new Set());
   const [agendaApproved, setAgendaApproved] = useState(false);
   const [agendaPreferences, setAgendaPreferences] = useState<AgendaPreferences>(DEFAULT_AGENDA_PREFERENCES);
+  const [agendaSchedule, setAgendaSchedule] = useState<AgendaSchedule>(DEFAULT_AGENDA_SCHEDULE);
   const [agendaTaskOrder, setAgendaTaskOrder] = useState<string[]>([]);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [onboardingManuallyOpen, setOnboardingManuallyOpen] = useState(false);
@@ -8045,6 +8138,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const persistedAgendaExcludedTaskIds = data?.workspaceState?.agenda.excludedTaskIds.join("|") ?? "";
   const persistedAgendaApproved = data?.workspaceState?.agenda.approved ?? false;
   const persistedAgendaPreferences = JSON.stringify(data?.workspaceState?.agenda.preferences ?? DEFAULT_AGENDA_PREFERENCES);
+  const persistedAgendaSchedule = JSON.stringify(data?.workspaceState?.agenda.schedule ?? DEFAULT_AGENDA_SCHEDULE);
   const persistedAgendaTaskOrder = data?.workspaceState?.agenda.taskOrder.join("|") ?? "";
   const persistedOnboardingDismissed = data?.workspaceState?.onboarding.dismissed ?? false;
 
@@ -8061,6 +8155,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     approvedAt: string | null = null,
     preferences = agendaPreferences,
     taskOrder = agendaTaskOrder,
+    schedule = agendaSchedule,
   ) => {
     persistWorkspaceState({
       key: "agenda_state",
@@ -8070,6 +8165,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         approvedAt,
         preferences,
         taskOrder,
+        schedule,
       },
     });
   };
@@ -8088,8 +8184,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setAgendaExcludedTaskIds(new Set(data.workspaceState.agenda.excludedTaskIds));
     setAgendaApproved(data.workspaceState.agenda.approved);
     setAgendaPreferences(normalizeAgendaPreferences(data.workspaceState.agenda.preferences));
+    setAgendaSchedule(normalizeAgendaSchedule(data.workspaceState.agenda.schedule));
     setAgendaTaskOrder(data.workspaceState.agenda.taskOrder);
-  }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds, persistedAgendaPreferences, persistedAgendaTaskOrder]);
+  }, [data?.authenticated, persistedAgendaApproved, persistedAgendaExcludedTaskIds, persistedAgendaPreferences, persistedAgendaSchedule, persistedAgendaTaskOrder]);
 
   useEffect(() => {
     if (!data?.authenticated || !data.workspaceState) return;
@@ -8499,16 +8596,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   });
 
   const buildAgenda = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (_input?: { schedule?: AgendaSchedule }) => {
       const res = await apiRequest("GET", "/api/agenda");
       const agenda = (await res.json()) as AgendaItem[];
       await invalidateWorkspace();
       return agenda;
     },
-    onSuccess: (agenda) => {
+    onSuccess: (agenda, input) => {
       setAgendaExcludedTaskIds(new Set());
       setAgendaApproved(false);
-      persistAgendaState(new Set(), false, null, agendaPreferences, agendaTaskOrder);
+      persistAgendaState(new Set(), false, null, agendaPreferences, agendaTaskOrder, input?.schedule ?? agendaSchedule);
       const minutes = agenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
       const scheduled = agenda.filter((item) => item.scheduleStatus === "scheduled").length;
       toast({
@@ -8523,6 +8620,37 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       }, 50);
     },
   });
+
+  useEffect(() => {
+    if (!data?.authenticated || !agendaSchedule.autoBuildEnabled) return;
+    const maybeBuildDailyAgenda = () => {
+      const today = localDateIso();
+      if (agendaSchedule.lastAutoBuildDate === today) return;
+      if (!isTimeAtOrAfter(localTimeHHMM(), agendaSchedule.buildTime)) return;
+      if (buildAgenda.isPending) return;
+      const hasOpenTasks = (data?.tasks ?? [])
+        .filter(isVisibleWorkTask)
+        .some((task) => task.status !== "completed" && task.status !== "denied");
+      if (!hasOpenTasks) return;
+      const nextSchedule = { ...agendaSchedule, lastAutoBuildDate: today };
+      setAgendaSchedule(nextSchedule);
+      setAgendaApproved(false);
+      setSupportView("agenda");
+      persistAgendaState(agendaExcludedTaskIds, false, null, agendaPreferences, agendaTaskOrder, nextSchedule);
+      buildAgenda.mutate({ schedule: nextSchedule });
+    };
+    maybeBuildDailyAgenda();
+    const interval = window.setInterval(maybeBuildDailyAgenda, 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [
+    agendaExcludedTaskIds,
+    agendaPreferences,
+    agendaSchedule,
+    agendaTaskOrder,
+    buildAgenda,
+    data?.authenticated,
+    data?.tasks,
+  ]);
 
   const exportGoogleCalendar = useMutation({
     mutationFn: async () => {
@@ -8755,7 +8883,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       actionLabel: "Build",
       onAction: () => {
         setSupportView("agenda");
-        buildAgenda.mutate();
+        buildAgenda.mutate({});
       },
     },
     {
@@ -8864,7 +8992,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: Workflow,
       onClick: () => {
         setSupportView("agenda");
-        buildAgenda.mutate();
+        buildAgenda.mutate({});
       },
       loading: buildAgenda.isPending,
       hint: "Refresh and confirm today's priority order",
@@ -9118,8 +9246,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   excludedTaskIds={agendaExcludedTaskIds}
                   agendaApproved={agendaApproved}
                   agendaPreferences={agendaPreferences}
+                  agendaSchedule={agendaSchedule}
                   onOpenInbox={() => setApprovalInboxOpen(true)}
-                  onBuildAgenda={() => buildAgenda.mutate()}
+                  onBuildAgenda={() => buildAgenda.mutate({})}
                   onToggleAgendaTask={(taskId) => {
                     setAgendaApproved(false);
                     setAgendaExcludedTaskIds((current) => {
@@ -9152,6 +9281,18 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     setAgendaApproved(false);
                     setAgendaPreferences(next);
                     persistAgendaState(agendaExcludedTaskIds, false, null, next, agendaTaskOrder);
+                  }}
+                  onUpdateAgendaSchedule={(schedule) => {
+                    const next = normalizeAgendaSchedule(schedule);
+                    setAgendaSchedule(next);
+                    persistAgendaState(
+                      agendaExcludedTaskIds,
+                      agendaApproved,
+                      data?.workspaceState?.agenda.approvedAt ?? null,
+                      agendaPreferences,
+                      agendaTaskOrder,
+                      next,
+                    );
                   }}
                   onApproveAgenda={() => {
                     setAgendaApproved(true);
