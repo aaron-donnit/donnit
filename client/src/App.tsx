@@ -1692,7 +1692,7 @@ function DemoWorkspaceGuide({
       "Confirm Friday client coverage plan",
       "Follow up on ACME renewal blockers",
       "Reconcile ChatGPT expense receipt",
-      "Respond to payroll access text",
+      "Review payroll access request from Gmail",
     ].includes(task.title),
   );
   const pendingApprovals = suggestions.filter((suggestion) => suggestion.status === "pending").length;
@@ -1702,9 +1702,35 @@ function DemoWorkspaceGuide({
   const demoProfiles = positionProfiles.filter((profile) =>
     ["Operations Manager", "Client Success Specialist", "Finance Coordinator"].includes(profile.title),
   );
+  const walkthrough = [
+    {
+      label: "1. Slack becomes work",
+      detail: "Open Approvals and review the #people-ops onboarding coverage suggestion.",
+      action: onOpenApprovals,
+      icon: Inbox,
+    },
+    {
+      label: "2. Manager sees load",
+      detail: "Open Team to show overdue, assigned, completed, and update-request context.",
+      action: onOpenTeam,
+      icon: Users,
+    },
+    {
+      label: "3. Report the workflow",
+      detail: "Open Reports to show source mix, completion rate, and continuity signals.",
+      action: onOpenReports,
+      icon: BarChart3,
+    },
+    {
+      label: "4. Handoff the role",
+      detail: "Open Profiles, choose Client Success Specialist, then show the handoff packet.",
+      action: onOpenPositionProfiles,
+      icon: BriefcaseBusiness,
+    },
+  ];
   return (
     <section className="mb-4 rounded-lg border border-border bg-card p-4" data-testid="panel-demo-workspace-guide">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex items-start gap-3">
             <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-green text-white">
@@ -1723,6 +1749,23 @@ function DemoWorkspaceGuide({
                 <span className="rounded-md bg-muted px-2 py-1">{slackItems} Slack-origin items</span>
               </div>
             </div>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {walkthrough.map((step) => (
+              <button
+                key={step.label}
+                type="button"
+                onClick={step.action}
+                className="rounded-md border border-border bg-background px-3 py-3 text-left transition hover:border-brand-green/70 hover:bg-muted/40"
+                data-testid={`button-demo-step-${step.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+              >
+                <div className="mb-2 flex items-center gap-2">
+                  <step.icon className="size-4 text-brand-green" />
+                  <p className="text-xs font-semibold text-foreground">{step.label}</p>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">{step.detail}</p>
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -9452,7 +9495,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           "Confirm Friday client coverage plan",
           "Follow up on ACME renewal blockers",
           "Reconcile ChatGPT expense receipt",
-          "Respond to payroll access text",
+          "Review payroll access request from Gmail",
         ].includes(task.title),
       ) ||
       suggestions.some((suggestion) => String(suggestion.fromEmail).endsWith("@example.com"))

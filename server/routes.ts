@@ -2495,12 +2495,12 @@ const demoTeamMembers: DemoTeamMemberSeed[] = [
         subtasks: ["Confirm receipt amount", "Select expense category", "Attach receipt to monthly report"],
       },
       {
-        title: "Respond to payroll access text",
-        description: "Inbound SMS mentioned payroll access. Confirm whether the employee still needs help and document the resolution.",
+        title: "Review payroll access request from Gmail",
+        description: "Payroll access request came through email. Confirm whether the employee still needs help and document the resolution.",
         urgency: "high" as const,
         dueOffset: 0,
         estimatedMinutes: 20,
-        source: "sms" as const,
+        source: "email" as const,
         subtasks: ["Reply to employee", "Confirm access status", "Note payroll resolution"],
       },
     ],
@@ -2508,6 +2508,21 @@ const demoTeamMembers: DemoTeamMemberSeed[] = [
 ];
 
 const demoApprovalSuggestions = [
+  {
+    key: "slack-coverage",
+    fromEmail: "slack:#people-ops",
+    subject: "Slack: #people-ops",
+    preview: "Can someone cover Taylor's onboarding checklist while Jordan is out?",
+    body: "Maya: Can someone cover Taylor's onboarding checklist while Jordan is out? Need laptop, payroll, benefits, and first-week meetings confirmed before Friday.",
+    actionItems: [
+      "Assign onboarding checklist coverage",
+      "Confirm laptop, payroll, benefits, and first-week meetings",
+      "Source excerpt: Taylor onboarding coverage request in #people-ops",
+    ],
+    suggestedTitle: "Cover Taylor onboarding checklist",
+    suggestedDueOffset: 2,
+    urgency: "high" as const,
+  },
   {
     key: "board-packet",
     fromEmail: "chief-of-staff@example.com",
@@ -3905,6 +3920,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         date.setDate(date.getDate() + days);
         return date.toISOString();
       };
+
+      for (const legacyTask of allTasks.filter((task) => task.title === "Respond to payroll access text")) {
+        const updated = await store.updateTask(legacyTask.id, {
+          title: "Review payroll access request from Gmail",
+          description: "Payroll access request came through email. Confirm whether the employee still needs help and document the resolution.",
+          source: "email",
+        });
+        if (updated) Object.assign(legacyTask, updated);
+      }
 
       for (const seed of demoTeamMembers) {
         const email = `demo-${seed.key}-${orgId.slice(0, 8)}@example.invalid`;
