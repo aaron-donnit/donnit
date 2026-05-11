@@ -1914,6 +1914,7 @@ function TaskList({
   subtasks = [],
   events = [],
   authenticated = false,
+  currentUserId,
   viewLabel,
   onPinTask,
 }: {
@@ -1922,12 +1923,15 @@ function TaskList({
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
   authenticated?: boolean;
+  currentUserId?: Id;
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
+  const [taskSearch, setTaskSearch] = useState("");
+  const [taskView, setTaskView] = useState<"active" | "mine" | "done" | "all">("active");
   const visibleTasks = useMemo(
     () =>
       tasks.map((task) =>
@@ -2002,7 +2006,29 @@ function TaskList({
     return { id: "backlog", label: "Backlog", detail: "No due date yet" };
   };
 
-  const sorted = [...visibleTasks].sort((a, b) => {
+  const normalizedTaskSearch = taskSearch.trim().toLowerCase();
+  const userNameForTask = (task: Task) => users.find((user) => String(user.id) === String(task.assignedToId))?.name ?? "";
+  const filteredTasks = visibleTasks.filter((task) => {
+    if (taskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
+    if (taskView === "done" && task.status !== "completed") return false;
+    if (taskView === "mine" && currentUserId && String(task.assignedToId) !== String(currentUserId) && String(task.delegatedToId ?? "") !== String(currentUserId)) return false;
+    if (!normalizedTaskSearch) return true;
+    const haystack = [
+      task.title,
+      task.description,
+      task.completionNotes,
+      task.source,
+      task.urgency,
+      task.status,
+      task.dueDate ?? "",
+      userNameForTask(task),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedTaskSearch);
+  });
+
+  const sorted = [...filteredTasks].sort((a, b) => {
     const aDone = a.status === "completed" ? 1 : 0;
     const bDone = b.status === "completed" ? 1 : 0;
     if (aDone !== bDone) return aDone - bDone;
@@ -2019,7 +2045,7 @@ function TaskList({
   });
 
   const open = sorted.filter((t) => t.status !== "completed" && t.status !== "denied");
-  const done = visibleTasks
+  const done = filteredTasks
     .filter((t) => t.status === "completed")
     .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
   const grouped = open.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
@@ -2044,13 +2070,47 @@ function TaskList({
         </span>
       </div>
 
+      <div className="grid gap-2 border-b border-border px-4 py-3 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={taskSearch}
+            onChange={(event) => setTaskSearch(event.target.value)}
+            placeholder="Search tasks, owners, sources, notes..."
+            className="h-9 pl-9 text-sm"
+            data-testid="input-task-list-search"
+          />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            ["active", "Active"],
+            ["mine", "Mine"],
+            ["done", "Done"],
+            ["all", "All"],
+          ].map(([id, label]) => (
+            <Button
+              key={id}
+              type="button"
+              variant={taskView === id ? "default" : "outline"}
+              size="sm"
+              onClick={() => setTaskView(id as "active" | "mine" | "done" | "all")}
+              data-testid={`button-task-view-${id}`}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
       <div className="flex flex-col gap-2 px-4 py-4">
-        {open.length === 0 ? (
+        {open.length === 0 && done.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">
-            <CheckCircle2 className="mx-auto size-8 text-brand-green" />
-            <p className="display-font mt-3 text-base font-bold">Plate's clear.</p>
+            <Search className="mx-auto size-8 text-brand-green" />
+            <p className="display-font mt-3 text-base font-bold">
+              {taskSearch.trim() ? "No matching tasks." : "Plate's clear."}
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Done. That's one less thing.
+              {taskSearch.trim() ? "Try a different keyword, owner, source, or status." : "Done. That's one less thing."}
             </p>
           </div>
         ) : (
@@ -4224,11 +4284,15 @@ function PositionProfilesPanel({
   users,
   currentUserId,
   authenticated,
+  subtasks = [],
+  events = [],
 }: {
   profiles: PositionProfile[];
   users: User[];
   currentUserId: Id;
   authenticated: boolean;
+  subtasks?: TaskSubtask[];
+  events?: TaskEvent[];
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canManageProfiles = canAdministerProfiles(currentUser);
@@ -4325,6 +4389,8 @@ function PositionProfilesPanel({
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
   const [showProfileHistory, setShowProfileHistory] = useState(false);
+  const [profileTaskSearch, setProfileTaskSearch] = useState("");
+  const [selectedProfileTaskId, setSelectedProfileTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (repositoryProfiles.length === 0) {
@@ -4492,6 +4558,8 @@ function PositionProfilesPanel({
   const openProfile = (profileId: string) => {
     setSelectedProfileId(profileId);
     setShowProfileHistory(false);
+    setProfileTaskSearch("");
+    setSelectedProfileTaskId(null);
     setCreateOpen(false);
     setViewMode("detail");
   };
@@ -4546,6 +4614,49 @@ function PositionProfilesPanel({
       });
     },
   });
+  const normalizedProfileTaskSearch = profileTaskSearch.trim().toLowerCase();
+  const allSelectedProfileTasks = selectedProfile
+    ? [
+        ...selectedProfile.currentIncompleteTasks,
+        ...selectedProfile.recurringTasks,
+        ...selectedProfile.completedTasks,
+      ].filter((task, index, items) => items.findIndex((item) => String(item.id) === String(task.id)) === index)
+    : [];
+  const selectedProfileTask = allSelectedProfileTasks.find((task) => String(task.id) === selectedProfileTaskId) ?? null;
+  const profileTaskMatches = (task: Task) => {
+    if (!normalizedProfileTaskSearch) return true;
+    const haystack = [
+      task.title,
+      task.description,
+      task.completionNotes,
+      task.source,
+      task.urgency,
+      task.status,
+      task.dueDate ?? "",
+      users.find((user) => String(user.id) === String(task.assignedToId))?.name ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedProfileTaskSearch);
+  };
+  const visibleProfileCurrentTasks = selectedProfile?.currentIncompleteTasks.filter(profileTaskMatches) ?? [];
+  const visibleProfileRecurringTasks = selectedProfile?.recurringTasks.filter(profileTaskMatches) ?? [];
+  const visibleProfileCompletedTasks = selectedProfile?.completedTasks.filter(profileTaskMatches) ?? [];
+  const renderProfileTaskButton = (task: Task, meta: string) => (
+    <button
+      key={String(task.id)}
+      type="button"
+      onClick={() => setSelectedProfileTaskId(String(task.id))}
+      className="flex w-full items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-muted"
+      data-testid={`button-position-profile-task-${task.id}`}
+    >
+      <span className="min-w-0">
+        <span className="block truncate text-xs font-medium text-foreground">{task.title}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{meta}</span>
+      </span>
+      <Eye className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+    </button>
+  );
 
   return (
     <div className="rounded-md border border-border" data-testid="panel-position-profiles">
@@ -4861,6 +4972,25 @@ function PositionProfilesPanel({
               )}
             </div>
 
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium text-foreground">Profile memory search</p>
+                  <p className="text-xs text-muted-foreground">
+                    Search current work, recurring responsibilities, history, owners, sources, and notes.
+                  </p>
+                </div>
+                <Search className="size-4 text-muted-foreground" />
+              </div>
+              <Input
+                value={profileTaskSearch}
+                onChange={(event) => setProfileTaskSearch(event.target.value)}
+                placeholder="Search this Position Profile"
+                className="h-9 text-xs"
+                data-testid="input-position-profile-task-search"
+              />
+            </div>
+
             {selectedProfile.riskReasons.length > 0 && (
               <div className="rounded-md border border-border bg-background px-3 py-2">
                 <div className="mb-1 flex items-center gap-2">
@@ -4893,13 +5023,17 @@ function PositionProfilesPanel({
             {selectedProfile.currentIncompleteTasks.length > 0 && (
               <div className="rounded-md border border-border bg-background px-3 py-2">
                 <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  {selectedProfile.currentIncompleteTasks.slice(0, 4).map((task) => (
-                    <li key={String(task.id)} className="truncate">
-                      {task.dueDate ?? "No date"} - {task.title}
-                    </li>
-                  ))}
-                </ul>
+                <div className="space-y-1">
+                  {visibleProfileCurrentTasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                      No current work matches this search.
+                    </p>
+                  ) : (
+                    visibleProfileCurrentTasks
+                      .slice(0, 6)
+                      .map((task) => renderProfileTaskButton(task, `${task.dueDate ?? "No date"} / ${urgencyLabel(task.urgency)} / ${task.estimatedMinutes} min`))
+                  )}
+                </div>
               </div>
             )}
 
@@ -4909,13 +5043,17 @@ function PositionProfilesPanel({
                   <Repeat2 className="size-4 text-muted-foreground" />
                   Recurring responsibilities
                 </p>
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  {selectedProfile.recurringTasks.slice(0, 4).map((task) => (
-                    <li key={String(task.id)} className="truncate">
-                      {inferTaskCadence(task)} - {task.title}
-                    </li>
-                  ))}
-                </ul>
+                <div className="space-y-1">
+                  {visibleProfileRecurringTasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                      No recurring responsibility matches this search.
+                    </p>
+                  ) : (
+                    visibleProfileRecurringTasks
+                      .slice(0, 6)
+                      .map((task) => renderProfileTaskButton(task, `${inferTaskCadence(task)} / due ${task.dueDate ?? "not set"} / visible ${task.visibleFrom ?? "now"}`))
+                  )}
+                </div>
               </div>
             )}
 
@@ -4944,11 +5082,22 @@ function PositionProfilesPanel({
                     <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
                       No completed work has been captured for this profile yet.
                     </p>
+                  ) : visibleProfileCompletedTasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                      No historical task matches this search.
+                    </p>
                   ) : (
-                    selectedProfile.completedTasks.slice(0, 8).map((task) => (
+                    visibleProfileCompletedTasks.slice(0, 10).map((task) => (
                       <div key={String(task.id)} className="rounded-md bg-muted/45 px-3 py-2 text-xs">
                         <div className="flex items-start justify-between gap-2">
-                          <p className="font-medium text-foreground">{task.title}</p>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProfileTaskId(String(task.id))}
+                            className="min-w-0 text-left font-medium text-foreground hover:text-brand-green"
+                            data-testid={`button-position-profile-history-task-${task.id}`}
+                          >
+                            {task.title}
+                          </button>
                           <span className="shrink-0 text-muted-foreground">{task.completedAt ? new Date(task.completedAt).toLocaleDateString() : task.dueDate ?? ""}</span>
                         </div>
                         {(task.description || task.completionNotes) && (
@@ -5053,6 +5202,17 @@ function PositionProfilesPanel({
           </>
         )}
       </div>
+      <TaskDetailDialog
+        task={selectedProfileTask}
+        users={users}
+        subtasks={subtasks}
+        events={events}
+        authenticated={authenticated}
+        open={Boolean(selectedProfileTask)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedProfileTaskId(null);
+        }}
+      />
     </div>
   );
 }
@@ -7906,6 +8066,8 @@ function WorkspaceSettingsDialog({
   authenticated,
   users,
   positionProfiles,
+  subtasks,
+  events,
   taskTemplates,
   currentUserId,
   integrations,
@@ -7924,6 +8086,8 @@ function WorkspaceSettingsDialog({
   authenticated: boolean;
   users: User[];
   positionProfiles: PositionProfile[];
+  subtasks: TaskSubtask[];
+  events: TaskEvent[];
   taskTemplates: TaskTemplate[];
   currentUserId: Id;
   integrations: Bootstrap["integrations"];
@@ -8160,6 +8324,8 @@ function WorkspaceSettingsDialog({
               users={users}
               currentUserId={currentUserId}
               authenticated={authenticated}
+              subtasks={subtasks}
+              events={events}
             />
           )}
 
@@ -9583,6 +9749,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   subtasks={data.subtasks ?? []}
                   events={data.events}
                   authenticated={Boolean(data.authenticated)}
+                  currentUserId={data.currentUserId}
                   viewLabel="All workspace work"
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 />
@@ -9752,6 +9919,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         authenticated={Boolean(data.authenticated)}
         users={data.users}
         positionProfiles={positionProfiles}
+        subtasks={data.subtasks ?? []}
+        events={data.events}
         taskTemplates={data.taskTemplates ?? []}
         currentUserId={data.currentUserId}
         integrations={data.integrations}
