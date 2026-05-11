@@ -2163,17 +2163,11 @@ function formatChatDueDate(value: string | null) {
   return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(parsed);
 }
 
-function chatTaskOutcome(
-  task: DonnitTask,
-  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
-  profiles: DonnitPositionProfile[] = [],
-) {
+function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
   const assignee = members.find((member) => member.user_id === task.assigned_to);
   const assigneeName = memberDisplayName(assignee ?? {});
   const action = taskActionForSentence(task.title);
   const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}` : "";
-  const positionProfile = profiles.find((profile) => profile.id === ((task as { position_profile_id?: string | null }).position_profile_id ?? null));
-  const profileText = positionProfile ? ` This belongs to the ${positionProfile.title} Position Profile.` : "";
   const urgencyText =
     task.urgency === "critical"
       ? " It is marked critical."
@@ -2186,7 +2180,7 @@ function chatTaskOutcome(
       : task.visibility === "personal"
         ? " This task was marked as personal."
         : "";
-  return `I assigned ${assigneeName} to ${action}${dueText}.${profileText}${urgencyText}${visibilitySentence}`;
+  return `I assigned ${assigneeName} to ${action}${dueText}.${urgencyText}${visibilitySentence}`;
 }
 
 function buildPendingFromTaskInput(input: {
@@ -4704,7 +4698,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await clearPendingChatTask(store, orgId);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
-            content: chatTaskOutcome(created, members, positionProfiles),
+            content: chatTaskOutcome(created, members),
             task_id: created.id,
           });
           res.status(201).json({ task: toClientTask(created), assistant });
@@ -4820,7 +4814,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: `${chatTaskOutcome(created, members, positionProfiles)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
+          content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
           task_id: created.id,
         });
         res.status(201).json({ task: toClientTask(created), assistant });
