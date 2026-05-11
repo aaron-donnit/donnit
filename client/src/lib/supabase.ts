@@ -31,6 +31,7 @@ export type DonnitSession = {
 type Listener = (session: DonnitSession | null) => void;
 
 let currentSession: DonnitSession | null = null;
+let pendingAuthError: string | null = null;
 const listeners = new Set<Listener>();
 
 function emit() {
@@ -84,6 +85,54 @@ function sessionFromTokenResponse(payload: GoTrueTokenResponse): DonnitSession {
   };
 }
 
+type TokenLikeSession = {
+  access_token: string;
+  refresh_token?: string | null;
+  expires_in?: string | number | null;
+  expires_at?: string | number | null;
+};
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(window.atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function sessionFromUrlTokens(tokens: TokenLikeSession): DonnitSession {
+  const claims = decodeJwtPayload(tokens.access_token);
+  const expiresIn =
+    typeof tokens.expires_in === "number"
+      ? tokens.expires_in
+      : tokens.expires_in
+        ? Number(tokens.expires_in)
+        : null;
+  const expiresAt =
+    typeof tokens.expires_at === "number"
+      ? tokens.expires_at
+      : tokens.expires_at
+        ? Number(tokens.expires_at)
+        : expiresIn
+          ? Math.floor(Date.now() / 1000) + expiresIn
+          : typeof claims?.exp === "number"
+            ? claims.exp
+            : null;
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token ?? null,
+    expiresAt,
+    user: {
+      id: typeof claims?.sub === "string" ? claims.sub : "oauth-user",
+      email: typeof claims?.email === "string" ? claims.email : null,
+    },
+  };
+}
+
 async function readError(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as GoTrueTokenResponse;
@@ -97,6 +146,26 @@ async function readError(res: Response): Promise<string> {
   } catch {
     return `${res.status} ${res.statusText}`;
   }
+}
+
+export function authRedirectUrl(): string {
+  const explicit =
+    (import.meta.env.VITE_AUTH_REDIRECT_URL as string | undefined) ??
+    (import.meta.env.VITE_SITE_URL as string | undefined) ??
+    "";
+  if (explicit) return normalizeRedirect(explicit);
+  if (typeof window === "undefined") return "";
+  const { origin, pathname } = window.location;
+  return normalizeRedirect(`${origin}${pathname}`);
+}
+
+export function signInWithOAuth(provider: "google"): void {
+  if (!supabaseConfig.configured) throw new Error("Supabase is not configured");
+  const redirectTo = authRedirectUrl();
+  const endpoint = new URL(`${url}/auth/v1/authorize`);
+  endpoint.searchParams.set("provider", provider);
+  if (redirectTo) endpoint.searchParams.set("redirect_to", redirectTo);
+  window.location.assign(endpoint.toString());
 }
 
 export async function signInWithPassword(email: string, password: string): Promise<DonnitSession> {
@@ -229,14 +298,9 @@ export type RecoveryTokens = {
 
 let pendingRecovery: RecoveryTokens | null = null;
 
-// Called once at app boot (from main.tsx) before the hash router rewrites
-// the URL. We pull the GoTrue recovery fragment out of the URL, hand it to
-// the auth layer, and clean the address bar so the tokens are not visible
-// or share-able. Supabase emits parameters in the URL fragment for the
-// implicit flow; we also accept query-string variants just in case.
-export function consumeRecoveryFromUrl(): RecoveryTokens | null {
+function currentUrlParams(): URLSearchParams | null {
   if (typeof window === "undefined") return null;
-  const { hash, search, pathname, origin } = window.location;
+  const { hash, search } = window.location;
   const params = new URLSearchParams();
   if (hash && hash.length > 1) {
     const raw = hash.startsWith("#") ? hash.slice(1) : hash;
@@ -251,6 +315,59 @@ export function consumeRecoveryFromUrl(): RecoveryTokens | null {
       if (!params.has(k)) params.set(k, v);
     });
   }
+  return params;
+}
+
+function scrubAuthUrl(hashRoute: string) {
+  if (typeof window === "undefined") return;
+  const { pathname, origin } = window.location;
+  try {
+    window.history.replaceState(null, "", `${origin}${pathname}${hashRoute}`);
+  } catch {
+    // Sandboxed previews can block History API writes.
+  }
+}
+
+export function consumeAuthRedirectFromUrl(): boolean {
+  const params = currentUrlParams();
+  if (!params) return false;
+  const error = params.get("error") || params.get("error_code");
+  const errorDescription = params.get("error_description");
+  if (error) {
+    pendingAuthError = errorDescription || error;
+    scrubAuthUrl("#/");
+    return true;
+  }
+  const accessToken = params.get("access_token");
+  const type = params.get("type");
+  if (!accessToken || type === "recovery") return false;
+  currentSession = sessionFromUrlTokens({
+    access_token: accessToken,
+    refresh_token: params.get("refresh_token"),
+    expires_in: params.get("expires_in"),
+    expires_at: params.get("expires_at"),
+  });
+  pendingAuthError = null;
+  scrubAuthUrl("#/app");
+  emit();
+  return true;
+}
+
+export function getPendingAuthError(): string | null {
+  const next = pendingAuthError;
+  pendingAuthError = null;
+  return next;
+}
+
+// Called once at app boot (from main.tsx) before the hash router rewrites
+// the URL. We pull the GoTrue recovery fragment out of the URL, hand it to
+// the auth layer, and clean the address bar so the tokens are not visible
+// or share-able. Supabase emits parameters in the URL fragment for the
+// implicit flow; we also accept query-string variants just in case.
+export function consumeRecoveryFromUrl(): RecoveryTokens | null {
+  if (typeof window === "undefined") return null;
+  const params = currentUrlParams();
+  if (!params) return null;
   const type = params.get("type");
   const accessToken = params.get("access_token");
   if (type !== "recovery" || !accessToken) return null;
@@ -262,12 +379,7 @@ export function consumeRecoveryFromUrl(): RecoveryTokens | null {
     expiresIn: expires ? Number(expires) : null,
   };
   // Wipe the tokens from the address bar without reloading.
-  try {
-    window.history.replaceState(null, "", `${origin}${pathname}`);
-  } catch {
-    // History API can fail in sandboxed previews; the app still works,
-    // we just leave the URL alone in that case.
-  }
+  scrubAuthUrl("");
   return pendingRecovery;
 }
 

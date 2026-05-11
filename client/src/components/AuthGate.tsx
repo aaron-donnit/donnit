@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, LogIn, LogOut, UserPlus, Workflow, Sparkles } from "lucide-react";
+import { KeyRound, Loader2, LogIn, LogOut, Mail, UserPlus, Workflow, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { useSession } from "@/hooks/useSession";
 import {
   signInWithPassword,
+  signInWithOAuth,
   signUpWithPassword,
   signOut as supabaseSignOut,
   supabaseConfig,
@@ -15,6 +16,7 @@ import {
   updatePasswordWithRecovery,
   getPendingRecovery,
   clearPendingRecovery,
+  getPendingAuthError,
   type RecoveryTokens,
 } from "@/lib/supabase";
 import { apiRequest, setAuthAccessToken } from "@/lib/queryClient";
@@ -40,7 +42,7 @@ export function AuthGate({ children }: AuthShellProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [orgName, setOrgName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => getPendingAuthError());
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<"unknown" | "checking" | "needed" | "done" | "error">("unknown");
@@ -161,6 +163,17 @@ export function AuthGate({ children }: AuthShellProps) {
     }
   }
 
+  function handleGoogleSignIn() {
+    try {
+      setBusy(true);
+      setError(null);
+      signInWithOAuth("google");
+    } catch (e) {
+      setBusy(false);
+      setError(e instanceof Error ? e.message : "Could not start Google sign-in.");
+    }
+  }
+
   async function signOut() {
     await supabaseSignOut();
   }
@@ -214,6 +227,30 @@ export function AuthGate({ children }: AuthShellProps) {
           </CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={handleSubmit} data-testid="form-auth">
+              {(mode === "signin" || mode === "signup") && (
+                <div className="space-y-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleGoogleSignIn}
+                    disabled={busy}
+                    data-testid="button-auth-google"
+                  >
+                    {busy ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />}
+                    Continue with Google
+                  </Button>
+                  <Button type="button" variant="ghost" className="w-full" disabled data-testid="button-auth-apple-disabled">
+                    <KeyRound className="size-4" />
+                    Apple / iCloud coming soon
+                  </Button>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    <span>or use email</span>
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                </div>
+              )}
               {mode !== "reset" && (
                 <div className="space-y-1.5">
                   <Label htmlFor="auth-email">Email</Label>
