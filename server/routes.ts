@@ -5588,6 +5588,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             task.assigned_to === fromUserId &&
             task.status !== "completed" &&
             task.status !== "denied" &&
+            (!profileId || ((task as { position_profile_id?: string | null }).position_profile_id ?? null) === profileId) &&
             ((task as { visibility?: string }).visibility ?? "work") !== "personal",
         );
         if (mode === "delegate" && active.some((task) => !hasTaskRelationshipColumns(task))) {
@@ -5633,17 +5634,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             note: JSON.stringify(inheritedContext),
           });
         }
-        if (profileId) {
-          const historical = tasks.filter(
-            (task) =>
-              task.assigned_to === fromUserId &&
-              ((task as { visibility?: string }).visibility ?? "work") !== "personal" &&
-              ((task as { position_profile_id?: string | null }).position_profile_id ?? null) !== profileId,
-          );
-          for (const task of historical) {
-            await writeStore.updateTask(task.id, { position_profile_id: profileId });
-          }
-        }
         let profile = null;
         if (parsed.data.profileId) {
           const delegateUntilDate = delegateUntil || null;
@@ -5685,14 +5675,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(400).json({ message: "Demo position assignment requires numeric user ids." });
       return;
     }
+    const demoProfileId = parsed.data.profileId ?? null;
     const tasks = (await storage.listTasks()).filter(
-      (task) => task.assignedToId === fromUserId && task.status !== "completed" && task.status !== "denied",
+      (task) =>
+        task.assignedToId === fromUserId &&
+        task.status !== "completed" &&
+        task.status !== "denied" &&
+        (!demoProfileId || String((task as { positionProfileId?: string | null }).positionProfileId ?? "") === demoProfileId),
     );
     let updatedCount = 0;
     for (const task of tasks) {
       const updated = await storage.updateTask(
         task.id,
-        mode === "transfer" ? { assignedToId: toUserId, delegatedToId: null } : { delegatedToId: toUserId },
+        mode === "transfer"
+          ? { assignedToId: toUserId, delegatedToId: null, positionProfileId: demoProfileId }
+          : { delegatedToId: toUserId, positionProfileId: demoProfileId },
       );
       if (!updated) continue;
       updatedCount += 1;

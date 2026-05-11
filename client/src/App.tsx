@@ -800,6 +800,32 @@ function isActiveUser(user: User) {
   return user.status !== "inactive";
 }
 
+function profilePrimaryOwnerId(profile: PositionProfile) {
+  return profile.currentOwnerId ?? profile.owner.id;
+}
+
+function profilesForUser(positionProfiles: PositionProfile[], userId: Id) {
+  const id = String(userId);
+  return positionProfiles.filter(
+    (profile) =>
+      String(profilePrimaryOwnerId(profile)) === id ||
+      String(profile.temporaryOwnerId ?? "") === id ||
+      String(profile.delegateUserId ?? "") === id,
+  );
+}
+
+function profileAssignmentLabel(profile: PositionProfile, users: User[]) {
+  const owner = users.find((user) => String(user.id) === String(profilePrimaryOwnerId(profile)));
+  const temporary = users.find((user) => String(user.id) === String(profile.temporaryOwnerId));
+  const delegate = users.find((user) => String(user.id) === String(profile.delegateUserId));
+  const ownerLabel = owner?.name ?? "Vacant";
+  const coverage = [
+    temporary ? `covered by ${temporary.name}` : "",
+    delegate ? `delegated to ${delegate.name}` : "",
+  ].filter(Boolean);
+  return coverage.length > 0 ? `${ownerLabel}, ${coverage.join(", ")}` : ownerLabel;
+}
+
 function isVisibleWorkTask(task: Task) {
   if (!task.visibleFrom) return true;
   if (task.status === "completed" || task.status === "denied") return true;
@@ -2044,6 +2070,7 @@ function TaskList({
   subtasks = [],
   events = [],
   authenticated = false,
+  positionProfiles = [],
   currentUserId,
   viewLabel,
   onPinTask,
@@ -2053,6 +2080,7 @@ function TaskList({
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
   authenticated?: boolean;
+  positionProfiles?: PositionProfile[];
   currentUserId?: Id;
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
@@ -2295,6 +2323,7 @@ function TaskList({
         subtasks={subtasks}
         events={events}
         authenticated={authenticated}
+        positionProfiles={positionProfiles}
         open={Boolean(selectedTask)}
         onOpenChange={(open) => {
           if (!open) setSelectedTaskId(null);
@@ -2310,6 +2339,7 @@ function TaskDetailDialog({
   subtasks: persistedSubtasks = [],
   events = [],
   authenticated = false,
+  positionProfiles = [],
   open,
   onOpenChange,
 }: {
@@ -2318,6 +2348,7 @@ function TaskDetailDialog({
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
   authenticated?: boolean;
+  positionProfiles?: PositionProfile[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -2331,6 +2362,7 @@ function TaskDetailDialog({
   const [dueDate, setDueDate] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [assignedToId, setAssignedToId] = useState("");
+  const [positionProfileId, setPositionProfileId] = useState("");
   const [delegatedToId, setDelegatedToId] = useState("");
   const [collaboratorIds, setCollaboratorIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
@@ -2350,6 +2382,7 @@ function TaskDetailDialog({
     setDueDate(task.dueDate ?? "");
     setEstimatedMinutes(task.estimatedMinutes);
     setAssignedToId(String(task.assignedToId));
+    setPositionProfileId(task.positionProfileId ? String(task.positionProfileId) : "");
     setDelegatedToId(task.delegatedToId ? String(task.delegatedToId) : "");
     setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
@@ -2372,6 +2405,12 @@ function TaskDetailDialog({
     }
   }, [authenticated, task]);
 
+  useEffect(() => {
+    if (visibility === "personal" && positionProfileId) {
+      setPositionProfileId("");
+    }
+  }, [positionProfileId, visibility]);
+
   const save = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
@@ -2386,6 +2425,7 @@ function TaskDetailDialog({
         dueDate: dueDate || null,
         estimatedMinutes,
         assignedToId,
+        positionProfileId: visibility === "personal" ? null : positionProfileId || null,
         delegatedToId: delegatedToId || null,
         collaboratorIds,
         note: note.trim() || undefined,
@@ -2531,6 +2571,16 @@ function TaskDetailDialog({
   const inheritedContext = parseInheritedTaskContext(events, task.id);
   const inheritedFrom = inheritedContext ? users.find((user) => String(user.id) === String(inheritedContext.fromUserId)) : null;
   const selectedCollaborators = users.filter((user) => collaboratorIds.includes(String(user.id)));
+  const savedPositionProfiles = positionProfiles.filter((profile) => profile.persisted);
+  const selectedAssigneeProfiles = savedPositionProfiles.filter((profile) => String(profilePrimaryOwnerId(profile)) === assignedToId);
+  const coverageProfiles = savedPositionProfiles.filter(
+    (profile) =>
+      String(profilePrimaryOwnerId(profile)) !== assignedToId &&
+      (String(profile.temporaryOwnerId ?? "") === assignedToId || String(profile.delegateUserId ?? "") === assignedToId),
+  );
+  const otherPositionProfiles = savedPositionProfiles.filter(
+    (profile) => !selectedAssigneeProfiles.some((item) => item.id === profile.id) && !coverageProfiles.some((item) => item.id === profile.id),
+  );
   const collaboratorOptions = activeUsers.filter(
     (user) => String(user.id) !== assignedToId && !collaboratorIds.includes(String(user.id)),
   );
@@ -2819,6 +2869,55 @@ function TaskDetailDialog({
               />
             </div>
           </div>
+          {savedPositionProfiles.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-position-profile">Position Profile</Label>
+              <select
+                id="task-detail-position-profile"
+                value={positionProfileId}
+                onChange={(event) => setPositionProfileId(event.target.value)}
+                disabled={visibility === "personal"}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
+                data-testid="select-task-detail-position-profile"
+              >
+                <option value="">No Position Profile</option>
+                {selectedAssigneeProfiles.length > 0 && (
+                  <optgroup label="Assigned person's profiles">
+                    {selectedAssigneeProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {coverageProfiles.length > 0 && (
+                  <optgroup label="Coverage profiles">
+                    {coverageProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherPositionProfiles.length > 0 && (
+                  <optgroup label="Other profiles">
+                    {otherPositionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {visibility === "personal"
+                  ? "Personal tasks are excluded from Position Profile memory."
+                  : selectedAssigneeProfiles.length > 1
+                    ? "This person has multiple profiles. Choose which role owns this work."
+                    : "Choose the role memory this task should update."}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-description">Description</Label>
             <Textarea
@@ -4455,6 +4554,7 @@ function PositionProfilesPanel({
   const [viewMode, setViewMode] = useState<"list" | "detail">("list");
   const [createOpen, setCreateOpen] = useState(false);
   const [assignmentFocus, setAssignmentFocus] = useState<"delegate" | "transfer" | null>(null);
+  const [assignmentDialogOpen, setAssignmentDialogOpen] = useState(false);
   const customProfiles = useMemo(
     () =>
       customProfileMetas
@@ -4512,9 +4612,10 @@ function PositionProfilesPanel({
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
   const targetUsers = useMemo(
-    () => users.filter((user) => selectedProfile && isActiveUser(user) && String(user.id) !== String(selectedProfile.owner.id)),
+    () => users.filter((user) => selectedProfile && isActiveUser(user) && String(user.id) !== String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id)),
     [selectedProfile, users],
   );
+  const assignmentUsers = useMemo(() => users.filter(isActiveUser), [users]);
   const [targetUserId, setTargetUserId] = useState("");
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
@@ -4704,9 +4805,7 @@ function PositionProfilesPanel({
     if (repositoryProfiles.length > 0) {
       setViewMode("detail");
     }
-    window.setTimeout(() => {
-      assignmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 75);
+    setAssignmentDialogOpen(true);
   };
 
   const assign = useMutation({
@@ -4724,7 +4823,7 @@ function PositionProfilesPanel({
       }
       const res = await apiRequest("POST", "/api/position-profiles/assign", {
         profileId,
-        fromUserId: selectedProfile.owner.id,
+        fromUserId: selectedProfile.currentOwnerId ?? selectedProfile.owner.id,
         toUserId: targetUserId,
         mode,
         delegateUntil: delegateUntil || null,
@@ -4735,6 +4834,7 @@ function PositionProfilesPanel({
     onSuccess: async (result) => {
       await invalidateWorkspace();
       if (result.profile?.id) setSelectedProfileId(result.profile.id);
+      setAssignmentDialogOpen(false);
       toast({
         title: mode === "transfer" ? "Profile transferred" : "Coverage delegated",
         description: `${result.updated} active task${result.updated === 1 ? "" : "s"} updated for ${selectedProfile?.title ?? "the profile"}.`,
@@ -5465,11 +5565,118 @@ function PositionProfilesPanel({
         subtasks={subtasks}
         events={events}
         authenticated={authenticated}
+        positionProfiles={repositoryProfiles}
         open={Boolean(selectedProfileTask)}
         onOpenChange={(open) => {
           if (!open) setSelectedProfileTaskId(null);
         }}
       />
+      <Dialog open={assignmentDialogOpen && Boolean(selectedProfile)} onOpenChange={setAssignmentDialogOpen}>
+        <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
+          <DialogHeader className={dialogHeaderClass}>
+            <DialogTitle>
+              {mode === "transfer" ? "Transfer Position Profile" : "Delegate Position Profile"}
+            </DialogTitle>
+            <DialogDescription>
+              Choose who should receive {selectedProfile?.title ?? "this profile"}. Employees can own more than one Position Profile.
+            </DialogDescription>
+          </DialogHeader>
+          <div className={`${dialogBodyClass} space-y-4`}>
+            <div className="grid gap-3 rounded-md border border-border bg-muted/25 p-3 sm:grid-cols-[1fr_1fr]">
+              <div>
+                <p className="ui-label">Selected profile</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{selectedProfile?.title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Current owner: {selectedProfile ? profileAssignmentLabel(selectedProfile, users) : "Not selected"}
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <select
+                  value={mode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value as "delegate" | "transfer";
+                    setMode(nextMode);
+                    setAssignmentFocus(nextMode);
+                  }}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid="select-profile-transfer-mode"
+                >
+                  <option value="transfer">Transfer ownership</option>
+                  <option value="delegate">Delegate temporary coverage</option>
+                </select>
+                {mode === "delegate" && (
+                  <Input
+                    type="date"
+                    value={delegateUntil}
+                    onChange={(event) => setDelegateUntil(event.target.value)}
+                    className="h-9 text-xs"
+                    data-testid="input-profile-transfer-delegate-until"
+                  />
+                )}
+              </div>
+            </div>
+            <div className="grid gap-3">
+              {assignmentUsers.map((user) => {
+                const userProfiles = profilesForUser(repositoryProfiles, user.id);
+                const isCurrentOwner = selectedProfile && String(profilePrimaryOwnerId(selectedProfile)) === String(user.id);
+                const isSelected = String(targetUserId) === String(user.id);
+                return (
+                  <button
+                    key={String(user.id)}
+                    type="button"
+                    onClick={() => setTargetUserId(String(user.id))}
+                    disabled={Boolean(isCurrentOwner && mode === "transfer")}
+                    className={`rounded-md border px-3 py-3 text-left transition ${
+                      isSelected
+                        ? "border-brand-green bg-brand-green/10"
+                        : "border-border bg-background hover:border-brand-green/60 hover:bg-muted/40"
+                    } ${isCurrentOwner && mode === "transfer" ? "cursor-not-allowed opacity-60" : ""}`}
+                    data-testid={`button-profile-transfer-target-${user.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground">{user.name}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {titleCase(user.role)} {isCurrentOwner ? "/ current owner" : ""}
+                        </p>
+                      </div>
+                      {isSelected && <Check className="size-4 shrink-0 text-brand-green" />}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {userProfiles.length === 0 ? (
+                        <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                          No assigned Position Profiles
+                        </span>
+                      ) : (
+                        userProfiles.map((profile) => (
+                          <span key={profile.id} className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                            {profile.title}
+                            {String(profile.delegateUserId ?? "") === String(user.id) ? " (delegate)" : ""}
+                            {String(profile.temporaryOwnerId ?? "") === String(user.id) ? " (coverage)" : ""}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <DialogFooter className={dialogFooterClass}>
+            <Button variant="outline" onClick={() => setAssignmentDialogOpen(false)} disabled={assign.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => assign.mutate()}
+              disabled={!targetUserId || assign.isPending || !canManageProfiles}
+              data-testid="button-profile-transfer-confirm"
+            >
+              {assign.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
+              {mode === "transfer" ? "Transfer profile" : "Start coverage"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -6845,12 +7052,14 @@ function AssignTaskDialog({
   users,
   currentUserId,
   taskTemplates,
+  positionProfiles = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   users: User[];
   currentUserId: Id;
   taskTemplates: TaskTemplate[];
+  positionProfiles?: PositionProfile[];
 }) {
   const assignableUsers = useMemo(
     () =>
@@ -6874,11 +7083,28 @@ function AssignTaskDialog({
   const [recurrence, setRecurrence] = useState<"none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual">("none");
   const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
   const [templateId, setTemplateId] = useState("");
+  const [positionProfileId, setPositionProfileId] = useState("");
+  const savedPositionProfiles = positionProfiles.filter((profile) => profile.persisted);
+  const assigneePositionProfiles = savedPositionProfiles.filter((profile) => String(profilePrimaryOwnerId(profile)) === assignedToId);
+  const coveragePositionProfiles = savedPositionProfiles.filter(
+    (profile) =>
+      String(profilePrimaryOwnerId(profile)) !== assignedToId &&
+      (String(profile.temporaryOwnerId ?? "") === assignedToId || String(profile.delegateUserId ?? "") === assignedToId),
+  );
+  const otherPositionProfiles = savedPositionProfiles.filter(
+    (profile) => !assigneePositionProfiles.some((item) => item.id === profile.id) && !coveragePositionProfiles.some((item) => item.id === profile.id),
+  );
 
   useEffect(() => {
     if (!open) return;
     setAssignedToId(defaultAssigneeId);
   }, [open, defaultAssigneeId]);
+
+  useEffect(() => {
+    if (visibility === "personal" && positionProfileId) {
+      setPositionProfileId("");
+    }
+  }, [positionProfileId, visibility]);
 
   const selectedTemplate = taskTemplates.find((template) => String(template.id) === templateId);
 
@@ -6909,6 +7135,7 @@ function AssignTaskDialog({
         assignedById: assignedBy,
         source: "manual",
         visibility,
+        positionProfileId: visibility === "personal" ? null : positionProfileId || null,
         recurrence,
         reminderDaysBefore,
         templateId: templateId || undefined,
@@ -6933,6 +7160,7 @@ function AssignTaskDialog({
       setRecurrence("none");
       setReminderDaysBefore(0);
       setTemplateId("");
+      setPositionProfileId("");
       onOpenChange(false);
     },
     onError: (error: unknown) => {
@@ -6973,7 +7201,10 @@ function AssignTaskDialog({
             <select
               id="assign-person"
               value={assignedToId}
-              onChange={(event) => setAssignedToId(event.target.value)}
+              onChange={(event) => {
+                setAssignedToId(event.target.value);
+                setPositionProfileId("");
+              }}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               data-testid="select-assign-user"
             >
@@ -6984,6 +7215,55 @@ function AssignTaskDialog({
               ))}
             </select>
           </div>
+          {savedPositionProfiles.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-position-profile">Position Profile</Label>
+              <select
+                id="assign-position-profile"
+                value={positionProfileId}
+                onChange={(event) => setPositionProfileId(event.target.value)}
+                disabled={visibility === "personal"}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
+                data-testid="select-assign-position-profile"
+              >
+                <option value="">No Position Profile</option>
+                {assigneePositionProfiles.length > 0 && (
+                  <optgroup label="Assignee profiles">
+                    {assigneePositionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {coveragePositionProfiles.length > 0 && (
+                  <optgroup label="Coverage profiles">
+                    {coveragePositionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherPositionProfiles.length > 0 && (
+                  <optgroup label="Other profiles">
+                    {otherPositionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.title} - {profileAssignmentLabel(profile, users)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {visibility === "personal"
+                  ? "Personal tasks do not write into role memory."
+                  : assigneePositionProfiles.length > 1
+                    ? "This employee has multiple profiles. Choose where this task belongs."
+                    : "Optional: connect this work to role memory."}
+              </p>
+            </div>
+          )}
           {taskTemplates.length > 0 && (
             <div className="space-y-1.5">
               <Label htmlFor="assign-template">Template</Label>
@@ -10092,6 +10372,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   subtasks={data.subtasks ?? []}
                   events={data.events}
                   authenticated={Boolean(data.authenticated)}
+                  positionProfiles={positionProfiles}
                   currentUserId={data.currentUserId}
                   viewLabel="All workspace work"
                   onPinTask={(taskId) => setActiveWorkTask(taskId)}
@@ -10220,6 +10501,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         users={data.users}
         currentUserId={data.currentUserId}
         taskTemplates={data.taskTemplates ?? []}
+        positionProfiles={positionProfiles}
       />
       <Dialog open={managerReportOpen && canOpenManagerReports} onOpenChange={setManagerReportOpen}>
         <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
@@ -10282,6 +10564,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         subtasks={data.subtasks ?? []}
         events={data.events}
         authenticated={Boolean(data.authenticated)}
+        positionProfiles={positionProfiles}
         open={Boolean(notificationTask)}
         onOpenChange={(open) => {
           if (!open) setNotificationTaskId(null);
