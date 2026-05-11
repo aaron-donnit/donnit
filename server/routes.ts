@@ -44,6 +44,7 @@ import {
   type DonnitUserWorkspaceState,
 } from "./donnit-store";
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
+import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
 
 const DEMO_USER_ID = 1;
 
@@ -2764,11 +2765,6 @@ const suggestionDraftReplySchema = z.object({
   instruction: z.string().trim().max(600).optional(),
 });
 
-const aiReplyDraftSchema = z.object({
-  message: z.string().trim().min(2).max(4000),
-  rationale: z.string().trim().max(400).default(""),
-});
-
 const salesLeadSchema = z.object({
   intent: z.enum(["signup", "demo"]).default("signup"),
   name: z.string().trim().min(2).max(120),
@@ -3072,100 +3068,6 @@ function draftLooksCopiedOrWeak(draft: string, suggestion: DonnitEmailSuggestion
   if (normalizedDraft.includes("donnit interpretation") || normalizedDraft.includes("source excerpt")) return true;
   const sourceSlice = normalizedSource.slice(0, 180);
   return sourceSlice.length > 80 && normalizedDraft.includes(sourceSlice);
-}
-
-async function draftSuggestionReplyWithAi(
-  suggestion: DonnitEmailSuggestion,
-  instruction?: string,
-): Promise<{ message: string; rationale: string }> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const fallback = fallbackReplyDraft(suggestion);
-  if (!apiKey) return { message: fallback, rationale: "OpenAI is not configured, so Donnit prepared a simple professional response." };
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9000);
-  try {
-    const source = sourceFromSuggestion({
-      fromEmail: suggestion.from_email,
-      subject: suggestion.subject,
-    });
-    const res = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
-        input: [
-          {
-            role: "system",
-            content:
-              [
-                "Draft a concise, professional workplace reply for Donnit. The user will edit before sending.",
-                "Write as the Donnit user replying to the sender. Do not copy/paste or summarize the original email.",
-                "Respond to the sender's intent. If they ask to schedule, propose a practical scheduling next step instead of repeating the task. If they ask for approval, say you will review and follow up. If they sent a document, say you will review it and send comments or next steps.",
-                "Do not invent commitments, prices, dates, attachments, approvals, calendar availability, or legal conclusions that are not in the source.",
-                "Keep it human, useful, and ready to send. Prefer 2 to 5 sentences plus a simple greeting and signoff.",
-                "Return only the requested JSON fields.",
-              ].join(" "),
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              source,
-              from: suggestion.from_email,
-              subject: suggestion.subject,
-              sourceBody: suggestion.body,
-              donnitTask: {
-                title: suggestion.suggested_title,
-                rationale: suggestion.preview,
-                dueDate: suggestion.suggested_due_date,
-                urgency: suggestion.urgency,
-                actionItems: suggestion.action_items ?? [],
-              },
-              replyScenario: replyScenario(suggestion),
-              guidance:
-                "The reply should be a response the recipient would reasonably expect, not a task description and not a copy of the inbound message.",
-              userInstruction: instruction?.trim() || null,
-            }),
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "donnit_reply_draft",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                message: { type: "string" },
-                rationale: { type: "string" },
-              },
-              required: ["message", "rationale"],
-            },
-          },
-        },
-      }),
-    });
-    if (!res.ok) return { message: fallback, rationale: "Donnit used a simple fallback because OpenAI did not return a draft." };
-    const json = await res.json();
-    const text = extractOutputText(json);
-    if (!text) return { message: fallback, rationale: "Donnit used a simple fallback because OpenAI did not return text." };
-    const parsed = aiReplyDraftSchema.safeParse(JSON.parse(text));
-    if (!parsed.success) {
-      return { message: fallback, rationale: "Donnit used a simple fallback because the AI draft was incomplete." };
-    }
-    if (draftLooksCopiedOrWeak(parsed.data.message, suggestion)) {
-      return { message: fallback, rationale: "Donnit replaced a weak AI draft with a safer contextual response." };
-    }
-    return parsed.data;
-  } catch {
-    return { message: fallback, rationale: "Donnit used a simple fallback because the AI draft timed out." };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function parseSlackChannelFromSuggestion(suggestion: Pick<DonnitEmailSuggestion, "subject" | "from_email">) {
@@ -6119,7 +6021,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.status(422).json({ message: "Document suggestions do not support outbound replies." });
           return;
         }
-        const draft = await draftSuggestionReplyWithAi(suggestion, parsed.data.instruction);
+        const fallback = fallbackReplyDraft(suggestion);
+        let draft: { message: string; rationale: string; correlationId?: string; estimatedCostUsd?: number };
+        if (!process.env.OPENAI_API_KEY) {
+          draft = {
+            message: fallback,
+            rationale: "OpenAI is not configured, so Donnit prepared a simple professional response.",
+          };
+        } else {
+          try {
+            draft = await draftSuggestionReplyWithAgent({
+              store,
+              orgId: suggestion.org_id,
+              userId: auth.userId,
+              suggestionId: suggestion.id,
+              instruction: parsed.data.instruction,
+              sourceFromSuggestion,
+              replyScenario,
+            });
+            if (draftLooksCopiedOrWeak(draft.message, suggestion)) {
+              draft = {
+                ...draft,
+                message: fallback,
+                rationale: "Donnit replaced a weak AI draft with a safer contextual response.",
+              };
+            }
+          } catch (error) {
+            draft = {
+              message: fallback,
+              rationale: error instanceof Error && error.message.includes("ai_session")
+                ? "Apply the intelligence observability Supabase migration, then redeploy before using AI reply drafts."
+                : "Donnit used a simple fallback because the AI drafter could not complete.",
+            };
+          }
+        }
         let updated: DonnitEmailSuggestion | null = null;
         try {
           updated = await store.updateEmailSuggestion(suggestion.id, {
@@ -6142,6 +6077,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ok: true,
           draft: draft.message,
           rationale: draft.rationale,
+          correlationId: draft.correlationId ?? null,
+          estimatedCostUsd: draft.estimatedCostUsd ?? 0,
           suggestion: updated ? toClientEmailSuggestion(updated) : null,
         });
         return;
