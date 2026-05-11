@@ -1104,7 +1104,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div
-      className="panel flex h-[min(640px,calc(100dvh-7rem))] min-h-[420px] flex-col lg:h-full lg:min-h-0"
+      className="panel flex h-[min(360px,calc(100dvh-9rem))] min-h-[280px] flex-col lg:h-full lg:min-h-0"
       data-testid="panel-chat"
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -1537,7 +1537,13 @@ function WorkspaceMenu({
     <DropdownMenuItem
       key={action.id}
       disabled={action.disabled || action.loading}
-      onClick={action.onClick}
+      onSelect={(event) => {
+        if (action.disabled || action.loading) {
+          event.preventDefault();
+          return;
+        }
+        action.onClick?.();
+      }}
       data-testid={`menu-action-${action.id}`}
     >
       {action.loading ? (
@@ -4515,6 +4521,7 @@ function PositionProfilesPanel({
   const [showProfileHistory, setShowProfileHistory] = useState(false);
   const [profileTaskSearch, setProfileTaskSearch] = useState("");
   const [selectedProfileTaskId, setSelectedProfileTaskId] = useState<string | null>(null);
+  const assignmentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (repositoryProfiles.length === 0) {
@@ -4697,6 +4704,9 @@ function PositionProfilesPanel({
     if (repositoryProfiles.length > 0) {
       setViewMode("detail");
     }
+    window.setTimeout(() => {
+      assignmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 75);
   };
 
   const assign = useMutation({
@@ -4998,7 +5008,12 @@ function PositionProfilesPanel({
               </Button>
             </div>
 
-            <div className="rounded-md border border-border bg-background px-3 py-3">
+            <div
+              ref={assignmentRef}
+              className={`rounded-md border bg-background px-3 py-3 ${
+                assignmentFocus ? "border-brand-green shadow-sm shadow-brand-green/10" : "border-border"
+              }`}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
@@ -8620,7 +8635,7 @@ function WorkspaceSettingsDialog({
                 icon={Send}
                 name="SMS"
                 status="setup"
-                detail={`Coming soon after the MVP. The inbound endpoint exists for testing (${smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}), but Thursday's demo should position SMS as the next mobile command surface.`}
+                detail={`Coming soon after the MVP. For Thursday, present SMS as the next mobile command surface, not a live MVP channel. Test endpoint: ${smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}.`}
                 actionLabel="Coming soon"
                 action={() => undefined}
                 disabled
@@ -8696,12 +8711,12 @@ function WorkspaceSettingsDialog({
                 </p>
               </div>
               <div className="rounded-md border border-border bg-background px-3 py-2">
-                <p className="text-sm font-medium text-foreground">SMS inbound bridge</p>
+                <p className="text-sm font-medium text-foreground">SMS inbound bridge - coming soon</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Endpoint: <span className="font-mono">{smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}</span>
+                  SMS is intentionally outside the Thursday MVP. Endpoint for later testing: <span className="font-mono">{smsData?.inboundEndpoint ?? "/api/integrations/sms/inbound"}</span>
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Routing: {smsData?.routing.defaultAssigneeConfigured ? "configured default assignee" : "workspace owner fallback"}.
+                  Future routing: {smsData?.routing.defaultAssigneeConfigured ? "configured default assignee" : "workspace owner fallback"}.
                 </p>
               </div>
             </div>
@@ -9593,7 +9608,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     if (typeof window !== "undefined") window.localStorage.removeItem("donnit.mvpReadinessDismissed");
     window.setTimeout(() => {
       document.getElementById("panel-mvp-readiness")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+    }, 75);
   };
   const dismissMvpReadiness = () => {
     setMvpReadinessDismissed(true);
@@ -10062,12 +10077,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         </div>
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
-          <div className="lg:sticky lg:top-[4.75rem] lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
+          <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
             <ChatPanel messages={data.messages} />
           </div>
 
           {/* Work area — right */}
-          <div className="lg:col-span-8 xl:col-span-9">
+          <div className="order-1 lg:order-2 lg:col-span-8 xl:col-span-9">
             <div className="grid gap-4 xl:grid-cols-12">
               {/* Wide To-do column */}
               <div className="xl:col-span-8">
