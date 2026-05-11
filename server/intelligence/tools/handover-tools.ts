@@ -22,7 +22,7 @@ const roleOutput = z.object({
 
 const listOpenTasksInput = z.object({
   role_id: uuidLike,
-  since: z.string().optional(),
+  since: z.string().nullable().optional(),
 });
 
 const listRecentActivityInput = z.object({
@@ -42,13 +42,13 @@ const draftPacketInput = z.object({
   role_id: uuidLike,
   sections: z.array(z.string().min(1)).min(1).max(6),
   outgoing_user: z.string().min(1),
-  incoming_user: z.string().min(1).optional(),
+  incoming_user: z.string().min(1).nullable().optional(),
   idempotency_key: z.string().min(8),
 });
 
 const askUserInput = z.object({
   question: z.string().min(1).max(500),
-  options: z.array(z.string().min(1).max(100)).max(8).optional(),
+  options: z.array(z.string().min(1).max(100)).max(8).nullable().optional(),
 });
 
 const anyObject = z.record(z.unknown());
@@ -113,7 +113,7 @@ export function createHandoverToolRegistry(input: { store: DonnitStore; orgId: s
     name: "list_open_tasks",
     description: "List open tasks owned by the role.",
     inputSchema: listOpenTasksInput,
-    inputJsonSchema: objectSchema({ role_id: { type: "string" }, since: { type: "string" } }, ["role_id"]),
+    inputJsonSchema: objectSchema({ role_id: { type: "string" }, since: { type: ["string", "null"] } }),
     outputSchema: listOutput,
     outputJsonSchema: objectSchema({ items: { type: "array", items: { type: "object", additionalProperties: true } } }),
     sideEffect: "read",
@@ -208,9 +208,9 @@ export function createHandoverToolRegistry(input: { store: DonnitStore; orgId: s
       role_id: { type: "string" },
       sections: { type: "array", items: { type: "string" } },
       outgoing_user: { type: "string" },
-      incoming_user: { type: "string" },
+      incoming_user: { type: ["string", "null"] },
       idempotency_key: { type: "string" },
-    }, ["role_id", "sections", "outgoing_user", "idempotency_key"]),
+    }),
     outputSchema: anyObject,
     outputJsonSchema: { type: "object", additionalProperties: true },
     sideEffect: "write",
@@ -221,7 +221,7 @@ export function createHandoverToolRegistry(input: { store: DonnitStore; orgId: s
     name: "ask_user",
     description: "Pause the agent loop and ask the user for required clarification.",
     inputSchema: askUserInput,
-    inputJsonSchema: objectSchema({ question: { type: "string" }, options: { type: "array", items: { type: "string" } } }, ["question"]),
+    inputJsonSchema: objectSchema({ question: { type: "string" }, options: { type: ["array", "null"], items: { type: "string" } } }),
     outputSchema: anyObject,
     outputJsonSchema: { type: "object", additionalProperties: true },
     sideEffect: "read",
