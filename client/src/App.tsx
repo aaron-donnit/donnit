@@ -125,6 +125,27 @@ const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
   afternoonPreference: "communications",
 };
 
+const CLIENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
+
+function localDateIso(value: Date | string = new Date(), timeZone = CLIENT_TIME_ZONE) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function addLocalDays(days: number, baseDate = localDateIso()) {
+  const parsed = new Date(`${baseDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return baseDate;
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
 type User = {
   id: Id;
   name: string;
@@ -612,7 +633,7 @@ function buildPositionProfiles(
   events: TaskEvent[],
   persistedProfiles: PersistedPositionProfile[] = [],
 ): PositionProfile[] {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateIso();
   const derivedProfiles: PositionProfile[] = users.map((user) => {
     const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility !== "personal");
     const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
@@ -739,7 +760,7 @@ function isActiveUser(user: User) {
 function isVisibleWorkTask(task: Task) {
   if (!task.visibleFrom) return true;
   if (task.status === "completed" || task.status === "denied") return true;
-  return task.visibleFrom <= new Date().toISOString().slice(0, 10);
+  return task.visibleFrom <= localDateIso();
 }
 
 function escapeIcsText(value: string) {
@@ -831,7 +852,7 @@ function downloadAgendaCalendar(agenda: AgendaItem[]) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `donnit-agenda-${new Date().toISOString().slice(0, 10)}.ics`;
+  link.download = `donnit-agenda-${localDateIso()}.ics`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1896,10 +1917,8 @@ function TaskList({
     medium: 2,
     low: 3,
   };
-  const today = new Date().toISOString().slice(0, 10);
-  const soon = new Date();
-  soon.setDate(soon.getDate() + 3);
-  const soonIso = soon.toISOString().slice(0, 10);
+  const today = localDateIso();
+  const soonIso = addLocalDays(3, today);
   const pressureRank = (task: Task) => {
     if (task.status === "completed") return 99;
     if (task.dueDate && task.dueDate < today) return 0;
@@ -2954,7 +2973,7 @@ function FloatingTaskBox({
 }
 
 function DueTodayPanel({ tasks }: { tasks: Task[] }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateIso();
   const dueToday = tasks.filter(
     (task) => task.dueDate === today && task.status !== "completed",
   );
@@ -3631,16 +3650,12 @@ function TeamViewPanel({
   const member = teamMembers.find((user) => String(user.id) === selectedUserId) ?? teamMembers[0];
   const memberTasks = member ? tasks.filter((task) => String(task.assignedToId) === String(member.id)) : [];
   const active = memberTasks.filter((task) => task.status !== "completed" && task.status !== "denied");
-  const today = new Date().toISOString().slice(0, 10);
-  const soon = new Date();
-  soon.setDate(soon.getDate() + 2);
-  const soonIso = soon.toISOString().slice(0, 10);
+  const today = localDateIso();
+  const soonIso = addLocalDays(2, today);
   const sinceDate = (() => {
     if (timeframe === "all") return null;
     const days = timeframe === "7d" ? 7 : 30;
-    const date = new Date();
-    date.setDate(date.getDate() - days);
-    return date.toISOString().slice(0, 10);
+    return addLocalDays(-days, today);
   })();
   const inTimeframe = (iso: string | null | undefined) => {
     if (!sinceDate || !iso) return true;
@@ -5462,7 +5477,7 @@ function SupportRail({
   onExportAgenda: () => void;
   isBuildingAgenda: boolean;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateIso();
   const dueTodayCount = tasks.filter(
     (task) => task.dueDate === today && task.status !== "completed" && task.status !== "denied",
   ).length;
@@ -5574,10 +5589,8 @@ type DerivedNotification = {
 };
 
 function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]): DerivedNotification[] {
-  const today = new Date().toISOString().slice(0, 10);
-  const soon = new Date();
-  soon.setDate(soon.getDate() + 2);
-  const soonIso = soon.toISOString().slice(0, 10);
+  const today = localDateIso();
+  const soonIso = addLocalDays(2, today);
   const active = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
   const items: DerivedNotification[] = [];
 
@@ -8416,7 +8429,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const metrics = useMemo(() => {
     const tasks = (data?.tasks ?? []).filter(isVisibleWorkTask);
     const suggestions = data?.suggestions ?? [];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateIso();
     const waitingTasks = tasks.filter((t) => t.status === "pending_acceptance").length;
     const pendingSuggestions = suggestions.filter((s) => s.status === "pending").length;
     return {

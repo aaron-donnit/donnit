@@ -412,22 +412,22 @@ const urgencyRank: Record<string, number> = {
   low: 3,
 };
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+const DEFAULT_DONNIT_TIME_ZONE = process.env.DONNIT_TIME_ZONE || "America/New_York";
+
+function todayIso(timeZone = DEFAULT_DONNIT_TIME_ZONE) {
+  return getZonedParts(new Date(), timeZone).date;
 }
 
-function addDays(days: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+function addDays(days: number, timeZone = DEFAULT_DONNIT_TIME_ZONE) {
+  return addDaysIso(todayIso(timeZone), days);
 }
 
 function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
-  const now = new Date();
-  const today = now.getDay();
+  const localToday = todayIso();
+  const today = new Date(`${localToday}T00:00:00.000Z`).getUTCDay();
   let delta = targetDay - today;
   if (delta < 0 || (delta === 0 && preferNextWeek)) delta += 7;
-  return addDays(delta);
+  return addDaysIso(localToday, delta);
 }
 
 const monthIndexes: Record<string, number> = {
@@ -777,7 +777,7 @@ type CalendarBusyBlock = {
   endMinute: number;
 };
 
-const DEFAULT_CALENDAR_TIME_ZONE = "America/New_York";
+const DEFAULT_CALENDAR_TIME_ZONE = DEFAULT_DONNIT_TIME_ZONE;
 const SCHEDULE_HORIZON_DAYS = 14;
 
 type AgendaPreference = "deep_work" | "communications" | "mixed";
