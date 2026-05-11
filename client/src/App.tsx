@@ -800,6 +800,21 @@ function isActiveUser(user: User) {
   return user.status !== "inactive";
 }
 
+function latestOpenUpdateRequest(task: Task, events: TaskEvent[]) {
+  const taskEvents = events
+    .filter((event) => String(event.taskId) === String(task.id))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const request = taskEvents.find((event) => event.type === "update_requested");
+  if (!request) return undefined;
+  const response = taskEvents.find(
+    (event) =>
+      event.createdAt > request.createdAt &&
+      String(event.actorId) !== String(request.actorId) &&
+      ["updated", "note_added", "completed", "accepted", "denied"].includes(event.type),
+  );
+  return response ? undefined : request;
+}
+
 function teamMembersForUser(users: User[], currentUser: User | null | undefined, currentUserId: Id | null | undefined) {
   if (!currentUser || !currentUserId) return [];
   if (!["owner", "admin", "manager"].includes(currentUser.role)) return [];
@@ -1936,9 +1951,7 @@ function TaskRow({
   const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
   const collaboratorCount = task.collaboratorIds?.length ?? 0;
   const isDone = task.status === "completed";
-  const latestUpdateRequest = [...events]
-    .filter((event) => String(event.taskId) === String(task.id) && event.type === "update_requested")
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const latestUpdateRequest = latestOpenUpdateRequest(task, events);
   const contextHints = [
     task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"
       ? `${inferTaskCadence(task)} responsibility`
@@ -2703,11 +2716,7 @@ function TaskDetailDialog({
         .filter((event) => String(event.taskId) === String(task.id))
         .slice(0, 8)
     : [];
-  const latestUpdateRequest = task
-    ? [...events]
-        .filter((event) => String(event.taskId) === String(task.id) && event.type === "update_requested")
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-    : undefined;
+  const latestUpdateRequest = task ? latestOpenUpdateRequest(task, events) : undefined;
   const updateRequester = latestUpdateRequest
     ? users.find((user) => String(user.id) === String(latestUpdateRequest.actorId))
     : null;
@@ -6832,15 +6841,13 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[], event
   }
 
   for (const task of active) {
-    const latestUpdateRequest = [...events]
-      .filter(
-        (event) =>
-          String(event.taskId) === String(task.id) &&
-          event.type === "update_requested" &&
-          (!currentUserId || String(event.actorId) !== String(currentUserId)),
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    if (latestUpdateRequest) {
+    const latestUpdateRequest = latestOpenUpdateRequest(task, events);
+    const updateVisibleToCurrentUser =
+      !currentUserId ||
+      String(task.assignedToId) === String(currentUserId) ||
+      String(task.delegatedToId ?? "") === String(currentUserId) ||
+      (task.collaboratorIds ?? []).some((id) => String(id) === String(currentUserId));
+    if (latestUpdateRequest && updateVisibleToCurrentUser && String(latestUpdateRequest.actorId) !== String(currentUserId ?? "")) {
       items.push({
         id: `update-request-${task.id}-${latestUpdateRequest.id}`,
         title: "Update requested",
