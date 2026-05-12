@@ -5682,6 +5682,42 @@ function PositionProfilesPanel({
       ]
     : [];
   const profileReadinessDone = profileReadinessItems.filter((item) => item.done).length;
+  const handoffPacketSections = selectedProfile
+    ? [
+        {
+          label: "Open work",
+          empty: "No open work captured",
+          items: selectedProfile.currentIncompleteTasks
+            .slice(0, 3)
+            .map((task) => `${task.title}${task.dueDate ? ` / due ${task.dueDate}` : ""}`),
+        },
+        {
+          label: "Recurring work",
+          empty: "No recurring rhythm mapped",
+          items: selectedProfile.recurringTasks
+            .slice(0, 3)
+            .map((task) => `${task.title}${taskRepeatLabel(task) ? ` / ${taskRepeatLabel(task)}` : ""}`),
+        },
+        {
+          label: "Knowledge gaps",
+          empty: "No recurring gaps detected",
+          items: recurringKnowledgeGaps.slice(0, 3).map((task) => `${task.title} needs notes`),
+        },
+        {
+          label: "Tool access",
+          empty: "No access items recorded",
+          items: selectedProfile.accessItems.slice(0, 3).map((item) => `${item.toolName} / ${accessStatusLabels[item.status]}`),
+        },
+        {
+          label: "Historical memory",
+          empty: "No historical work captured",
+          items: [
+            ...selectedProfile.completedTasks.slice(0, 2).map((task) => task.title),
+            ...learnedHowToNotes.slice(0, 1).map((item) => `${item.title}: ${item.note.slice(0, 90)}`),
+          ].slice(0, 3),
+        },
+      ]
+    : [];
   const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
@@ -6015,6 +6051,34 @@ function PositionProfilesPanel({
                     <div className="rounded-md bg-background px-3 py-2">
                       <p className="ui-label">Next action</p>
                       <p className="mt-1 leading-5 text-foreground">{handoffReadiness.action}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 rounded-md border border-border bg-background px-3 py-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-foreground">Replacement brief</p>
+                      <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                        Live packet
+                      </span>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {handoffPacketSections.map((section) => (
+                        <div key={section.label} className="rounded-md bg-muted/45 px-2 py-2">
+                          <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">
+                            {section.label}
+                          </p>
+                          {section.items.length > 0 ? (
+                            <ul className="space-y-1 text-xs text-foreground">
+                              {section.items.map((item) => (
+                                <li key={item} className="line-clamp-2">
+                                  {item}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">{section.empty}</p>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
