@@ -7840,6 +7840,24 @@ function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[], event
     });
   }
 
+  if (currentUserId) {
+    for (const event of events.filter((item) => item.type === "accepted" || item.type === "denied")) {
+      const task = tasks.find((candidate) => String(candidate.id) === String(event.taskId));
+      if (!task) continue;
+      const assignedByCurrentUser = String(task.assignedById) === String(currentUserId);
+      const actedBySomeoneElse = String(event.actorId) !== String(currentUserId);
+      if (!assignedByCurrentUser || !actedBySomeoneElse) continue;
+      items.push({
+        id: `assignment-response-${task.id}-${event.id}`,
+        title: event.type === "accepted" ? "Task accepted" : "Task declined",
+        detail: event.type === "accepted" ? task.title : `${task.title}${event.note ? ` - ${event.note}` : ""}`,
+        severity: event.type === "denied" ? "high" : "normal",
+        source: "task",
+        taskId: task.id,
+      });
+    }
+  }
+
   for (const task of active) {
     const latestUpdateRequest = latestOpenUpdateRequest(task, events);
     const updateVisibleToCurrentUser =

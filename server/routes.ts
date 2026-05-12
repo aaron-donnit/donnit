@@ -5645,7 +5645,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
+          content: chatTaskOutcome(created, members),
           task_id: created.id,
         });
         res.status(201).json({ task: toClientTask(created), assistant });
@@ -5753,7 +5753,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dueText = dueDateAssistantText(task.dueDate);
     const assignmentText =
       task.status === "pending_acceptance"
-        ? ` I asked ${assignee?.name ?? "the assignee"} to accept or deny it.`
+        ? ` I assigned it to ${assignee?.name ?? "the assignee"}.`
         : " It is on your list now.";
     const assistant = await storage.createChatMessage({
       role: "assistant",
