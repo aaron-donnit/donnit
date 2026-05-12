@@ -672,6 +672,106 @@ function memoryStringArray(memory: Record<string, unknown>, keys: string[]) {
   return [];
 }
 
+type LearnedHowToNote = {
+  taskId: string;
+  title: string;
+  note: string;
+  source: string;
+  capturedAt: string | null;
+};
+
+type LearnedRecurringResponsibility = {
+  taskId: string;
+  title: string;
+  cadence: string;
+  dueDate: string | null;
+  showEarlyDays: number;
+  updatedAt: string | null;
+};
+
+type LearnedTaskSignal = {
+  taskId: string;
+  title: string;
+  status: string;
+  urgency: string;
+  dueDate: string | null;
+  source: string;
+  recurrence: string;
+  eventType: string;
+  capturedAt: string | null;
+};
+
+function memoryRecordArray(memory: Record<string, unknown>, key: string) {
+  const value = memory[key];
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
+}
+
+function memoryHowToNotes(memory: Record<string, unknown>): LearnedHowToNote[] {
+  return memoryRecordArray(memory, "howToNotes")
+    .map((record): LearnedHowToNote | null => {
+      const note = typeof record.note === "string" ? record.note.trim() : "";
+      if (!note) return null;
+      return {
+        taskId: String(record.taskId ?? ""),
+        title: typeof record.title === "string" && record.title.trim() ? record.title : "Task context",
+        note,
+        source: typeof record.source === "string" ? record.source : "task",
+        capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : null,
+      };
+    })
+    .filter((item): item is LearnedHowToNote => item !== null)
+    .slice(0, 8);
+}
+
+function memoryRecurringResponsibilities(memory: Record<string, unknown>): LearnedRecurringResponsibility[] {
+  return memoryRecordArray(memory, "recurringResponsibilities")
+    .map((record): LearnedRecurringResponsibility | null => {
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      if (!title) return null;
+      return {
+        taskId: String(record.taskId ?? title),
+        title,
+        cadence: typeof record.cadence === "string" && record.cadence !== "none" ? titleCase(record.cadence) : "Recurring",
+        dueDate: typeof record.dueDate === "string" ? record.dueDate : null,
+        showEarlyDays: typeof record.showEarlyDays === "number" ? record.showEarlyDays : 0,
+        updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : null,
+      };
+    })
+    .filter((item): item is LearnedRecurringResponsibility => item !== null)
+    .slice(0, 8);
+}
+
+function memoryRecentSignals(memory: Record<string, unknown>): LearnedTaskSignal[] {
+  return memoryRecordArray(memory, "recentTaskSignals")
+    .map((record): LearnedTaskSignal | null => {
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      if (!title) return null;
+      return {
+        taskId: String(record.taskId ?? title),
+        title,
+        status: typeof record.status === "string" ? record.status : "open",
+        urgency: typeof record.urgency === "string" ? record.urgency : "normal",
+        dueDate: typeof record.dueDate === "string" ? record.dueDate : null,
+        source: typeof record.source === "string" ? record.source : "task",
+        recurrence: typeof record.recurrence === "string" ? record.recurrence : "none",
+        eventType: typeof record.eventType === "string" ? record.eventType : "updated",
+        capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : null,
+      };
+    })
+    .filter((item): item is LearnedTaskSignal => item !== null)
+    .slice(0, 8);
+}
+
+function memorySourceMix(memory: Record<string, unknown>) {
+  const sourceMix = memory.sourceMix;
+  if (!sourceMix || typeof sourceMix !== "object" || Array.isArray(sourceMix)) return [];
+  return Object.entries(sourceMix as Record<string, unknown>)
+    .map(([source, count]) => ({ source, count: typeof count === "number" ? count : Number(count) || 0 }))
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+}
+
 function memoryAccessItems(memory: Record<string, unknown>): ProfileAccessItem[] {
   const value = memory.accessItems;
   if (!Array.isArray(value)) return [];
@@ -701,12 +801,17 @@ function memoryAccessItems(memory: Record<string, unknown>): ProfileAccessItem[]
 function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionProfile): PositionProfile {
   const memory = record.institutionalMemory ?? {};
   const accessItems = memoryAccessItems(memory);
-  const howTo = Array.from(new Set([...memoryStringArray(memory, ["howTo", "howToNotes"]), ...profile.howTo])).slice(0, 6);
+  const learnedHowTo = memoryHowToNotes(memory).map((item) => item.note);
+  const learnedRecurring = memoryRecurringResponsibilities(memory).map((item) => item.title);
+  const howTo = Array.from(new Set([...memoryStringArray(memory, ["howTo"]), ...learnedHowTo, ...profile.howTo])).slice(0, 6);
   const tools = Array.from(new Set([...memoryStringArray(memory, ["tools", "toolAccess"]), ...accessItems.map((item) => item.toolName), ...profile.tools])).slice(0, 8);
   const stakeholders = Array.from(new Set([...memoryStringArray(memory, ["stakeholders", "contacts"]), ...profile.stakeholders])).slice(0, 8);
   const criticalDates = Array.from(new Set([...memoryStringArray(memory, ["criticalDates"]), ...profile.criticalDates])).slice(0, 6);
+  const learnedRecurringChecklist = learnedRecurring.length > 0
+    ? [`Review ${learnedRecurring.length} learned recurring ${learnedRecurring.length === 1 ? "responsibility" : "responsibilities"}.`]
+    : [];
   const transitionChecklist = Array.from(
-    new Set([...memoryStringArray(memory, ["transitionChecklist"]), ...profile.transitionChecklist]),
+    new Set([...memoryStringArray(memory, ["transitionChecklist"]), ...learnedRecurringChecklist, ...profile.transitionChecklist]),
   ).slice(0, 7);
   const riskReasons = Array.from(
     new Set([record.riskSummary, ...profile.riskReasons].filter((item): item is string => Boolean(item))),
@@ -5479,6 +5584,15 @@ function PositionProfilesPanel({
     remove_access: "Remove access",
     pending: "Pending",
   };
+  const selectedMemory = selectedProfile?.institutionalMemory ?? {};
+  const learnedHowToNotes = memoryHowToNotes(selectedMemory);
+  const learnedRecurringResponsibilities = memoryRecurringResponsibilities(selectedMemory);
+  const learnedTaskSignals = memoryRecentSignals(selectedMemory);
+  const learnedSourceMix = memorySourceMix(selectedMemory);
+  const learnedStats = selectedMemory.stats && typeof selectedMemory.stats === "object" && !Array.isArray(selectedMemory.stats)
+    ? selectedMemory.stats as Record<string, unknown>
+    : {};
+  const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
       key={String(task.id)}
@@ -5902,6 +6016,112 @@ function PositionProfilesPanel({
                   )}
                 </div>
               )}
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-position-role-intelligence">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                    <Sparkles className="size-4 text-brand-green" />
+                    Role intelligence
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Automatically learned from task creation, completions, notes, recurrence, and handoffs.
+                  </p>
+                </div>
+                <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                  {lastLearnedAt ? `Updated ${new Date(lastLearnedAt).toLocaleDateString()}` : "Learning"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">{Number(learnedStats.taskSignals ?? learnedTaskSignals.length) || 0}</p>
+                  <p className="text-muted-foreground">signals</p>
+                </div>
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">{Number(learnedStats.recurringTasks ?? learnedRecurringResponsibilities.length) || 0}</p>
+                  <p className="text-muted-foreground">recurring</p>
+                </div>
+                <div className="rounded-md bg-muted px-2 py-2">
+                  <p className="font-semibold tabular-nums text-foreground">{learnedHowToNotes.length}</p>
+                  <p className="text-muted-foreground">how-to</p>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
+                  <p className="mb-2 text-xs font-medium text-foreground">Learned recurring work</p>
+                  {learnedRecurringResponsibilities.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {learnedRecurringResponsibilities.slice(0, 4).map((item) => (
+                        <div key={`${item.taskId}-${item.title}`} className="rounded-md bg-background px-2 py-2 text-xs">
+                          <p className="truncate font-medium text-foreground">{item.title}</p>
+                          <p className="mt-0.5 text-muted-foreground">
+                            {item.cadence}{item.dueDate ? ` / due ${item.dueDate}` : ""}{item.showEarlyDays > 0 ? ` / shows ${item.showEarlyDays} days early` : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-xs text-muted-foreground">
+                      No recurring pattern has been learned yet.
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
+                  <p className="mb-2 text-xs font-medium text-foreground">Recent learned signals</p>
+                  {learnedTaskSignals.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {learnedTaskSignals.slice(0, 4).map((item) => (
+                        <div key={`${item.taskId}-${item.eventType}`} className="rounded-md bg-background px-2 py-2 text-xs">
+                          <p className="truncate font-medium text-foreground">{item.title}</p>
+                          <p className="mt-0.5 text-muted-foreground">
+                            {titleCase(item.eventType)} / {titleCase(item.source)} / {urgencyLabel(item.urgency)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-xs text-muted-foreground">
+                      Donnit will populate this as tasks are added or completed.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_.8fr]">
+                <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
+                  <p className="mb-2 text-xs font-medium text-foreground">How-to notes Donnit captured</p>
+                  {learnedHowToNotes.length > 0 ? (
+                    <ul className="space-y-1.5 text-xs text-muted-foreground">
+                      {learnedHowToNotes.slice(0, 4).map((item) => (
+                        <li key={`${item.taskId}-${item.note}`} className="rounded-md bg-background px-2 py-2">
+                          <span className="block font-medium text-foreground">{item.title}</span>
+                          <span className="mt-0.5 line-clamp-2 block">{item.note}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-xs text-muted-foreground">
+                      Add completion notes to recurring tasks to build role instructions.
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
+                  <p className="mb-2 text-xs font-medium text-foreground">Source mix</p>
+                  {learnedSourceMix.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {learnedSourceMix.map((item) => (
+                        <span key={item.source} className="rounded-md bg-background px-2 py-1 text-xs text-muted-foreground">
+                          {titleCase(item.source)}: {item.count}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-xs text-muted-foreground">
+                      Sources appear after chat, email, Slack, SMS, or document tasks are captured.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="rounded-md border border-border bg-background px-3 py-3">
