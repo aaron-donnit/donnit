@@ -2207,6 +2207,7 @@ function TaskList({
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
   const [taskView, setTaskView] = useState<"active" | "mine" | "done" | "all">("active");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const visibleTasks = useMemo(
     () =>
       tasks.map((task) =>
@@ -2224,6 +2225,11 @@ function TaskList({
       return next.size === current.size ? current : next;
     });
   }, [tasks]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const complete = useMutation({
     mutationFn: async (id: Id) =>
@@ -2320,10 +2326,20 @@ function TaskList({
   });
 
   const open = sorted.filter((t) => t.status !== "completed" && t.status !== "denied");
+  const newTaskCutoff = nowMs - 30 * 60 * 1000;
+  const newTasks = open
+    .filter((task) => {
+      const createdAt = new Date(task.createdAt).getTime();
+      return Number.isFinite(createdAt) && createdAt >= newTaskCutoff;
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 2);
+  const newTaskIds = new Set(newTasks.map((task) => String(task.id)));
+  const prioritizedOpen = open.filter((task) => !newTaskIds.has(String(task.id)));
   const done = filteredTasks
     .filter((t) => t.status === "completed")
     .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
-  const grouped = open.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
+  const grouped = prioritizedOpen.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
     const group = groupForTask(task);
     const existing = groups.find((item) => item.id === group.id);
     if (existing) existing.tasks.push(task);
@@ -2337,7 +2353,7 @@ function TaskList({
         <div>
           <h2 className="work-heading">To do</h2>
           <p className="ui-label mt-1">
-            {viewLabel ? `${viewLabel} - ` : ""}Prioritized and batched by timing/context
+            {viewLabel ? `${viewLabel} - ` : ""}New work first, then Eisenhower priority order
           </p>
         </div>
         <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium tabular-nums">
@@ -2378,6 +2394,35 @@ function TaskList({
       </div>
 
       <div className="flex flex-col gap-2 px-4 py-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3 px-1 pt-1">
+            <div>
+              <p className="ui-label text-[10px] uppercase tracking-wide text-muted-foreground">New tasks</p>
+              <p className="text-[11px] text-muted-foreground">Newest work from the last 30 minutes</p>
+            </div>
+            <span className="text-[11px] tabular-nums text-muted-foreground">{newTasks.length}</span>
+          </div>
+          {newTasks.length > 0 ? (
+            newTasks.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                users={users}
+                events={events}
+                isCompleting={completingId === task.id && complete.isPending}
+                onComplete={() => complete.mutate(task.id)}
+                onOpen={() => setSelectedTaskId(String(task.id))}
+                onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
+                readOnly={readOnly}
+              />
+            ))
+          ) : (
+            <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-4 text-center text-sm text-muted-foreground/70">
+              No new tasks
+            </div>
+          )}
+        </div>
+
         {open.length === 0 && done.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">
             <Search className="mx-auto size-8 text-brand-green" />
