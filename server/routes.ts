@@ -2162,6 +2162,19 @@ async function enrichPositionProfileMemoryFromTask(input: {
   }
 }
 
+function nextMonthlyOrdinalWeekdayFromTask(task: DonnitTask) {
+  const repeatDetails = repeatDetailsFromDescription(task.description);
+  const ordinalWeekday = repeatDetails.match(/\b(first|second|third|fourth|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (!task.due_date || !ordinalWeekday) return null;
+  const nextMonth = new Date(`${addMonthsIso(task.due_date, 1)}T00:00:00.000Z`);
+  return nthWeekdayOfMonthIso(
+    nextMonth.getUTCFullYear(),
+    nextMonth.getUTCMonth() + 1,
+    weekdayIndexes[ordinalWeekday[2].toLowerCase()],
+    ordinalWeekday[1].toLowerCase(),
+  );
+}
+
 function nextRecurringDueDate(task: DonnitTask) {
   if (!task.due_date || task.recurrence === "none") return null;
   switch (task.recurrence) {
@@ -2170,7 +2183,7 @@ function nextRecurringDueDate(task: DonnitTask) {
     case "weekly":
       return addDaysIso(task.due_date, 7);
     case "monthly":
-      return addMonthsIso(task.due_date, 1);
+      return nextMonthlyOrdinalWeekdayFromTask(task) ?? addMonthsIso(task.due_date, 1);
     case "quarterly":
       return addMonthsIso(task.due_date, 3);
     case "annual":
@@ -2200,9 +2213,10 @@ async function createNextRecurringOccurrenceFromTask(input: {
         ((input.task as { position_profile_id?: string | null }).position_profile_id ?? null),
     );
     if (duplicate) return duplicate;
+    const repeatDetails = repeatDetailsFromDescription(input.task.description);
     const nextTask = await input.store.createTask(input.orgId, {
       title: input.task.title,
-      description: "",
+      description: descriptionWithServerRepeatDetails("", repeatDetails),
       status: "open",
       urgency: input.task.urgency,
       due_date: nextDueDate,
@@ -4407,6 +4421,7 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
 
 export const __chatParserTest = {
   findBestMentionedCandidates,
+  nextRecurringDueDate,
   parseDueDate,
   parseTaskRecurrence,
   titleFromMessage,

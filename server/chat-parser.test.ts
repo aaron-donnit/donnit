@@ -41,4 +41,14 @@ describe("chat task parser", () => {
     );
     expect(specific.map((user) => user.name)).toEqual(["Aaron Hassett"]);
   });
+
+  it("rolls monthly ordinal recurring tasks to the next matching weekday", () => {
+    const nextDue = __chatParserTest.nextRecurringDueDate({
+      due_date: "2026-06-01",
+      recurrence: "monthly",
+      description: "Repeat details: First Monday of every month",
+    } as never);
+
+    expect(nextDue).toBe("2026-07-06");
+  });
 });
