@@ -36,6 +36,7 @@ import {
   Menu,
   Minimize2,
   Moon,
+  MoreHorizontal,
   Paperclip,
   Pencil,
   Play,
@@ -286,6 +287,20 @@ type ChatMessage = {
   content: string;
   taskId: Id | null;
   createdAt: string;
+};
+
+type TaskDraftInput = {
+  title?: string;
+  description?: string;
+  assignedToId?: Id;
+  dueDate?: string | null;
+  estimatedMinutes?: number;
+  urgency?: "low" | "normal" | "high" | "critical";
+  visibility?: "work" | "personal" | "confidential";
+  recurrence?: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+  reminderDaysBefore?: number;
+  positionProfileId?: Id | null;
+  source?: string;
 };
 
 type EmailSuggestion = {
@@ -1176,14 +1191,18 @@ const dialogHeaderClass = "shrink-0 border-b border-border px-5 py-4 pr-12";
 const dialogBodyClass = "min-h-0 flex-1 overflow-y-auto px-5 py-4";
 const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
 
-function ChatPanel({ messages }: { messages: ChatMessage[] }) {
+function ChatPanel({ messages, onReviewTask }: { messages: ChatMessage[]; onReviewTask: (draft: TaskDraftInput) => void }) {
   const [message, setMessage] = useState("");
   const historyRef = useRef<HTMLDivElement | null>(null);
   const chat = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/chat", { message }),
-    onSuccess: async () => {
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/chat", { message });
+      return (await res.json()) as { reviewTask?: TaskDraftInput };
+    },
+    onSuccess: async (result) => {
       setMessage("");
       await invalidateWorkspace();
+      if (result.reviewTask) onReviewTask(result.reviewTask);
     },
     onError: (error: unknown) => {
       toast({
@@ -2770,7 +2789,126 @@ function TaskDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
-        <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
+        <DialogHeader className="relative shrink-0 border-b border-border px-5 py-4 pr-16">
+          <div className="absolute right-4 top-4">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={readOnly}
+                  aria-label="Task settings"
+                  data-testid="button-task-settings-menu"
+                >
+                  <MoreHorizontal className="size-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 p-3">
+                <DropdownMenuLabel>Task settings</DropdownMenuLabel>
+                <div className="mt-2 grid gap-3">
+                  <div className="flex min-h-10 flex-wrap items-center gap-3 rounded-md border border-border bg-muted/25 px-3 py-2">
+                    <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={visibility === "confidential"}
+                        onChange={(event) => setVisibility(event.target.checked ? "confidential" : "work")}
+                        className="size-4 rounded border-border accent-brand-green"
+                        data-testid="checkbox-task-detail-confidential"
+                      />
+                      Confidential
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={visibility === "personal"}
+                        onChange={(event) => setVisibility(event.target.checked ? "personal" : "work")}
+                        className="size-4 rounded border-border accent-brand-green"
+                        data-testid="checkbox-task-detail-personal"
+                      />
+                      Personal
+                    </label>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-detail-recurrence">Recurring</Label>
+                    <select
+                      id="task-detail-recurrence"
+                      value={recurrence}
+                      onChange={(event) => setRecurrence(event.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                      data-testid="select-task-detail-recurrence"
+                    >
+                      <option value="none">No recurrence</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="quarterly">Quarterly</option>
+                      <option value="annual">Annual</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-detail-reminder">Show early</Label>
+                    <Input
+                      id="task-detail-reminder"
+                      type="number"
+                      min={0}
+                      max={365}
+                      value={reminderDaysBefore}
+                      onChange={(event) => setReminderDaysBefore(Math.max(0, Number(event.target.value) || 0))}
+                      data-testid="input-task-detail-reminder-days"
+                    />
+                  </div>
+                  {savedPositionProfiles.length > 0 && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="task-detail-position-profile">Position Profile</Label>
+                      <select
+                        id="task-detail-position-profile"
+                        value={positionProfileId}
+                        onChange={(event) => setPositionProfileId(event.target.value)}
+                        disabled={visibility === "personal"}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60"
+                        data-testid="select-task-detail-position-profile"
+                      >
+                        <option value="">No Position Profile</option>
+                        {selectedAssigneeProfiles.length > 0 && (
+                          <optgroup label="Assigned person's profiles">
+                            {selectedAssigneeProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.title} - {profileAssignmentLabel(profile, users)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {coverageProfiles.length > 0 && (
+                          <optgroup label="Coverage profiles">
+                            {coverageProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.title} - {profileAssignmentLabel(profile, users)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {otherPositionProfiles.length > 0 && (
+                          <optgroup label="Other profiles">
+                            {otherPositionProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.title} - {profileAssignmentLabel(profile, users)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <p className="text-xs text-muted-foreground">
+                        {visibility === "personal"
+                          ? "Personal tasks are excluded from Position Profile memory."
+                          : "Choose the role memory this task should update."}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <DialogTitle>Task details</DialogTitle>
           <DialogDescription>
             Owned by {assignee?.name ?? "Unknown"} - assigned by {assigner?.name ?? "Unknown"}
@@ -2950,112 +3088,6 @@ function TaskDetailDialog({
               />
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="flex min-h-10 flex-wrap items-center gap-3 rounded-md border border-border bg-muted/25 px-3 py-2">
-              <label className="inline-flex items-center gap-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  checked={visibility === "confidential"}
-                  onChange={(event) => setVisibility(event.target.checked ? "confidential" : "work")}
-                  disabled={readOnly}
-                  className="size-4 rounded border-border accent-brand-green"
-                  data-testid="checkbox-task-detail-confidential"
-                />
-                Confidential
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  checked={visibility === "personal"}
-                  onChange={(event) => setVisibility(event.target.checked ? "personal" : "work")}
-                  disabled={readOnly}
-                  className="size-4 rounded border-border accent-brand-green"
-                  data-testid="checkbox-task-detail-personal"
-                />
-                Personal
-              </label>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="task-detail-recurrence">Recurring</Label>
-              <select
-                id="task-detail-recurrence"
-                value={recurrence}
-                onChange={(event) => setRecurrence(event.target.value)}
-                disabled={readOnly}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-                data-testid="select-task-detail-recurrence"
-              >
-                <option value="none">No recurrence</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-                <option value="quarterly">Quarterly</option>
-                <option value="annual">Annual</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="task-detail-reminder">Show early</Label>
-              <Input
-                id="task-detail-reminder"
-                type="number"
-                min={0}
-                max={365}
-                value={reminderDaysBefore}
-                onChange={(event) => setReminderDaysBefore(Math.max(0, Number(event.target.value) || 0))}
-                disabled={readOnly}
-                data-testid="input-task-detail-reminder-days"
-              />
-            </div>
-          </div>
-          {savedPositionProfiles.length > 0 && (
-            <div className="space-y-1.5">
-              <Label htmlFor="task-detail-position-profile">Position Profile</Label>
-              <select
-                id="task-detail-position-profile"
-                value={positionProfileId}
-                onChange={(event) => setPositionProfileId(event.target.value)}
-                disabled={visibility === "personal" || readOnly}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
-                data-testid="select-task-detail-position-profile"
-              >
-                <option value="">No Position Profile</option>
-                {selectedAssigneeProfiles.length > 0 && (
-                  <optgroup label="Assigned person's profiles">
-                    {selectedAssigneeProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.title} - {profileAssignmentLabel(profile, users)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {coverageProfiles.length > 0 && (
-                  <optgroup label="Coverage profiles">
-                    {coverageProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.title} - {profileAssignmentLabel(profile, users)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {otherPositionProfiles.length > 0 && (
-                  <optgroup label="Other profiles">
-                    {otherPositionProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.title} - {profileAssignmentLabel(profile, users)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              <p className="text-xs text-muted-foreground">
-                {visibility === "personal"
-                  ? "Personal tasks are excluded from Position Profile memory."
-                  : selectedAssigneeProfiles.length > 1
-                    ? "This person has multiple profiles. Choose which role owns this work."
-                    : "Choose the role memory this task should update."}
-              </p>
-            </div>
-          )}
           <div className="space-y-1.5">
             <Label htmlFor="task-detail-description">Description</Label>
             <Textarea
@@ -6704,7 +6736,7 @@ function SuggestionCard({
           disabled={approving || dismissing || editing}
           data-testid={`button-suggestion-approve-${suggestion.id}`}
         >
-          <Check className="size-4" /> Add as task
+          <Check className="size-4" /> Review and add
         </Button>
         <Button
           size="sm"
@@ -7538,6 +7570,7 @@ function AssignTaskDialog({
   currentUserId,
   taskTemplates,
   positionProfiles = [],
+  initialDraft = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -7545,6 +7578,7 @@ function AssignTaskDialog({
   currentUserId: Id;
   taskTemplates: TaskTemplate[];
   positionProfiles?: PositionProfile[];
+  initialDraft?: TaskDraftInput | null;
 }) {
   const assignableUsers = useMemo(
     () =>
@@ -7582,8 +7616,19 @@ function AssignTaskDialog({
 
   useEffect(() => {
     if (!open) return;
-    setAssignedToId(defaultAssigneeId);
-  }, [open, defaultAssigneeId]);
+    const nextAssignee = initialDraft?.assignedToId != null ? String(initialDraft.assignedToId) : defaultAssigneeId;
+    setTitle(initialDraft?.title ?? "");
+    setDescription(initialDraft?.description ?? "");
+    setAssignedToId(nextAssignee);
+    setDueDate(initialDraft?.dueDate ?? "");
+    setEstimatedMinutes(initialDraft?.estimatedMinutes ?? 30);
+    setUrgency(initialDraft?.urgency ?? "normal");
+    setVisibility(initialDraft?.visibility ?? "work");
+    setRecurrence(initialDraft?.recurrence ?? "none");
+    setReminderDaysBefore(initialDraft?.reminderDaysBefore ?? 0);
+    setTemplateId("");
+    setPositionProfileId(initialDraft?.positionProfileId ? String(initialDraft.positionProfileId) : "");
+  }, [open, defaultAssigneeId, initialDraft]);
 
   useEffect(() => {
     if (visibility === "personal" && positionProfileId) {
@@ -7663,9 +7708,11 @@ function AssignTaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-lg`}>
         <DialogHeader className={dialogHeaderClass}>
-          <DialogTitle>Manual task</DialogTitle>
+          <DialogTitle>{initialDraft ? "Review task" : "Manual task"}</DialogTitle>
           <DialogDescription>
-            Create a task directly when chat is not the fastest path.
+            {initialDraft
+              ? "Review the parsed task before it lands on the assignee's list."
+              : "Create a task directly when chat is not the fastest path."}
           </DialogDescription>
         </DialogHeader>
         <div className={dialogBodyClass}>
@@ -7887,7 +7934,7 @@ function AssignTaskDialog({
           </Button>
           <Button onClick={() => create.mutate()} disabled={!ready || create.isPending} data-testid="button-assign-submit">
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-            Create task
+            {initialDraft ? "Create reviewed task" : "Create task"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -9596,6 +9643,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [documentImportOpen, setDocumentImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
+  const [assignTaskDraft, setAssignTaskDraft] = useState<TaskDraftInput | null>(null);
   const [managerReportOpen, setManagerReportOpen] = useState(false);
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
@@ -10591,7 +10639,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       label: "Manual task",
       icon: UserPlus,
       primary: true,
-      onClick: () => setAssignTaskOpen(true),
+      onClick: () => {
+        setAssignTaskDraft(null);
+        setAssignTaskOpen(true);
+      },
       hint: "Open a form to create a task directly",
     },
     {
@@ -10937,7 +10988,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
           <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
-            <ChatPanel messages={data.messages} />
+            <ChatPanel
+              messages={data.messages}
+              onReviewTask={(draft) => {
+                setAssignTaskDraft(draft);
+                setAssignTaskOpen(true);
+              }}
+            />
           </div>
 
           {/* Work area — right */}
@@ -11077,11 +11134,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       />
       <AssignTaskDialog
         open={assignTaskOpen}
-        onOpenChange={setAssignTaskOpen}
+        onOpenChange={(open) => {
+          setAssignTaskOpen(open);
+          if (!open) setAssignTaskDraft(null);
+        }}
         users={data.users}
         currentUserId={data.currentUserId}
         taskTemplates={data.taskTemplates ?? []}
         positionProfiles={positionProfiles}
+        initialDraft={assignTaskDraft}
       />
       <Dialog open={managerReportOpen && canOpenManagerReports} onOpenChange={setManagerReportOpen}>
         <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>

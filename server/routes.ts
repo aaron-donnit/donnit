@@ -2184,6 +2184,34 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
   return `I assigned ${assigneeName} to ${action}${dueText}.${urgencyText}${visibilitySentence}`;
 }
 
+function toClientTaskReview(input: {
+  title: string;
+  description: string;
+  urgency: DonnitTask["urgency"];
+  dueDate: string | null;
+  estimatedMinutes: number;
+  assignedToId: string;
+  recurrence: DonnitTask["recurrence"];
+  reminderDaysBefore: number;
+  visibility: "work" | "personal" | "confidential";
+  positionProfileId?: string | null;
+  source: DonnitTask["source"];
+}) {
+  return {
+    title: input.title,
+    description: input.description,
+    urgency: input.urgency,
+    dueDate: input.dueDate,
+    estimatedMinutes: input.estimatedMinutes,
+    assignedToId: input.assignedToId,
+    recurrence: input.recurrence,
+    reminderDaysBefore: input.reminderDaysBefore,
+    visibility: input.visibility,
+    positionProfileId: input.visibility === "personal" ? null : input.positionProfileId ?? null,
+    source: input.source,
+  };
+}
+
 function buildPendingFromTaskInput(input: {
   title: string;
   description: string;
@@ -4612,34 +4640,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             return;
           }
 
-          const created = await store.createTask(orgId, {
-            title: merged.title,
-            description: merged.description,
-            status: merged.status as DonnitTask["status"],
-            urgency: merged.urgency,
-            due_date: merged.dueDate,
-            estimated_minutes: merged.estimatedMinutes,
-            assigned_to: merged.assignedToId,
-            assigned_by: merged.assignedById,
-            source: merged.source,
-            recurrence: merged.recurrence,
-            reminder_days_before: merged.reminderDaysBefore,
-            position_profile_id: merged.visibility === "personal" ? null : merged.positionProfileId ?? null,
-            visibility: merged.visibility,
-            visible_from: visibleFromForRecurringTask({
-              recurrence: merged.recurrence,
-              due_date: merged.dueDate,
-              reminder_days_before: merged.reminderDaysBefore,
-            }),
-          });
-          await applyTaskTemplateToTask(store, orgId, created, { description: merged.description });
           await clearPendingChatTask(store, orgId);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
-            content: chatTaskOutcome(created, members),
-            task_id: created.id,
+            content: "I prepared the task details. Review the settings, then create it so it lands on the assignee's list correctly.",
+            task_id: null,
           });
-          res.status(201).json({ task: toClientTask(created), assistant });
+          res.json({ assistant, reviewTask: toClientTaskReview(merged) });
           return;
           }
         }
@@ -4729,33 +4736,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.json({ assistant, pending: true });
           return;
         }
-        const created = await store.createTask(orgId, {
-          title: taskInput.title,
-          description: taskInput.description,
-          status: taskInput.status as DonnitTask["status"],
-          urgency: taskInput.urgency,
-          due_date: taskInput.dueDate,
-          estimated_minutes: taskInput.estimatedMinutes,
-          assigned_to: taskInput.assignedToId,
-          assigned_by: taskInput.assignedById,
-          source: taskInput.source,
-          recurrence: taskInput.recurrence,
-          reminder_days_before: taskInput.reminderDaysBefore,
-          position_profile_id: taskInput.visibility === "personal" ? null : profileResolution.positionProfileId,
-          visibility: taskInput.visibility ?? "work",
-          visible_from: visibleFromForRecurringTask({
-            recurrence: taskInput.recurrence,
-            due_date: taskInput.dueDate,
-            reminder_days_before: taskInput.reminderDaysBefore,
-          }),
-        });
-        await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
-          task_id: created.id,
+          content: "I prepared the task details. Review the settings, then create it so it lands on the assignee's list correctly.",
+          task_id: null,
         });
-        res.status(201).json({ task: toClientTask(created), assistant });
+        res.json({
+          assistant,
+          reviewTask: toClientTaskReview({
+            ...taskInput,
+            positionProfileId: profileResolution.positionProfileId,
+            visibility: taskInput.visibility ?? "work",
+          }),
+        });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
