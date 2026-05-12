@@ -1111,6 +1111,19 @@ function addDaysIso(date: string, days: number) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function addMonthsIso(date: string, months: number) {
+  const [yearText, monthText, dayText] = date.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return date;
+  const firstOfTarget = new Date(Date.UTC(year, month - 1 + months, 1));
+  const targetYear = firstOfTarget.getUTCFullYear();
+  const targetMonth = firstOfTarget.getUTCMonth();
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(targetYear, targetMonth, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
 function formatDateTimeLocal(date: string, minute: number) {
   const hours = Math.floor(minute / 60);
   const minutes = minute % 60;
@@ -1978,6 +1991,111 @@ async function enrichPositionProfileMemoryFromTask(input: {
     });
   } catch (error) {
     console.error("[donnit] position profile memory enrichment failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function nextRecurringDueDate(task: DonnitTask) {
+  if (!task.due_date || task.recurrence === "none") return null;
+  switch (task.recurrence) {
+    case "daily":
+      return addDaysIso(task.due_date, 1);
+    case "weekly":
+      return addDaysIso(task.due_date, 7);
+    case "monthly":
+      return addMonthsIso(task.due_date, 1);
+    case "quarterly":
+      return addMonthsIso(task.due_date, 3);
+    case "annual":
+      return addMonthsIso(task.due_date, 12);
+    default:
+      return null;
+  }
+}
+
+async function createNextRecurringOccurrenceFromTask(input: {
+  store: DonnitStore;
+  orgId: string;
+  task: DonnitTask;
+  actorId: string;
+}) {
+  const nextDueDate = nextRecurringDueDate(input.task);
+  if (!nextDueDate) return null;
+  try {
+    const existing = await input.store.listTasks(input.orgId);
+    const duplicate = existing.find((task) =>
+      task.id !== input.task.id &&
+      task.title === input.task.title &&
+      task.due_date === nextDueDate &&
+      task.recurrence === input.task.recurrence &&
+      task.status !== "completed" &&
+      ((task as { position_profile_id?: string | null }).position_profile_id ?? null) ===
+        ((input.task as { position_profile_id?: string | null }).position_profile_id ?? null),
+    );
+    if (duplicate) return duplicate;
+    const nextTask = await input.store.createTask(input.orgId, {
+      title: input.task.title,
+      description: "",
+      status: "open",
+      urgency: input.task.urgency,
+      due_date: nextDueDate,
+      due_time: input.task.due_time,
+      start_time: input.task.start_time,
+      end_time: input.task.end_time,
+      is_all_day: input.task.is_all_day,
+      estimated_minutes: input.task.estimated_minutes,
+      assigned_to: input.task.assigned_to,
+      assigned_by: input.task.assigned_by,
+      delegated_to: input.task.delegated_to,
+      collaborator_ids: input.task.collaborator_ids,
+      source: "automation",
+      recurrence: input.task.recurrence,
+      reminder_days_before: input.task.reminder_days_before,
+      position_profile_id: input.task.position_profile_id,
+      visibility: input.task.visibility,
+      visible_from: visibleFromForRecurringTask({
+        recurrence: input.task.recurrence,
+        due_date: nextDueDate,
+        reminder_days_before: input.task.reminder_days_before,
+      }),
+    });
+    try {
+      const subtasks = await input.store.listTaskSubtasks(input.orgId);
+      const sourceSubtasks = subtasks
+        .filter((subtask) => subtask.task_id === input.task.id)
+        .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+      for (const subtask of sourceSubtasks) {
+        await input.store.createTaskSubtask(input.orgId, {
+          task_id: nextTask.id,
+          title: subtask.title,
+          position: subtask.position,
+        });
+      }
+    } catch (error) {
+      console.error("[donnit] recurring subtask copy failed", error instanceof Error ? error.message : String(error));
+    }
+    await input.store.addEvent(input.orgId, {
+      task_id: input.task.id,
+      actor_id: input.actorId,
+      type: "recurring_next_created",
+      note: `Next ${input.task.recurrence} occurrence created for ${nextDueDate}.`,
+    });
+    await input.store.addEvent(input.orgId, {
+      task_id: nextTask.id,
+      actor_id: input.actorId,
+      type: "recurring_occurrence_created",
+      note: `Created from recurring task ${input.task.id}. Historical notes remain on the completed task and Position Profile.`,
+    });
+    await enrichPositionProfileMemoryFromTask({
+      store: input.store,
+      orgId: input.orgId,
+      task: nextTask,
+      eventType: "created",
+      note: `Next ${input.task.recurrence} occurrence created for ${nextDueDate}.`,
+    });
+    return nextTask;
+  } catch (error) {
+    console.error("[donnit] recurring occurrence creation failed", error instanceof Error ? error.message : String(error));
+    return null;
   }
 }
 
@@ -5696,6 +5814,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           eventType: taskCompleted ? "completed" : relationshipChanged ? "updated" : "updated",
           note: eventNote,
         });
+        if (taskCompleted && existing.status !== "completed") {
+          await createNextRecurringOccurrenceFromTask({
+            store,
+            orgId: updated.org_id,
+            task: updated,
+            actorId: auth.userId,
+          });
+        }
         res.json(toClientTask(updated));
         return;
       } catch (error) {
@@ -6000,6 +6126,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           eventType: memoryEventType,
           note: eventNote,
         });
+        if (action === "complete" && existing.status !== "completed") {
+          await createNextRecurringOccurrenceFromTask({
+            store,
+            orgId: updated.org_id,
+            task: updated,
+            actorId: auth.userId,
+          });
+        }
         res.json(toClientTask(updated));
         return;
       } catch (error) {
