@@ -1747,6 +1747,121 @@ async function applyTaskTemplateToTask(
   return { template, subtasks: createdSubtasks };
 }
 
+function compactMemoryText(value: string | null | undefined, max = 280) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function uniqueMemoryItems<T>(items: T[], keyFor: (item: T) => string, max = 20) {
+  const seen = new Set<string>();
+  const output: T[] = [];
+  for (const item of items) {
+    const key = keyFor(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+    if (output.length >= max) break;
+  }
+  return output;
+}
+
+async function enrichPositionProfileMemoryFromTask(input: {
+  store: DonnitStore;
+  orgId: string;
+  task: DonnitTask;
+  eventType: "created" | "updated" | "completed" | "note_added" | "accepted" | "denied" | "due_date_postponed";
+  note?: string;
+}) {
+  const profileId = (input.task as { position_profile_id?: string | null }).position_profile_id;
+  const visibility = (input.task as { visibility?: string }).visibility ?? "work";
+  if (!profileId || visibility === "personal") return;
+
+  try {
+    const adminClient = createSupabaseAdminClient();
+    const writeStore = adminClient ? new DonnitStore(adminClient, input.store.userId) : input.store;
+    const profiles = await writeStore.listPositionProfiles(input.orgId);
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    const previous = (profile.institutional_memory ?? {}) as Record<string, unknown>;
+    const existingRecent = Array.isArray(previous.recentTaskSignals) ? previous.recentTaskSignals as Array<Record<string, unknown>> : [];
+    const existingRecurring = Array.isArray(previous.recurringResponsibilities) ? previous.recurringResponsibilities as Array<Record<string, unknown>> : [];
+    const existingHowTo = Array.isArray(previous.howToNotes) ? previous.howToNotes as Array<Record<string, unknown>> : [];
+    const existingSources = typeof previous.sourceMix === "object" && previous.sourceMix !== null ? previous.sourceMix as Record<string, number> : {};
+    const existingStats = typeof previous.stats === "object" && previous.stats !== null ? previous.stats as Record<string, number> : {};
+    const capturedAt = new Date().toISOString();
+    const taskSignal = {
+      taskId: input.task.id,
+      title: input.task.title,
+      status: input.task.status,
+      urgency: input.task.urgency,
+      dueDate: input.task.due_date,
+      dueTime: input.task.due_time ?? input.task.start_time ?? null,
+      source: input.task.source,
+      recurrence: input.task.recurrence,
+      visibility,
+      eventType: input.eventType,
+      capturedAt,
+    };
+    const recurringSignal =
+      input.task.recurrence !== "none" || input.task.reminder_days_before > 0
+        ? {
+            taskId: input.task.id,
+            title: input.task.title,
+            cadence: input.task.recurrence,
+            dueDate: input.task.due_date,
+            showEarlyDays: input.task.reminder_days_before,
+            updatedAt: capturedAt,
+          }
+        : null;
+    const noteText = compactMemoryText(input.note || input.task.completion_notes || input.task.description, 500);
+    const howToSignal = noteText
+      ? {
+          taskId: input.task.id,
+          title: input.task.title,
+          note: noteText,
+          source: input.eventType,
+          capturedAt,
+        }
+      : null;
+    const recentTaskSignals = uniqueMemoryItems([taskSignal, ...existingRecent], (item) => `${item.taskId}:${item.eventType}`, 30);
+    const recurringResponsibilities = uniqueMemoryItems(
+      recurringSignal ? [recurringSignal, ...existingRecurring] : existingRecurring,
+      (item) => String(item.taskId || item.title),
+      25,
+    );
+    const howToNotes = uniqueMemoryItems(
+      howToSignal ? [howToSignal, ...existingHowTo] : existingHowTo,
+      (item) => `${item.taskId}:${item.note}`,
+      25,
+    );
+    const stats = {
+      ...existingStats,
+      taskSignals: (existingStats.taskSignals ?? 0) + 1,
+      completedTasks: (existingStats.completedTasks ?? 0) + (input.eventType === "completed" ? 1 : 0),
+      recurringTasks: recurringResponsibilities.length,
+    };
+    const nextMemory = {
+      ...previous,
+      stats,
+      sourceMix: {
+        ...existingSources,
+        [input.task.source]: (existingSources[input.task.source] ?? 0) + 1,
+      },
+      recentTaskSignals,
+      recurringResponsibilities,
+      howToNotes,
+      lastAutoUpdatedAt: capturedAt,
+    };
+    const riskScore = Math.min(100, Math.max(profile.risk_score ?? 0, recurringResponsibilities.length * 8 + howToNotes.length * 3));
+    await writeStore.updatePositionProfile(input.orgId, profile.id, {
+      institutional_memory: nextMemory,
+      risk_score: riskScore,
+      risk_summary: `${profile.title} memory updated from ${input.eventType.replace(/_/g, " ")}: ${input.task.title}.`,
+    });
+  } catch (error) {
+    console.error("[donnit] position profile memory enrichment failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function buildEmailTaskDescription(input: {
   subject: string;
   fromEmail: string;
@@ -4949,6 +5064,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             }),
           });
           await applyTaskTemplateToTask(store, orgId, created, { description: merged.description });
+          await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: merged.description });
           await clearPendingChatTask(store, orgId);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
@@ -5083,6 +5199,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }),
         });
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
+        await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
           content: `${chatTaskOutcome(created, members)}${created.status === "pending_acceptance" ? " They can accept or deny it from their workspace." : ""}`,
@@ -5314,6 +5431,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           templateId: data.templateId ?? null,
           description: data.description ?? "",
         });
+        await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: data.description ?? "" });
         res.status(201).json(toClientTask(created));
         return;
       } catch (error) {
@@ -5449,6 +5567,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           task_id: updated.id,
           actor_id: auth.userId,
           type: eventType,
+          note: eventNote,
+        });
+        await enrichPositionProfileMemoryFromTask({
+          store,
+          orgId: updated.org_id,
+          task: updated,
+          eventType: taskCompleted ? "completed" : relationshipChanged ? "updated" : "updated",
           note: eventNote,
         });
         res.json(toClientTask(updated));
@@ -5734,6 +5859,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           task_id: updated.id,
           actor_id: auth.userId,
           type: eventType,
+          note: eventNote,
+        });
+        const memoryEventType =
+          action === "complete"
+            ? "completed"
+            : action === "note"
+              ? "note_added"
+              : action === "postpone_day" || action === "postpone_week"
+                ? "due_date_postponed"
+                : action === "accept"
+                  ? "accepted"
+                  : action === "deny"
+                    ? "denied"
+                    : "updated";
+        await enrichPositionProfileMemoryFromTask({
+          store,
+          orgId: updated.org_id,
+          task: updated,
+          eventType: memoryEventType,
           note: eventNote,
         });
         res.json(toClientTask(updated));
@@ -6364,6 +6508,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         await applyTaskTemplateToTask(store, suggestion.org_id, task, {
           description: `${suggestion.subject} ${suggestion.preview} ${(suggestion.action_items ?? []).join(" ")} ${suggestion.body ?? ""}`,
+        });
+        await enrichPositionProfileMemoryFromTask({
+          store,
+          orgId: suggestion.org_id,
+          task,
+          eventType: "created",
+          note: `${suggestion.subject} ${suggestion.preview}`,
         });
         await store.addEvent(suggestion.org_id, {
           task_id: task.id,
