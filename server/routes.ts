@@ -720,6 +720,7 @@ function textMentionsAssignee(text: string, name?: string | null, email?: string
 }
 
 function findAssignee(message: string, users: User[]) {
+  if (!hasExplicitAssignmentIntent(message)) return users.find((user) => user.id === DEMO_USER_ID) ?? users[0];
   const text = message.toLowerCase();
   const explicit = users.find((user) => textMentionsAssignee(text, user.name, user.email));
   if (explicit) return explicit;
@@ -2108,9 +2109,11 @@ function parseChatTaskAuthenticated(
   selfId: string,
 ) {
   const text = message.toLowerCase();
-  const explicit = members.find((m) => {
-    return textMentionsAssignee(text, m.profile?.full_name, m.profile?.email);
-  });
+  const explicit = hasExplicitAssignmentIntent(message)
+    ? members.find((m) => {
+        return textMentionsAssignee(text, m.profile?.full_name, m.profile?.email);
+      })
+    : null;
   const assignee = explicit ?? members.find((m) => m.user_id === selfId) ?? members[0];
   const reminderDaysBefore = parseAnnualReminderDays(message);
   const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
@@ -4860,10 +4863,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
         );
         const fallbackInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
-        const explicitMentionedMember = members.find((member) =>
-          textMentionsAssignee(parsed.data.message.toLowerCase(), member.profile?.full_name, member.profile?.email),
-        );
-        const aiAssignee = ai
+        const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
+        const explicitMentionedMember = explicitAssignment
+          ? members.find((member) =>
+              textMentionsAssignee(parsed.data.message.toLowerCase(), member.profile?.full_name, member.profile?.email),
+            )
+          : null;
+        const aiAssignee = ai && explicitAssignment
           ? members.find((member) => {
               const candidate = matchAiAssignee(ai.assigneeHint, [
                 {
@@ -4893,7 +4899,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const taskInput = ai
           ? {
               title: resolvedTitle,
-              description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+              description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
               urgency: resolvedUrgency,
               dueDate: resolvedDueDate,
@@ -4984,7 +4990,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       users.map((user) => `${user.name} ${user.email}`),
     );
     const fallbackInput = parseChatTask(parsed.data.message, users);
-    const aiAssignee = matchAiAssignee(ai?.assigneeHint ?? null, users);
+    const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
+    const aiAssignee = explicitAssignment ? matchAiAssignee(ai?.assigneeHint ?? null, users) : null;
     const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId ?? DEMO_USER_ID;
     const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
     const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
@@ -5001,7 +5008,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const taskInput = ai
       ? {
           title: resolvedTitle,
-          description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+          description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
           urgency: resolvedUrgency,
           dueDate: resolvedDueDate,
