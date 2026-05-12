@@ -720,16 +720,16 @@
   .task-row {
     position: relative;
     display: flex;
-    gap: 0.875rem;
-    align-items: flex-start;
+    gap: 0.75rem;
+    align-items: center;
     background: hsl(var(--card));
     border: 1px solid hsl(var(--card-border));
-    border-left-width: 4px;
+    border-left-width: 2px;
     border-left-color: hsl(var(--card-border));
-    border-radius: 0.5rem;
-    padding: 14px;
+    border-radius: 0.375rem;
+    padding: 10px 12px;
     min-width: 0;
-    transition: opacity 200ms ease, background 160ms ease;
+    transition: opacity 180ms ease, background 140ms ease, border-color 140ms ease;
   }
 
   .task-row-openable {
@@ -737,7 +737,8 @@
   }
 
   .task-row-openable:hover {
-    background: hsl(var(--muted) / 0.36);
+    background: hsl(var(--muted) / 0.28);
+    border-color: hsl(var(--border));
   }
 
   .task-row.urgency-high {
@@ -823,7 +824,8 @@
   .panel {
     background: hsl(var(--card));
     border: 1px solid hsl(var(--card-border));
-    border-radius: 0.5rem;
+    border-radius: 0.625rem;
+    overflow: hidden;
   }
 
   .panel-pad {
@@ -832,11 +834,151 @@
 
   /* Dominant work column heading */
   .work-heading {
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 1.5rem;
-    letter-spacing: -0.01em;
+    font-family: var(--font-sans);
+    font-weight: 650;
+    font-size: 1rem;
+    letter-spacing: 0;
     line-height: 1.1;
+  }
+
+  .command-topbar {
+    min-height: 44px;
+  }
+
+  .command-search {
+    transition: border-color 140ms ease, background 140ms ease;
+  }
+
+  .command-search:hover {
+    border-color: hsl(var(--brand-green) / 0.45);
+    background: hsl(var(--card));
+  }
+
+  .home-hero {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px solid hsl(var(--border));
+    padding-bottom: 1rem;
+  }
+
+  .home-hero .greet {
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+  }
+
+  .status-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.625rem;
+    background: hsl(var(--card));
+  }
+
+  .status-strip > span {
+    min-height: 68px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.25rem;
+    border-right: 1px solid hsl(var(--border));
+    padding: 0.75rem 1rem;
+  }
+
+  .status-strip > span:last-child {
+    border-right: 0;
+  }
+
+  .status-strip .font-display {
+    font-family: var(--font-mono);
+    font-size: 1.35rem;
+  }
+
+  .command-chat-panel textarea {
+    border-radius: 0.5rem;
+  }
+
+  .composer-preview {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid hsl(var(--brand-green) / 0.25);
+    border-radius: 0.5rem;
+    background: hsl(var(--brand-green-pale) / 0.7);
+    padding: 0.55rem 0.7rem;
+  }
+
+  .composer-chip {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--muted) / 0.3);
+    padding: 0.25rem 0.45rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.6875rem;
+    line-height: 1;
+  }
+
+  .composer-chip.is-set {
+    border-color: hsl(var(--brand-green) / 0.32);
+    background: hsl(var(--brand-green-pale) / 0.75);
+    color: hsl(var(--foreground));
+  }
+
+  .position-profiles-shell {
+    background: hsl(var(--card));
+  }
+
+  .profile-list-grid {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .profile-item-card {
+    border-radius: 0.625rem;
+  }
+
+  .profile-item-card:hover {
+    transform: translateY(-1px);
+  }
+
+  .profile-detail-hero {
+    background:
+      linear-gradient(135deg, hsl(var(--brand-green) / 0.08), transparent 45%),
+      hsl(var(--card));
+  }
+
+  @media (max-width: 1023px) {
+    .home-hero {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .status-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .status-strip > span:nth-child(2n) {
+      border-right: 0;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .status-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .status-strip > span {
+      border-right: 0;
+      border-bottom: 1px solid hsl(var(--border));
+    }
+
+    .status-strip > span:last-child {
+      border-bottom: 0;
+    }
   }
 }
 

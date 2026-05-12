@@ -1423,6 +1423,49 @@ function defaultRepeatDetails(recurrence: string, dueDate: string) {
 function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
   const historyRef = useRef<HTMLDivElement | null>(null);
+  const parsedPreview = useMemo(() => {
+    const text = message.trim();
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    const urgency = /asap|urgent|critical|emergency|immediately|today|now/.test(lower)
+      ? "High"
+      : /not urgent|low priority|whenever|someday/.test(lower)
+        ? "Low"
+        : /important|high priority|priority/.test(lower)
+          ? "High"
+          : "Normal";
+    const due =
+      /\beow\b|end of week/.test(lower)
+        ? "End of week"
+        : /\beom\b|end of month/.test(lower)
+          ? "End of month"
+          : /\btomorrow\b/.test(lower)
+            ? "Tomorrow"
+            : /\btoday\b/.test(lower)
+              ? "Today"
+              : lower.match(/\b(mon|monday)\b/)
+                ? "Monday"
+                : lower.match(/\b(tue|tuesday)\b/)
+                  ? "Tuesday"
+                  : lower.match(/\b(wed|wednesday)\b/)
+                    ? "Wednesday"
+                    : lower.match(/\b(thu|thursday)\b/)
+                      ? "Thursday"
+                      : lower.match(/\b(fri|friday)\b/)
+                        ? "Friday"
+                        : "Due date";
+    const recurrence = /recurr|repeat|every|weekly|monthly|quarterly|annually|daily/.test(lower)
+      ? "Recurring"
+      : "One-time";
+    const assigneeMatch = text.match(/\b(?:assign|send|give)\s+([A-Z][a-z]+)\b/) ?? text.match(/@([A-Za-z]+)/);
+    const assignee = assigneeMatch?.[1] ?? (/for me|i need|myself|me to/i.test(text) ? "Me" : "Assignee");
+    const title = text
+      .replace(/@\w+/g, "")
+      .replace(/\b(assign|send|give)\s+[A-Z][a-z]+\s+(to|a task to)?/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return { title, urgency, due, recurrence, assignee };
+  }, [message]);
   const chat = useMutation({
     mutationFn: async () => apiRequest("POST", "/api/chat", { message }),
     onSuccess: async () => {
@@ -1445,7 +1488,7 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div
-      className="panel flex h-[min(360px,calc(100dvh-9rem))] min-h-[280px] flex-col lg:h-full lg:min-h-0"
+      className="panel command-chat-panel flex h-[min(420px,calc(100dvh-9rem))] min-h-[320px] flex-col lg:h-full lg:min-h-0"
       data-testid="panel-chat"
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -1490,6 +1533,13 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
         )}
       </div>
 
+      {parsedPreview && (
+        <div className="composer-preview mx-4 mb-3">
+          <span className="ui-label">Donnit understood</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{parsedPreview.title}</span>
+        </div>
+      )}
+
       <div className="shrink-0 border-t border-border px-4 py-3">
         <Label htmlFor="chat-message" className="ui-label mb-1.5 block">
           New entry
@@ -1509,6 +1559,18 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           }}
           data-testid="input-chat-message"
         />
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {[
+            ["Assignee", parsedPreview?.assignee],
+            ["Due", parsedPreview?.due],
+            ["Urgency", parsedPreview?.urgency],
+            ["Repeat", parsedPreview?.recurrence],
+          ].map(([label, value]) => (
+            <span key={label} className={`composer-chip ${parsedPreview && value !== label ? "is-set" : ""}`}>
+              {label}: {value ?? label}
+            </span>
+          ))}
+        </div>
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-muted-foreground">Enter to send · Shift + Enter for a new line</span>
           <Button
@@ -1949,6 +2011,16 @@ function AppShellNav({
   currentUser: User | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const groups = [
+    { label: "Work", ids: ["home", "tasks", "agenda", "inbox"] as AppView[] },
+    { label: "People", ids: ["team", "profiles", "reports"] as AppView[] },
+    { label: "Workspace", ids: ["admin", "settings"] as AppView[] },
+  ]
+    .map((group) => ({
+      ...group,
+      items: group.ids.map((id) => items.find((item) => item.id === id)).filter(Boolean) as typeof items,
+    }))
+    .filter((group) => group.items.length > 0);
   const renderButton = (item: (typeof items)[number], compact = false) => {
     const Icon = item.icon;
     const active = view === item.id;
@@ -1986,7 +2058,7 @@ function AppShellNav({
     <>
       <aside
         className={`hidden shrink-0 border-r border-border bg-muted/20 px-3 py-4 transition-[width] duration-200 ease-out lg:flex lg:min-h-screen lg:flex-col ${
-          expanded ? "w-64" : "w-[72px]"
+          expanded ? "w-[220px]" : "w-14"
         }`}
         onMouseEnter={() => setExpanded(true)}
         onMouseLeave={() => setExpanded(false)}
@@ -2014,8 +2086,17 @@ function AppShellNav({
             </button>
           )}
         </div>
-        <nav className="space-y-1" aria-label="Donnit navigation">
-          {items.map((item) => renderButton(item))}
+        <nav className="space-y-2" aria-label="Donnit navigation">
+          {groups.map((group, index) => (
+            <div key={group.label} className={index > 0 ? "border-t border-border pt-2" : ""}>
+              {expanded && (
+                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  {group.label}
+                </p>
+              )}
+              <div className="space-y-1">{group.items.map((item) => renderButton(item))}</div>
+            </div>
+          ))}
         </nav>
         {expanded ? (
           <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
@@ -5846,7 +5927,7 @@ function PositionProfilesPanel({
   );
 
   return (
-    <div className="rounded-md border border-border" data-testid="panel-position-profiles">
+    <div className="position-profiles-shell rounded-md border border-border" data-testid="panel-position-profiles">
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -5946,13 +6027,13 @@ function PositionProfilesPanel({
                 No role memory yet. Create a profile or let Donnit build one as tasks are assigned and completed.
               </div>
             ) : (
-              <div className="space-y-2" data-testid="position-profile-list">
+              <div className="profile-list-grid" data-testid="position-profile-list">
                 {repositoryProfiles.map((profile) => (
                   <button
                     key={profile.id}
                     type="button"
                     onClick={() => openProfile(profile.id)}
-                    className="w-full rounded-md border border-border bg-background px-3 py-3 text-left transition hover:border-brand-green/60 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    className="profile-item-card w-full rounded-md border border-border bg-background px-3 py-3 text-left transition hover:border-brand-green/60 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     data-testid={`position-profile-row-${profile.id}`}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -6035,7 +6116,7 @@ function PositionProfilesPanel({
 
             <div
               ref={assignmentRef}
-              className={`rounded-md border bg-background px-3 py-3 ${
+              className={`profile-detail-hero rounded-md border bg-background px-3 py-3 ${
                 assignmentFocus ? "border-brand-green shadow-sm shadow-brand-green/10" : "border-border"
               }`}
             >
@@ -11799,15 +11880,22 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           currentUser={currentUser}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
-            <div className="flex items-center justify-between gap-4 px-4 py-3 lg:px-6">
-              <div className="min-w-0">
-                <p className="ui-label">{todayLabel}</p>
-                <h1 className="display-font truncate text-lg font-bold text-foreground">
+          <header className="command-topbar sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
+            <div className="flex h-11 items-center justify-between gap-3 px-4 lg:px-6">
+              <div className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="font-medium text-muted-foreground">Donnit</span>
+                <span className="text-muted-foreground/60">/</span>
+                <h1 className="truncate text-sm font-semibold text-foreground">
                   {appViewTitle[appView]}
                 </h1>
+                <span className="hidden text-xs text-muted-foreground md:inline">{todayLabel}</span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="command-search hidden min-w-[260px] max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-muted/35 px-3 py-1.5 text-xs text-muted-foreground lg:flex">
+                <Search className="size-3.5" />
+                <span className="truncate">Search tasks, profiles, reports...</span>
+                <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">Ctrl K</span>
+              </div>
+              <div className="flex items-center gap-2">
                 <span
                   className="hidden text-xs text-muted-foreground md:inline"
                   data-testid="text-app-mode"
@@ -11850,23 +11938,31 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
           {/* Workspace: each major workflow gets its own view. */}
           {appView === "home" && (
-            <section className="mx-auto w-full max-w-[1600px] px-4 py-3 lg:px-6">
-              <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
-                <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
-                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                  <span className="ui-label">Today - {todayLabel}</span>
-                  <Stat label="Open" value={metrics.open} />
-                  <Stat label="Due today" value={metrics.dueToday} />
-                  <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-                  <Stat label="Approval queue" value={metrics.emailQueue} />
-                  <Stat label="Completed" value={metrics.completed} />
+            <section className="command-page mx-auto w-full max-w-[1600px] px-4 py-4 lg:px-6">
+              <div className="home-hero mb-4">
+                <div className="min-w-0">
+                  <h2 className="greet text-2xl font-semibold text-foreground">
+                    Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}
+                    {currentUser?.name ? `, ${currentUser.name.split(" ")[0]}` : ""}.
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Capture the loose work, review what changed, and keep today moving.
+                  </p>
                 </div>
+                <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
+              </div>
+              <div className="status-strip mb-4">
+                <Stat label="Open" value={metrics.open} />
+                <Stat label="Due today" value={metrics.dueToday} />
+                <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+                <Stat label="Approval queue" value={metrics.emailQueue} />
+                <Stat label="Completed" value={metrics.completed} />
               </div>
               <div className="grid gap-4 lg:grid-cols-12">
-                <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
+                <div className="order-2 lg:sticky lg:top-[4rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.25rem)] lg:self-start xl:col-span-4">
                   <ChatPanel messages={data.messages} />
                 </div>
-                <div className="order-1 lg:order-2 lg:col-span-8 xl:col-span-9">
+                <div className="order-1 lg:order-2 lg:col-span-8 xl:col-span-8">
                   <TaskList
                     tasks={scopedDisplayTasks}
                     users={data.users}
