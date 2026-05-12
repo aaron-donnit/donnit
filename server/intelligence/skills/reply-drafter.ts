@@ -21,6 +21,11 @@ const getSuggestionOutputSchema = z.object({
     action_items: z.array(z.string()),
   }),
   reply_scenario: z.string(),
+  source_signals: z.object({
+    contains_specific_time: z.boolean(),
+    contains_specific_date: z.boolean(),
+    recommended_reply_strategy: z.string(),
+  }),
 });
 
 export const replyDraftOutputSchema = z.object({
@@ -76,8 +81,33 @@ function suggestionOutputJsonSchema() {
         required: ["title", "due_date", "urgency", "action_items"],
       },
       reply_scenario: { type: "string" },
+      source_signals: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          contains_specific_time: { type: "boolean" },
+          contains_specific_date: { type: "boolean" },
+          recommended_reply_strategy: { type: "string" },
+        },
+        required: ["contains_specific_time", "contains_specific_date", "recommended_reply_strategy"],
+      },
     },
-    required: ["found", "source", "from", "subject", "source_body", "task", "reply_scenario"],
+    required: ["found", "source", "from", "subject", "source_body", "task", "reply_scenario", "source_signals"],
+  };
+}
+
+function schedulingSignals(text: string, scenario: string) {
+  const containsSpecificTime = /\b(noon|midnight|\d{1,2}(?::\d{2})?\s?(?:am|pm)|\d{1,2}:\d{2})\b/i.test(text);
+  const containsSpecificDate = /\b(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2})\b/i.test(text);
+  const hasConcreteMeetingTime = scenario === "scheduling" && containsSpecificTime && containsSpecificDate;
+  return {
+    contains_specific_time: containsSpecificTime,
+    contains_specific_date: containsSpecificDate,
+    recommended_reply_strategy: hasConcreteMeetingTime
+      ? "The sender proposed a specific meeting date and time. Confirm or acknowledge that time. Do not ask for availability."
+      : scenario === "scheduling"
+        ? "The sender wants to schedule, but no clear date and time was found. Ask for availability or a calendar link."
+        : "Respond to the sender's request directly.",
   };
 }
 
@@ -106,8 +136,15 @@ export function createReplyDrafterRegistry(input: {
           source_body: "",
           task: { title: "", due_date: null, urgency: "normal" as const, action_items: [] },
           reply_scenario: "missing",
+          source_signals: {
+            contains_specific_time: false,
+            contains_specific_date: false,
+            recommended_reply_strategy: "Source context is missing. Ask for the source details instead of drafting specifics.",
+          },
         };
       }
+      const scenario = input.replyScenario(suggestion);
+      const sourceText = `${suggestion.subject} ${suggestion.preview} ${suggestion.body}`;
       return {
         found: true,
         source: input.sourceFromSuggestion({
@@ -123,7 +160,8 @@ export function createReplyDrafterRegistry(input: {
           urgency: suggestion.urgency,
           action_items: suggestion.action_items ?? [],
         },
-        reply_scenario: input.replyScenario(suggestion),
+        reply_scenario: scenario,
+        source_signals: schedulingSignals(sourceText, scenario),
       };
     },
   });
@@ -178,7 +216,8 @@ export async function draftSuggestionReplyWithAgent(input: {
         "You must call get_email_suggestion_context before drafting.",
         "Write the reply as the Donnit user responding to the sender.",
         "Do not copy the inbound message or restate Donnit's internal task.",
-        "If the sender is scheduling, propose a practical scheduling next step and ask for availability or a calendar link.",
+        "For scheduling: if the tool says the sender proposed a specific date and time, acknowledge or confirm that exact proposed time and do not ask for availability.",
+        "For scheduling: only ask for availability or a calendar link when the source did not include a concrete proposed date and time.",
         "If the sender requests approval, say you will review and follow up with a decision or questions.",
         "If the sender sent a document, say you will review and send comments or next steps.",
         "Never invent dates, prices, approvals, attachments, legal conclusions, or calendar availability.",

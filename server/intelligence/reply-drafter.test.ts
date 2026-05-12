@@ -33,12 +33,12 @@ function mockStore(overrides: Partial<DonnitStore> = {}) {
       gmail_message_id: "gmail-1",
       gmail_thread_id: "thread-1",
       from_email: "Taylor <taylor@example.com>",
-      subject: "Can we schedule time?",
-      preview: "Taylor asked for a meeting.",
-      body: "Could we schedule 30 minutes next week to review the renewal?",
+      subject: "Board meeting tomorrow",
+      preview: "Taylor asked to schedule the board meeting tomorrow at noon.",
+      body: "Can you schedule the board meeting for tomorrow at noon?",
       received_at: null,
-      action_items: ["Schedule renewal meeting"],
-      suggested_title: "Schedule renewal meeting",
+      action_items: ["Schedule board meeting"],
+      suggested_title: "Schedule board meeting",
       suggested_due_date: null,
       urgency: "normal",
       status: "pending",
@@ -68,8 +68,8 @@ describe("reply drafter skill", () => {
       })
       .mockResolvedValueOnce({
         output_text: JSON.stringify({
-          message: "Hi Taylor,\n\nHappy to find time next week. Please send a few windows that work for you, or share a calendar link and I will grab a slot.\n\nBest,",
-          rationale: "The source asks to schedule a meeting, so the draft asks for availability without inventing times.",
+          message: "Hi Taylor,\n\nI have tomorrow at noon noted for the board meeting and will send the invite shortly.\n\nBest,",
+          rationale: "The source includes a concrete meeting time, so the reply confirms that time instead of asking for availability.",
         }),
         usage: { input_tokens: 160, output_tokens: 60, total_tokens: 220 },
       });
@@ -84,11 +84,12 @@ describe("reply drafter skill", () => {
       createResponse,
     });
 
-    expect(result.message).toContain("Hi Taylor");
+    expect(result.message).toContain("tomorrow at noon");
     expect(result.correlationId).toMatch(/^ai_/);
     expect(store.getEmailSuggestion).toHaveBeenCalledWith("suggestion-1");
     expect(store.__modelCalls).toHaveLength(2);
     expect(store.__toolCalls).toHaveLength(1);
+    expect((store.__toolCalls[0] as any).output_payload.source_signals.recommended_reply_strategy).toContain("Do not ask");
     expect(store.updateAiSession).toHaveBeenCalledWith("session-1", expect.objectContaining({ status: "completed" }));
   });
 

@@ -2759,6 +2759,7 @@ const suggestionPatchSchema = z.object({
 
 const suggestionReplySchema = z.object({
   message: z.string().trim().min(2).max(4000),
+  completeTask: z.boolean().optional(),
 });
 
 const suggestionDraftReplySchema = z.object({
@@ -3042,9 +3043,16 @@ function fallbackReplyDraft(
     "";
   const greeting = senderName ? `Hi ${senderName.split(/\s+/)[0]},` : "Hi,";
   const scenario = replyScenario(suggestion);
+  const sourceText = `${suggestion.subject} ${suggestion.suggested_title} ${suggestion.preview} ${suggestion.body ?? ""}`;
+  const hasConcreteMeetingTime =
+    scenario === "scheduling" &&
+    /\b(noon|midnight|\d{1,2}(?::\d{2})?\s?(?:am|pm)|\d{1,2}:\d{2})\b/i.test(sourceText) &&
+    /\b(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2})\b/i.test(sourceText);
   const bodyByScenario: Record<string, string> = {
     scheduling:
-      "Thanks for reaching out. I am happy to schedule time. Please send a few times that work for you, or share a calendar link and I will find a slot.",
+      hasConcreteMeetingTime
+        ? "Thanks for sending this over. I have the proposed meeting time noted and will follow up if anything changes."
+        : "Thanks for reaching out. I am happy to schedule time. Please send a few times that work for you, or share a calendar link and I will find a slot.",
     approval:
       "Thanks for sending this over. I will review the approval request and follow up with a decision or any questions.",
     document_review:
@@ -3059,6 +3067,33 @@ function fallbackReplyDraft(
       "Thanks for sending this. I will review it and follow up shortly.",
   };
   return [greeting, "", bodyByScenario[scenario] ?? bodyByScenario.general, "", "Best,"].join("\n");
+}
+
+async function completeRelatedTaskFromSuggestion(store: DonnitStore, suggestion: DonnitEmailSuggestion, actorId: string) {
+  const source = sourceFromSuggestion({
+    fromEmail: suggestion.from_email,
+    subject: suggestion.subject,
+  });
+  const normalizedTitle = suggestion.suggested_title.trim().toLowerCase();
+  const preferredAssignee = suggestion.assigned_to ?? actorId;
+  const candidates = (await store.listTasks(suggestion.org_id))
+    .filter((task) => task.source === source)
+    .filter((task) => task.title.trim().toLowerCase() === normalizedTitle)
+    .filter((task) => task.status !== "completed" && task.status !== "denied");
+  const task = candidates.find((item) => item.assigned_to === preferredAssignee) ?? candidates[0] ?? null;
+  if (!task) return null;
+  const updated = await store.updateTask(task.id, {
+    status: "completed",
+    completed_at: new Date().toISOString(),
+    completion_notes: "Completed after sending the source reply from Donnit.",
+  });
+  await store.addEvent(suggestion.org_id, {
+    task_id: task.id,
+    actor_id: actorId,
+    type: "completed",
+    note: "Marked done after sending the source reply from Donnit.",
+  }).catch(() => null);
+  return updated;
 }
 
 function draftLooksCopiedOrWeak(draft: string, suggestion: DonnitEmailSuggestion) {
@@ -6125,6 +6160,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
 
         const message = parsed.data.message;
+        const completeAfterSend = Boolean(parsed.data.completeTask);
         const source = sourceFromSuggestion({
           fromEmail: suggestion.from_email,
           subject: suggestion.subject,
@@ -6148,6 +6184,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               originalMessageId: suggestion.gmail_message_id ?? null,
             });
             if (sent.ok) {
+              const completedTask = completeAfterSend
+                ? await completeRelatedTaskFromSuggestion(store, suggestion, auth.userId).catch(() => null)
+                : null;
               await store.updateEmailSuggestion(suggestion.id, {
                 reply_draft: message,
                 reply_status: "sent",
@@ -6161,6 +6200,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
                 target: to,
                 subject,
                 providerMessageId: sent.providerMessageId,
+                completedTask: completedTask ? toClientTask(completedTask) : null,
                 message: "Email reply sent through Gmail.",
               });
               return;
@@ -6205,12 +6245,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (channel) {
             const sent = await sendSlackReply({ channel, message });
             if (sent.ok) {
+              const completedTask = completeAfterSend
+                ? await completeRelatedTaskFromSuggestion(store, suggestion, auth.userId).catch(() => null)
+                : null;
               res.json({
                 ok: true,
                 provider: "slack",
                 delivery: "sent",
                 target: channel,
                 providerMessageId: sent.providerMessageId,
+                completedTask: completedTask ? toClientTask(completedTask) : null,
                 message: "Slack reply sent.",
               });
               return;
@@ -6243,12 +6287,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (phone) {
             const sent = await sendSmsReply({ to: phone, message });
             if (sent.ok) {
+              const completedTask = completeAfterSend
+                ? await completeRelatedTaskFromSuggestion(store, suggestion, auth.userId).catch(() => null)
+                : null;
               res.json({
                 ok: true,
                 provider: "sms",
                 delivery: "sent",
                 target: phone,
                 providerMessageId: sent.providerMessageId,
+                completedTask: completedTask ? toClientTask(completedTask) : null,
                 message: "SMS reply sent.",
               });
               return;

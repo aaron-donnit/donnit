@@ -322,6 +322,7 @@ type SuggestionReplyResult = {
   body?: string;
   fallbackReason?: string;
   providerMessageId?: string | null;
+  completedTask?: Task | null;
 };
 
 type SuggestionDraftReplyResult = {
@@ -6348,6 +6349,7 @@ function SuggestionCard({
   const [replyBody, setReplyBody] = useState(suggestion.replyDraft ?? "");
   const [customSignature, setCustomSignature] = useState(readCustomEmailSignature);
   const [replySignatureId, setReplySignatureId] = useState(readPreferredEmailSignatureTemplate);
+  const [markDoneAfterSend, setMarkDoneAfterSend] = useState(false);
   const [draftTitle, setDraftTitle] = useState(suggestion.suggestedTitle);
   const [draftDueDate, setDraftDueDate] = useState(suggestion.suggestedDueDate ?? "");
   const [draftUrgency, setDraftUrgency] = useState<"low" | "normal" | "high" | "critical">(
@@ -6412,6 +6414,11 @@ function SuggestionCard({
     setCustomSignature(latestCustomSignature);
     const preferredTemplate = readPreferredEmailSignatureTemplate();
     setReplySignatureId(preferredTemplate);
+    const signature = resolveEmailSignature(preferredTemplate, latestCustomSignature);
+    const sourceDraft = suggestion.replyDraft ?? replyBody;
+    if (sourceDraft.trim()) {
+      setReplyBody(applyEmailSignature(sourceDraft, signature));
+    }
     setReplyOpen(true);
     if (!replyBody.trim() && !suggestion.replyDraft) {
       draftReply.mutate(undefined);
@@ -6431,6 +6438,7 @@ function SuggestionCard({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/suggestions/${suggestion.id}/reply`, {
         message: replyBody.trim(),
+        completeTask: markDoneAfterSend,
       });
       return (await res.json()) as SuggestionReplyResult;
     },
@@ -6448,9 +6456,12 @@ function SuggestionCard({
       if (result.delivery === "sent") {
         setReplyOpen(false);
         setReplyBody("");
+        setMarkDoneAfterSend(false);
         toast({
           title: "Reply sent",
-          description: result.message ?? "Donnit sent the response.",
+          description: result.completedTask
+            ? "Donnit sent the response and marked the related task done."
+            : result.message ?? "Donnit sent the response.",
         });
         return;
       }
@@ -6485,8 +6496,15 @@ function SuggestionCard({
       : "normal",
     );
     setDraftPreview(suggestion.preview ?? "");
-    setReplyBody(suggestion.replyDraft ?? "");
-  }, [suggestion.id, suggestion.preview, suggestion.replyDraft, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
+    const nextDraft = suggestion.replyDraft ?? "";
+    if (replyOpen) {
+      const latestCustomSignature = readCustomEmailSignature();
+      const signature = resolveEmailSignature(replySignatureId, latestCustomSignature);
+      setReplyBody(nextDraft ? applyEmailSignature(nextDraft, signature) : "");
+    } else {
+      setReplyBody(nextDraft);
+    }
+  }, [replyOpen, replySignatureId, suggestion.id, suggestion.preview, suggestion.replyDraft, suggestion.suggestedDueDate, suggestion.suggestedTitle, suggestion.urgency]);
   const saveEdits = () => {
     if (!onSaveEdits || draftTitle.trim().length < 2) return;
     onSaveEdits(suggestion.id, {
@@ -6757,6 +6775,21 @@ function SuggestionCard({
               maxLength={4000}
               data-testid={`input-suggestion-reply-${suggestion.id}`}
             />
+            <label className="mt-3 flex items-start gap-2 rounded-sm border border-border bg-muted/30 px-3 py-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                checked={markDoneAfterSend}
+                onChange={(event) => setMarkDoneAfterSend(event.target.checked)}
+                className="mt-0.5"
+                data-testid={`checkbox-suggestion-reply-complete-${suggestion.id}`}
+              />
+              <span>
+                <span className="block font-medium">Mark related task done after sending</span>
+                <span className="text-muted-foreground">
+                  Donnit will only complete the matching approved task after the reply is sent directly.
+                </span>
+              </span>
+            </label>
           </div>
           <DialogFooter className={dialogFooterClass}>
             <Button variant="outline" onClick={() => setReplyOpen(false)} disabled={sendReply.isPending}>
