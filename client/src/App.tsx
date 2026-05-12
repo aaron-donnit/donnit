@@ -17,6 +17,7 @@ import {
   CalendarPlus,
   Check,
   CheckCircle2,
+  ClipboardList,
   Clock3,
   ExternalLink,
   Eye,
@@ -24,6 +25,7 @@ import {
   GripVertical,
   HelpCircle,
   History,
+  Home,
   Inbox,
   KeyRound,
   List,
@@ -1304,6 +1306,8 @@ type MenuActionGroup = {
   actions: FunctionAction[];
 };
 
+type AppView = "home" | "tasks" | "agenda" | "inbox" | "team" | "profiles" | "reports" | "admin" | "settings";
+
 type SupportRailView = "today" | "agenda" | "team" | "reports";
 
 type OnboardingStep = {
@@ -1930,6 +1934,72 @@ function WorkspaceMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function AppShellNav({
+  view,
+  onViewChange,
+  items,
+  currentUser,
+}: {
+  view: AppView;
+  onViewChange: (view: AppView) => void;
+  items: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }>; count?: number; disabled?: boolean }>;
+  currentUser: User | null;
+}) {
+  const renderButton = (item: (typeof items)[number], compact = false) => {
+    const Icon = item.icon;
+    const active = view === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        disabled={item.disabled}
+        onClick={() => onViewChange(item.id)}
+        className={`flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+          active
+            ? "bg-brand-green text-white shadow-sm"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        } ${compact ? "h-9 shrink-0" : "w-full"} disabled:pointer-events-none disabled:opacity-40`}
+        data-testid={`button-app-nav-${item.id}`}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span className="truncate">{item.label}</span>
+        {item.count ? (
+          <span className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-white/20 text-white" : "bg-background text-muted-foreground"}`}>
+            {item.count > 99 ? "99+" : item.count}
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
+  return (
+    <>
+      <aside className="hidden w-64 shrink-0 border-r border-border bg-muted/20 px-3 py-4 lg:flex lg:min-h-screen lg:flex-col">
+        <div className="mb-5 px-1">
+          <Wordmark onClick={() => onViewChange("home")} />
+          <p className="mt-2 text-xs text-muted-foreground">Work continuity command center</p>
+        </div>
+        <nav className="space-y-1" aria-label="Donnit navigation">
+          {items.map((item) => renderButton(item))}
+        </nav>
+        <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">{currentUser?.name ?? "Donnit user"}</p>
+          <p className="mt-0.5 capitalize">{currentUser?.role ?? "member"}</p>
+        </div>
+      </aside>
+      <div className="border-b border-border bg-background px-3 py-2 lg:hidden">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <Wordmark onClick={() => onViewChange("home")} />
+          <span className="text-xs text-muted-foreground capitalize">{currentUser?.role ?? "member"}</span>
+        </div>
+        <nav className="flex gap-1 overflow-x-auto pb-1" aria-label="Donnit mobile navigation">
+          {items.map((item) => renderButton(item, true))}
+        </nav>
+      </div>
+    </>
   );
 }
 
@@ -9994,7 +10064,6 @@ function WorkspaceSettingsDialog({
   isScanningEmail: boolean;
 }) {
   const isAdmin = currentUser?.role === "owner" || currentUser?.role === "admin" || currentUser?.role === "manager";
-  const canManagePositionProfiles = canAdministerProfiles(currentUser);
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsGoogleReconnect = Boolean(oauthStatus?.requiresReconnect || oauthStatus?.calendarRequiresReconnect);
   const gmailReady = Boolean(oauthStatus?.connected && oauthStatus.gmailScopeConnected && !oauthStatus.tokenExpiresSoon);
@@ -10183,17 +10252,6 @@ function WorkspaceSettingsDialog({
               </div>
             </div>
           </div>
-
-          {canManagePositionProfiles && (
-            <PositionProfilesPanel
-              profiles={positionProfiles}
-              users={users}
-              currentUserId={currentUserId}
-              authenticated={authenticated}
-              subtasks={subtasks}
-              events={events}
-            />
-          )}
 
           {authenticated && (
             <TaskTemplatesPanel
@@ -10499,6 +10557,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }
   });
   const [mvpReadinessManuallyOpen, setMvpReadinessManuallyOpen] = useState(false);
+  const [appView, setAppView] = useState<AppView>("home");
   const [supportView, setSupportView] = useState<SupportRailView>("today");
   const [workspaceTaskScope, setWorkspaceTaskScope] = useState<"mine" | "team">("mine");
   const [selectedTeamViewUserId, setSelectedTeamViewUserId] = useState("");
@@ -11322,7 +11381,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       detail: "Show Slack messages becoming approval-ready task suggestions in the MVP story.",
       done: slackMvpReady,
       actionLabel: slackMvpReady ? "Ready" : "Setup",
-      onAction: () => setWorkspaceSettingsOpen(true),
+      onAction: () => openAppView("admin"),
     },
     {
       id: "approve-queue",
@@ -11349,7 +11408,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       detail: "Open Position Profiles and make sure recurring work has a home.",
       done: positionProfiles.some((profile) => profile.persisted || profile.currentIncompleteTasks.length > 0 || profile.recurringTasks.length > 0),
       actionLabel: "Open",
-      onAction: () => setWorkspaceSettingsOpen(true),
+      onAction: () => openAppView("profiles"),
     },
   ];
   const mvpReadinessSteps: OnboardingStep[] = [
@@ -11375,7 +11434,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       detail: "Slack is configured or represented with Slack-origin approval items.",
       done: slackMvpReady,
       actionLabel: slackMvpReady ? "Ready" : "Setup",
-      onAction: () => setWorkspaceSettingsOpen(true),
+      onAction: () => openAppView("admin"),
     },
     {
       id: "approvals",
@@ -11402,7 +11461,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       detail: "Position Profiles show current work, recurring responsibilities, and a handoff packet.",
       done: positionProfiles.some((profile) => profile.currentIncompleteTasks.length > 0 || profile.recurringTasks.length > 0 || profile.completedTasks.length > 0),
       actionLabel: "Profiles",
-      onAction: () => setWorkspaceSettingsOpen(true),
+      onAction: () => openAppView("profiles"),
     },
   ];
   const openOnboardingChecklist = () => {
@@ -11440,7 +11499,19 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       });
       return;
     }
-    setManagerReportOpen(true);
+    openAppView("reports");
+  };
+  const openAppView = (view: AppView) => {
+    setAppView(view);
+    if (view === "agenda") setSupportView("agenda");
+    if (view === "team") setSupportView("team");
+    if (view === "home") setSupportView("today");
+    setManagerReportOpen(false);
+    setWorkspaceSettingsOpen(false);
+    if (typeof window !== "undefined") {
+      window.location.hash = "/app";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   };
   const goHome = () => {
     setManualImportOpen(false);
@@ -11452,9 +11523,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setApprovalInboxOpen(false);
     setAgendaWorkOpen(false);
     setNotificationTaskId(null);
-    setSupportView("today");
-    window.location.hash = "/app";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    openAppView("home");
   };
   const addTaskActions: FunctionAction[] = [
     {
@@ -11536,7 +11605,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       label: slackMvpReady ? "Slack ready" : "Setup Slack",
       icon: Inbox,
       primary: !slackMvpReady,
-      onClick: () => setWorkspaceSettingsOpen(true),
+      onClick: () => openAppView("admin"),
       hint: slackMvpReady
         ? "Slack is included in the MVP approval workflow"
         : "Open settings to configure or test Slack ingestion",
@@ -11597,7 +11666,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             id: "position-profiles",
             label: "Position Profiles",
             icon: BriefcaseBusiness,
-            onClick: () => setWorkspaceSettingsOpen(true),
+            onClick: () => openAppView("profiles"),
             hint: "Open the admin repository of job-title profiles",
           } satisfies FunctionAction,
         ]
@@ -11606,7 +11675,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       id: "workspace-settings",
       label: "Workspace settings",
       icon: Settings,
-      onClick: () => setWorkspaceSettingsOpen(true),
+      onClick: () => openAppView("admin"),
       hint: "Admin, manager, integration, and role settings",
     },
   ];
@@ -11654,262 +11723,426 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     { label: "Admin", actions: adminActions },
     { label: "Workspace", actions: workspaceActions },
   ].filter((group) => group.actions.length > 0);
+  const appNavItems: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }>; count?: number; disabled?: boolean }> = [
+    { id: "home", label: "Home", icon: Home },
+    { id: "tasks", label: "Tasks", icon: ClipboardList, count: metrics.open },
+    { id: "agenda", label: "Agenda", icon: CalendarClock, count: approvedAgenda.length || orderedAgenda.length },
+    { id: "inbox", label: "Inbox", icon: Inbox, count: metrics.emailQueue + metrics.needsAcceptance },
+    { id: "team", label: "Team", icon: Users, disabled: !canOpenManagerReports },
+    { id: "profiles", label: "Position Profiles", icon: BriefcaseBusiness, count: positionProfiles.length, disabled: !canManagePositionProfiles },
+    { id: "reports", label: "Reports", icon: BarChart3, disabled: !canOpenManagerReports },
+    { id: "admin", label: "Admin", icon: ShieldCheck, disabled: !canOpenManagerReports },
+    { id: "settings", label: "Settings", icon: Settings },
+  ];
+  const appViewTitle: Record<AppView, string> = {
+    home: "Home",
+    tasks: "Tasks",
+    agenda: "Agenda",
+    inbox: "Inbox",
+    team: "Team",
+    profiles: "Position Profiles",
+    reports: "Reports",
+    admin: "Admin",
+    settings: "Settings",
+  };
 
   return (
     <main
       className="min-h-screen bg-background"
       data-testid="page-command-center"
     >
-      {/* Top bar with brand + status + theme + sign out */}
-      <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:px-6">
-          <div className="flex items-center gap-3">
-            <Wordmark onClick={goHome} />
-            <span className="hidden text-xs text-muted-foreground sm:inline">
-              Chat it in. Cross it off. Done.
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span
-              className="hidden text-xs text-muted-foreground md:inline"
-              data-testid="text-app-mode"
-            >
-              {auth.authenticated
-                ? `signed in as ${auth.email ?? "you"}`
-                : supabaseConfig.configured
-                ? "build preview"
-                : "demo (Supabase not configured)"}
-            </span>
-            <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
-            <NotificationCenter
-              notifications={notifications}
-              onReviewed={markNotificationsReviewed}
-              onOpenNotification={(notification) => {
-                if (notification.source === "approval") {
-                  setApprovalInboxOpen(true);
-                  return;
-                }
-                if (notification.taskId) {
-                  setNotificationTaskId(String(notification.taskId));
-                }
-              }}
-            />
-            <ThemeToggle />
-            {auth.authenticated && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => auth.signOut()}
-                data-testid="button-signout"
-              >
-                Sign out
-              </Button>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* Workspace: chat left, work area right (To-do dominant) */}
-      <section className="mx-auto max-w-[1600px] px-4 py-3 lg:px-6">
-        {showMvpReadiness && (
-          <MvpReadinessPanel
-            steps={mvpReadinessSteps}
-            onDismiss={dismissMvpReadiness}
-          />
-        )}
-        {showOnboarding && (
-          <OnboardingChecklist
-            steps={onboardingSteps}
-            onDismiss={() => dismissOnboarding(true)}
-          />
-        )}
-        {showDemoGuide && (
-          <DemoWorkspaceGuide
-            users={data.users}
-            tasks={data.tasks}
-            suggestions={data.suggestions}
-            positionProfiles={positionProfiles}
-            onOpenTeam={() => setSupportView("team")}
-            onOpenApprovals={() => setApprovalInboxOpen(true)}
-            onOpenReports={scrollToReporting}
-            onOpenPositionProfiles={() => setWorkspaceSettingsOpen(true)}
-            onDismiss={() => {
-              setDemoGuideDismissed(true);
-              setDemoGuideManuallyOpen(false);
-            }}
-          />
-        )}
-        <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
-          {canUseTeamWorkspaceView && (
-            <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/25 px-3 py-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-medium text-foreground">Workspace view</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {teamWorkspaceViewActive && selectedTeamViewUser
-                    ? `Viewing ${selectedTeamViewUser.name}'s tasks as read-only.`
-                    : "Viewing your assigned, delegated, and collaborative tasks."}
-                </p>
+      <div className="flex min-h-screen">
+        <AppShellNav
+          view={appView}
+          onViewChange={openAppView}
+          items={appNavItems}
+          currentUser={currentUser}
+        />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
+            <div className="flex items-center justify-between gap-4 px-4 py-3 lg:px-6">
+              <div className="min-w-0">
+                <p className="ui-label">{todayLabel}</p>
+                <h1 className="display-font truncate text-lg font-bold text-foreground">
+                  {appViewTitle[appView]}
+                </h1>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
-                  <button
-                    type="button"
-                    onClick={() => setWorkspaceTaskScope("mine")}
-                    className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
-                      !teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
-                    }`}
-                    data-testid="button-workspace-view-mine"
+              <div className="flex items-center gap-3">
+                <span
+                  className="hidden text-xs text-muted-foreground md:inline"
+                  data-testid="text-app-mode"
+                >
+                  {auth.authenticated
+                    ? `signed in as ${auth.email ?? "you"}`
+                    : supabaseConfig.configured
+                    ? "build preview"
+                    : "demo (Supabase not configured)"}
+                </span>
+                <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
+                <NotificationCenter
+                  notifications={notifications}
+                  onReviewed={markNotificationsReviewed}
+                  onOpenNotification={(notification) => {
+                    if (notification.source === "approval") {
+                      openAppView("inbox");
+                      setApprovalInboxOpen(true);
+                      return;
+                    }
+                    if (notification.taskId) {
+                      setNotificationTaskId(String(notification.taskId));
+                    }
+                  }}
+                />
+                <ThemeToggle />
+                {auth.authenticated && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => auth.signOut()}
+                    data-testid="button-signout"
                   >
-                    My Tasks
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWorkspaceTaskScope("team");
-                      setSupportView("team");
-                    }}
-                    className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
-                      teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
-                    }`}
-                    data-testid="button-workspace-view-team"
-                  >
-                    My Team
-                  </button>
-                </div>
-                {workspaceTaskScope === "team" && (
-                  <select
-                    value={String(selectedTeamViewUser?.id ?? "")}
-                    onChange={(event) => {
-                      setSelectedTeamViewUserId(event.target.value);
-                      setWorkspaceTaskScope("team");
-                      setSupportView("team");
-                    }}
-                    className="flex h-10 min-w-[220px] rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    data-testid="select-workspace-team-member"
-                  >
-                    {managerTeamMembers.map((user) => (
-                      <option key={String(user.id)} value={String(user.id)}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
+                    Sign out
+                  </Button>
                 )}
               </div>
             </div>
-          )}
-          <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
-          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-            <span className="ui-label">Today - {todayLabel}</span>
-            <Stat label="Open" value={metrics.open} />
-            <Stat label="Due today" value={metrics.dueToday} />
-            <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-            <Stat label="Approval queue" value={metrics.emailQueue} />
-            <Stat label="Completed" value={metrics.completed} />
-          </div>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-12">
-          {/* Chat — left */}
-          <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
-            <ChatPanel messages={data.messages} />
-          </div>
+          </header>
 
-          {/* Work area — right */}
-          <div className="order-1 lg:order-2 lg:col-span-8 xl:col-span-9">
-            <div className="grid gap-4 xl:grid-cols-12">
-              {/* Wide To-do column */}
-              <div className="xl:col-span-8">
-                <TaskList
-                  tasks={scopedDisplayTasks}
-                  users={data.users}
-                  subtasks={data.subtasks ?? []}
-                  events={data.events}
-                  authenticated={Boolean(data.authenticated)}
-                  positionProfiles={positionProfiles}
-                  currentUserId={activeTaskListUserId}
-                  viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
-                  onPinTask={(taskId) => setActiveWorkTask(taskId)}
-                  readOnly={teamWorkspaceViewActive}
-                />
+          {/* Workspace: each major workflow gets its own view. */}
+          {appView === "home" && (
+            <section className="mx-auto w-full max-w-[1600px] px-4 py-3 lg:px-6">
+              <div className="mb-4 flex flex-col gap-3 border-b border-border pb-3">
+                <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                  <span className="ui-label">Today - {todayLabel}</span>
+                  <Stat label="Open" value={metrics.open} />
+                  <Stat label="Due today" value={metrics.dueToday} />
+                  <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
+                  <Stat label="Approval queue" value={metrics.emailQueue} />
+                  <Stat label="Completed" value={metrics.completed} />
+                </div>
               </div>
-              {/* Focused command rail */}
-              <div className="xl:col-span-4">
-                <SupportRail
-                  view={supportView}
-                  onViewChange={setSupportView}
+              <div className="grid gap-4 lg:grid-cols-12">
+                <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
+                  <ChatPanel messages={data.messages} />
+                </div>
+                <div className="order-1 lg:order-2 lg:col-span-8 xl:col-span-9">
+                  <TaskList
+                    tasks={scopedDisplayTasks}
+                    users={data.users}
+                    subtasks={data.subtasks ?? []}
+                    events={data.events}
+                    authenticated={Boolean(data.authenticated)}
+                    positionProfiles={positionProfiles}
+                    currentUserId={activeTaskListUserId}
+                    viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
+                    onPinTask={(taskId) => setActiveWorkTask(taskId)}
+                    readOnly={teamWorkspaceViewActive}
+                  />
+                </div>
+              </div>
+            </section>
+          )}
+
+          {appView === "tasks" && (
+            <section className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-4 lg:px-6">
+              {canUseTeamWorkspaceView && (
+                <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Task view</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {teamWorkspaceViewActive && selectedTeamViewUser
+                        ? `Viewing ${selectedTeamViewUser.name}'s tasks as read-only.`
+                        : "Your assigned, delegated, and collaborative work."}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
+                      <button
+                        type="button"
+                        onClick={() => setWorkspaceTaskScope("mine")}
+                        className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
+                          !teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
+                        }`}
+                        data-testid="button-workspace-view-mine"
+                      >
+                        My Tasks
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWorkspaceTaskScope("team");
+                          openAppView("team");
+                        }}
+                        className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
+                          teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
+                        }`}
+                        data-testid="button-workspace-view-team"
+                      >
+                        My Team
+                      </button>
+                    </div>
+                    {workspaceTaskScope === "team" && (
+                      <select
+                        value={String(selectedTeamViewUser?.id ?? "")}
+                        onChange={(event) => {
+                          setSelectedTeamViewUserId(event.target.value);
+                          setWorkspaceTaskScope("team");
+                          openAppView("team");
+                        }}
+                        className="flex h-10 min-w-[220px] rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        data-testid="select-workspace-team-member"
+                      >
+                        {managerTeamMembers.map((user) => (
+                          <option key={String(user.id)} value={String(user.id)}>
+                            {user.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+              )}
+              <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
+              <TaskList
+                tasks={scopedDisplayTasks}
+                users={data.users}
+                subtasks={data.subtasks ?? []}
+                events={data.events}
+                authenticated={Boolean(data.authenticated)}
+                positionProfiles={positionProfiles}
+                currentUserId={activeTaskListUserId}
+                viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
+                onPinTask={(taskId) => setActiveWorkTask(taskId)}
+                readOnly={teamWorkspaceViewActive}
+              />
+            </section>
+          )}
+
+          {appView === "agenda" && (
+            <section className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-6">
+              <AgendaPanel
+                agenda={orderedAgenda}
+                excludedTaskIds={agendaExcludedTaskIds}
+                approved={agendaApproved}
+                preferences={agendaPreferences}
+                schedule={agendaSchedule}
+                onBuild={() => buildAgenda.mutate({})}
+                onToggleTask={(taskId) => {
+                  setAgendaApproved(false);
+                  setAgendaExcludedTaskIds((current) => {
+                    const next = new Set(current);
+                    const id = String(taskId);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    persistAgendaState(next, false, null, agendaPreferences, agendaTaskOrder);
+                    return next;
+                  });
+                }}
+                onMoveTask={(taskId, direction) => {
+                  setAgendaApproved(false);
+                  setAgendaTaskOrder((current) => {
+                    const ids = orderedAgenda.map((item) => String(item.taskId));
+                    const next = current.length > 0 ? [...current] : ids;
+                    for (const id of ids) {
+                      if (!next.includes(id)) next.push(id);
+                    }
+                    const index = next.indexOf(String(taskId));
+                    const target = direction === "up" ? index - 1 : index + 1;
+                    if (index < 0 || target < 0 || target >= next.length) return next;
+                    [next[index], next[target]] = [next[target], next[index]];
+                    persistAgendaState(agendaExcludedTaskIds, false, null, agendaPreferences, next);
+                    return next;
+                  });
+                }}
+                onPreferencesChange={(preferences) => {
+                  const next = normalizeAgendaPreferences(preferences);
+                  setAgendaApproved(false);
+                  setAgendaPreferences(next);
+                  persistAgendaState(agendaExcludedTaskIds, false, null, next, agendaTaskOrder);
+                }}
+                onScheduleChange={(schedule) => {
+                  const next = normalizeAgendaSchedule(schedule);
+                  setAgendaSchedule(next);
+                  persistAgendaState(
+                    agendaExcludedTaskIds,
+                    agendaApproved,
+                    data?.workspaceState?.agenda.approvedAt ?? null,
+                    agendaPreferences,
+                    agendaTaskOrder,
+                    next,
+                  );
+                }}
+                onApprove={() => {
+                  setAgendaApproved(true);
+                  persistAgendaState(agendaExcludedTaskIds, true, new Date().toISOString(), agendaPreferences, agendaTaskOrder);
+                  toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
+                }}
+                onOpenWork={() => setAgendaWorkOpen(true)}
+                onExport={() => setCalendarExportOpen(true)}
+                isBuilding={buildAgenda.isPending}
+              />
+            </section>
+          )}
+
+          {appView === "inbox" && (
+            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+              <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
+                <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
+                <div className="rounded-md border border-border bg-card p-4">
+                  <p className="text-sm font-medium text-foreground">Capture sources</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Review imported work, scan Gmail, or manually add source material when Donnit needs context.
+                  </p>
+                  <div className="mt-4 grid gap-2">
+                    <Button type="button" onClick={() => scan.mutate()} disabled={scan.isPending} data-testid="button-inbox-scan-email">
+                      {scan.isPending ? <Loader2 className="size-4 animate-spin" /> : <MailPlus className="size-4" />}
+                      Scan Gmail
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => setManualImportOpen(true)} data-testid="button-inbox-manual-import">
+                      <Inbox className="size-4" />
+                      Manual import
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => setDocumentImportOpen(true)} data-testid="button-inbox-document-import">
+                      <FileText className="size-4" />
+                      Upload document
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {appView === "team" && (
+            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+              {canOpenManagerReports ? (
+                <TeamViewPanel
                   tasks={displayTasks}
                   suggestions={data.suggestions}
+                  events={data.events}
                   users={data.users}
                   subtasks={data.subtasks ?? []}
                   authenticated={Boolean(data.authenticated)}
                   currentUserId={data.currentUserId}
-                  events={data.events}
-                  agenda={orderedAgenda}
-                  positionProfiles={positionProfiles}
-                  excludedTaskIds={agendaExcludedTaskIds}
-                  agendaApproved={agendaApproved}
-                  agendaPreferences={agendaPreferences}
-                  agendaSchedule={agendaSchedule}
-                  onOpenInbox={() => setApprovalInboxOpen(true)}
-                  onBuildAgenda={() => buildAgenda.mutate({})}
-                  onToggleAgendaTask={(taskId) => {
-                    setAgendaApproved(false);
-                    setAgendaExcludedTaskIds((current) => {
-                      const next = new Set(current);
-                      const id = String(taskId);
-                      if (next.has(id)) next.delete(id);
-                      else next.add(id);
-                      persistAgendaState(next, false, null, agendaPreferences, agendaTaskOrder);
-                      return next;
-                    });
-                  }}
-                  onMoveAgendaTask={(taskId, direction) => {
-                    setAgendaApproved(false);
-                    setAgendaTaskOrder((current) => {
-                      const ids = orderedAgenda.map((item) => String(item.taskId));
-                      const next = current.length > 0 ? [...current] : ids;
-                      for (const id of ids) {
-                        if (!next.includes(id)) next.push(id);
-                      }
-                      const index = next.indexOf(String(taskId));
-                      const target = direction === "up" ? index - 1 : index + 1;
-                      if (index < 0 || target < 0 || target >= next.length) return next;
-                      [next[index], next[target]] = [next[target], next[index]];
-                      persistAgendaState(agendaExcludedTaskIds, false, null, agendaPreferences, next);
-                      return next;
-                    });
-                  }}
-                  onUpdateAgendaPreferences={(preferences) => {
-                    const next = normalizeAgendaPreferences(preferences);
-                    setAgendaApproved(false);
-                    setAgendaPreferences(next);
-                    persistAgendaState(agendaExcludedTaskIds, false, null, next, agendaTaskOrder);
-                  }}
-                  onUpdateAgendaSchedule={(schedule) => {
-                    const next = normalizeAgendaSchedule(schedule);
-                    setAgendaSchedule(next);
-                    persistAgendaState(
-                      agendaExcludedTaskIds,
-                      agendaApproved,
-                      data?.workspaceState?.agenda.approvedAt ?? null,
-                      agendaPreferences,
-                      agendaTaskOrder,
-                      next,
-                    );
-                  }}
-                  onApproveAgenda={() => {
-                    setAgendaApproved(true);
-                    persistAgendaState(agendaExcludedTaskIds, true, new Date().toISOString(), agendaPreferences, agendaTaskOrder);
-                    toast({ title: "Agenda approved", description: "Approved agenda blocks are ready for calendar export." });
-                  }}
-                  onOpenAgendaWork={() => setAgendaWorkOpen(true)}
-                  onExportAgenda={() => setCalendarExportOpen(true)}
-                  isBuildingAgenda={buildAgenda.isPending}
                 />
+              ) : (
+                <RestrictedView title="Team is for managers" detail="Managers and admins can review team status, overdue work, and update requests here." />
+              )}
+            </section>
+          )}
+
+          {appView === "profiles" && (
+            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+              {canManagePositionProfiles ? (
+                <PositionProfilesPanel
+                  profiles={positionProfiles}
+                  users={data.users}
+                  currentUserId={data.currentUserId}
+                  authenticated={Boolean(data.authenticated)}
+                  subtasks={data.subtasks ?? []}
+                  events={data.events}
+                />
+              ) : (
+                <RestrictedView title="Position Profiles are admin-only" detail="Admins can assign, transfer, and inspect role memory from this workspace area." />
+              )}
+            </section>
+          )}
+
+          {appView === "reports" && (
+            <section className="mx-auto w-full max-w-[1400px] px-4 py-4 lg:px-6">
+              {canOpenManagerReports ? (
+                <div className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
+                  <ReportingPanel
+                    tasks={displayTasks}
+                    suggestions={data.suggestions}
+                    agenda={orderedAgenda}
+                    positionProfiles={positionProfiles}
+                    currentUserId={data.currentUserId}
+                  />
+                  <ActivityLogPanel
+                    events={data.events}
+                    tasks={displayTasks}
+                    users={data.users}
+                    subtasks={data.subtasks ?? []}
+                    authenticated={Boolean(data.authenticated)}
+                    compact
+                  />
+                </div>
+              ) : (
+                <RestrictedView title="Reports are for managers" detail="Manager and admin roles can see completion, source mix, and continuity signals." />
+              )}
+            </section>
+          )}
+
+          {appView === "admin" && (
+            <section className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 lg:px-6">
+              {canOpenManagerReports ? (
+                <>
+                  {showMvpReadiness && (
+                    <MvpReadinessPanel steps={mvpReadinessSteps} onDismiss={dismissMvpReadiness} />
+                  )}
+                  {showOnboarding && (
+                    <OnboardingChecklist steps={onboardingSteps} onDismiss={() => dismissOnboarding(true)} />
+                  )}
+                  {showDemoGuide && (
+                    <DemoWorkspaceGuide
+                      users={data.users}
+                      tasks={data.tasks}
+                      suggestions={data.suggestions}
+                      positionProfiles={positionProfiles}
+                      onOpenTeam={() => openAppView("team")}
+                      onOpenApprovals={() => {
+                        openAppView("inbox");
+                        setApprovalInboxOpen(true);
+                      }}
+                      onOpenReports={() => openAppView("reports")}
+                      onOpenPositionProfiles={() => openAppView("profiles")}
+                      onDismiss={() => {
+                        setDemoGuideDismissed(true);
+                        setDemoGuideManuallyOpen(false);
+                      }}
+                    />
+                  )}
+                  <div className="grid gap-4 xl:grid-cols-[1fr_.9fr]">
+                    {Boolean(data.authenticated) && <TaskTemplatesPanel templates={data.taskTemplates ?? []} authenticated={Boolean(data.authenticated)} />}
+                    <WorkspaceMembersPanel
+                      users={data.users}
+                      positionProfiles={positionProfiles}
+                      currentUser={currentUser}
+                      currentUserId={data.currentUserId}
+                    />
+                  </div>
+                  <div className="rounded-md border border-border bg-card p-4">
+                    <p className="text-sm font-medium text-foreground">Integrations and workspace controls</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Gmail, Slack, SMS, signatures, calendar export, and automation preferences live in workspace settings.
+                    </p>
+                    <Button className="mt-4" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid="button-admin-open-settings">
+                      <Settings className="size-4" />
+                      Open workspace settings
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <RestrictedView title="Admin is locked" detail="Only managers and admins can manage workspace setup, members, and operating controls." />
+              )}
+            </section>
+          )}
+
+          {appView === "settings" && (
+            <section className="mx-auto w-full max-w-3xl px-4 py-4 lg:px-6">
+              <div className="rounded-md border border-border bg-card p-5">
+                <p className="text-sm font-medium text-foreground">Settings</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Personal signature, connected tools, and workspace preferences are grouped here while deeper admin controls live in Admin.
+                </p>
+                <Button className="mt-4" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid="button-settings-open-workspace">
+                  <Settings className="size-4" />
+                  Open settings
+                </Button>
               </div>
-            </div>
-          </div>
-        </div>
-      </section>
+            </section>
+          )}
 
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
       <DocumentImportDialog
@@ -12047,6 +12280,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           </span>
         </div>
       </footer>
+        </div>
+      </div>
     </main>
   );
 }
@@ -12061,6 +12296,16 @@ function Stat({ label, value }: { label: string; value: number }) {
         {value}
       </span>
     </span>
+  );
+}
+
+function RestrictedView({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-border bg-muted/25 p-6 text-center" data-testid="panel-restricted-view">
+      <ShieldCheck className="mx-auto size-7 text-muted-foreground" />
+      <h2 className="mt-3 text-sm font-semibold text-foreground">{title}</h2>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{detail}</p>
+    </div>
   );
 }
 
