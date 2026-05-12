@@ -1581,6 +1581,125 @@ function visibleFromForRecurringTask(input: {
   return date.toISOString().slice(0, 10);
 }
 
+type PositionContinuityMode = "transfer" | "delegate";
+
+type PositionContinuityTaskSummary = {
+  id: string;
+  title: string;
+  dueDate: string | null;
+  urgency: DonnitTask["urgency"];
+  recurrence: DonnitTask["recurrence"];
+  visibleFrom: string | null;
+  visibility: DonnitTask["visibility"];
+  action: "transfer_owner" | "delegate_coverage" | "exclude_personal" | "review_unbound";
+  contextHidden: boolean;
+};
+
+function isContinuityActiveTask(task: DonnitTask) {
+  return task.status !== "completed" && task.status !== "denied";
+}
+
+function taskMatchesContinuityProfile(task: DonnitTask, input: { profileId: string | null; fromUserId: string; includeUnboundOwnerTasks?: boolean }) {
+  const taskProfileId = (task as { position_profile_id?: string | null }).position_profile_id ?? null;
+  if (input.profileId) {
+    return taskProfileId === input.profileId || (input.includeUnboundOwnerTasks === true && !taskProfileId && task.assigned_to === input.fromUserId);
+  }
+  return task.assigned_to === input.fromUserId;
+}
+
+function toContinuityTaskSummary(
+  task: DonnitTask,
+  action: PositionContinuityTaskSummary["action"],
+): PositionContinuityTaskSummary {
+  return {
+    id: task.id,
+    title: task.title,
+    dueDate: task.due_date,
+    urgency: task.urgency,
+    recurrence: task.recurrence,
+    visibleFrom: visibleFromForRecurringTask(task) ?? task.visible_from,
+    visibility: task.visibility,
+    action,
+    contextHidden: Boolean(task.description || task.completion_notes),
+  };
+}
+
+function buildPositionContinuityPlan(input: {
+  tasks: DonnitTask[];
+  profileId: string | null;
+  profileTitle: string;
+  fromUserId: string;
+  toUserId: string;
+  mode: PositionContinuityMode;
+  delegateUntil?: string | null;
+  includeUnboundOwnerTasks?: boolean;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const matchingTasks = input.tasks.filter((task) => taskMatchesContinuityProfile(task, input));
+  const activeMatching = matchingTasks.filter(isContinuityActiveTask);
+  const personalExcluded = activeMatching.filter((task) => task.visibility === "personal");
+  const tasksToMove = activeMatching.filter((task) => task.visibility !== "personal");
+  const historicalTasks = matchingTasks.filter((task) => task.status === "completed" && task.visibility !== "personal");
+  const unboundOwnerTasks = input.profileId && input.includeUnboundOwnerTasks !== true
+    ? input.tasks.filter(
+        (task) =>
+          isContinuityActiveTask(task) &&
+          task.assigned_to === input.fromUserId &&
+          !((task as { position_profile_id?: string | null }).position_profile_id ?? null) &&
+          task.visibility !== "personal",
+      )
+    : [];
+  const recurringTasks = tasksToMove.filter((task) => task.recurrence !== "none");
+  const futureRecurringTasks = recurringTasks.filter((task) => {
+    const visibleFrom = visibleFromForRecurringTask(task) ?? task.visible_from;
+    return Boolean(visibleFrom && visibleFrom > today);
+  });
+  const confidentialTasks = tasksToMove.filter((task) => task.visibility === "confidential");
+  const contextHiddenTasks = tasksToMove.filter((task) => task.description || task.completion_notes);
+  const warnings = [
+    personalExcluded.length > 0
+      ? `${personalExcluded.length} personal task${personalExcluded.length === 1 ? " is" : "s are"} excluded from the transition.`
+      : "",
+    confidentialTasks.length > 0
+      ? `${confidentialTasks.length} confidential task${confidentialTasks.length === 1 ? " is" : "s are"} included with restricted context.`
+      : "",
+    unboundOwnerTasks.length > 0
+      ? `${unboundOwnerTasks.length} active task${unboundOwnerTasks.length === 1 ? "" : "s"} owned by the outgoing user are not tied to this Position Profile and need review.`
+      : "",
+    futureRecurringTasks.length > 0
+      ? `${futureRecurringTasks.length} recurring task${futureRecurringTasks.length === 1 ? "" : "s"} will stay hidden until the show-early window.`
+      : "",
+  ].filter(Boolean);
+
+  return {
+    tasksToMove,
+    preview: {
+      profileId: input.profileId,
+      profileTitle: input.profileTitle,
+      mode: input.mode,
+      fromUserId: input.fromUserId,
+      toUserId: input.toUserId,
+      delegateUntil: input.delegateUntil ?? null,
+      summary: {
+        activeTasks: tasksToMove.length,
+        recurringTasks: recurringTasks.length,
+        futureRecurringTasks: futureRecurringTasks.length,
+        confidentialTasks: confidentialTasks.length,
+        personalTasksExcluded: personalExcluded.length,
+        historicalTasks: historicalTasks.length,
+        contextHiddenTasks: contextHiddenTasks.length,
+        unboundTasksNeedingReview: unboundOwnerTasks.length,
+      },
+      includedTasks: tasksToMove.slice(0, 12).map((task) =>
+        toContinuityTaskSummary(task, input.mode === "transfer" ? "transfer_owner" : "delegate_coverage"),
+      ),
+      excludedTasks: personalExcluded.slice(0, 8).map((task) => toContinuityTaskSummary(task, "exclude_personal")),
+      reviewTasks: unboundOwnerTasks.slice(0, 8).map((task) => toContinuityTaskSummary(task, "review_unbound")),
+      warnings,
+    },
+  };
+}
+
 function relationshipEventNote(input: {
   assignedToId: string | number;
   delegatedToId: string | number | null;
@@ -2883,6 +3002,7 @@ const positionProfileAssignSchema = z.object({
   mode: z.enum(["transfer", "delegate"]),
   delegateUntil: z.string().trim().max(20).nullable().optional(),
   profileTitle: z.string().trim().max(160).optional(),
+  includeUnboundOwnerTasks: z.boolean().optional(),
 });
 
 const positionProfileCreateSchema = z.object({
@@ -6147,6 +6267,49 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/position-profiles/assign/preview", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = positionProfileAssignSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Position profile assignment details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only admins can preview position profile assignments." });
+        return;
+      }
+      const fromUserId = String(parsed.data.fromUserId);
+      const toUserId = String(parsed.data.toUserId);
+      if (!members.some((member) => member.user_id === toUserId)) {
+        res.status(404).json({ message: "Target user is not a workspace member." });
+        return;
+      }
+      const tasks = (await store.listTasks(orgId)).filter((task) => canViewSensitiveTask(task, auth.userId, actor));
+      const plan = buildPositionContinuityPlan({
+        tasks,
+        profileId: parsed.data.profileId ?? null,
+        profileTitle: parsed.data.profileTitle ?? "Position Profile",
+        fromUserId,
+        toUserId,
+        mode: parsed.data.mode,
+        delegateUntil: parsed.data.delegateUntil ?? null,
+        includeUnboundOwnerTasks: parsed.data.includeUnboundOwnerTasks === true,
+      });
+      res.json({ ok: true, preview: plan.preview });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/position-profiles/assign", async (req: Request, res: Response) => {
     const parsed = positionProfileAssignSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -6182,20 +6345,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const tasks = (await store.listTasks(orgId)).filter((task) => canViewSensitiveTask(task, auth.userId, actor));
         const profileId = parsed.data.profileId ?? null;
-        const active = tasks.filter(
-          (task) =>
-            task.assigned_to === fromUserId &&
-            task.status !== "completed" &&
-            task.status !== "denied" &&
-            (!profileId || ((task as { position_profile_id?: string | null }).position_profile_id ?? null) === profileId) &&
-            ((task as { visibility?: string }).visibility ?? "work") !== "personal",
-        );
-        if (mode === "delegate" && active.some((task) => !hasTaskRelationshipColumns(task))) {
+        const plan = buildPositionContinuityPlan({
+          tasks,
+          profileId,
+          profileTitle,
+          fromUserId,
+          toUserId,
+          mode,
+          delegateUntil: delegateUntil ?? null,
+          includeUnboundOwnerTasks: parsed.data.includeUnboundOwnerTasks === true,
+        });
+        if (mode === "delegate" && plan.tasksToMove.some((task) => !hasTaskRelationshipColumns(task))) {
           res.status(409).json({ message: "Apply migration 0008 before delegating position profiles." });
           return;
         }
         let updatedCount = 0;
-        for (const task of active) {
+        for (const task of plan.tasksToMove) {
           const inheritedContext = {
             profileTitle,
             fromUserId,
@@ -6235,6 +6400,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         let profile = null;
         if (parsed.data.profileId) {
+          const existingProfile = (await store.listPositionProfiles(orgId)).find((item) => item.id === parsed.data.profileId);
+          const existingMemory = (existingProfile?.institutional_memory ?? {}) as Record<string, unknown>;
+          const previousAssignments = Array.isArray(existingMemory.continuityAssignments)
+            ? existingMemory.continuityAssignments as Array<Record<string, unknown>>
+            : [];
           const delegateUntilDate = delegateUntil || null;
           const updatedProfile = await writeStore.updatePositionProfile(orgId, parsed.data.profileId, {
             status: mode === "transfer" ? "active" : "covered",
@@ -6242,6 +6412,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             temporary_owner_id: mode === "transfer" ? null : toUserId,
             delegate_user_id: mode === "transfer" ? null : toUserId,
             delegate_until: mode === "transfer" ? null : delegateUntilDate,
+            institutional_memory: {
+              ...existingMemory,
+              continuityAssignments: [
+                {
+                  mode,
+                  fromUserId,
+                  toUserId,
+                  assignedAt: new Date().toISOString(),
+                  activeTasks: plan.preview.summary.activeTasks,
+                  recurringTasks: plan.preview.summary.recurringTasks,
+                  historicalTasks: plan.preview.summary.historicalTasks,
+                  confidentialTasks: plan.preview.summary.confidentialTasks,
+                  personalTasksExcluded: plan.preview.summary.personalTasksExcluded,
+                },
+                ...previousAssignments,
+              ].slice(0, 20),
+            },
             risk_summary:
               mode === "transfer"
                 ? `Transferred from ${fromUserId} to ${toUserId}. ${updatedCount} active task${updatedCount === 1 ? "" : "s"} moved.`
@@ -6260,7 +6447,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             });
           }
         }
-        res.json({ ok: true, mode, updated: updatedCount, profile });
+        res.json({ ok: true, mode, updated: updatedCount, profile, preview: plan.preview });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });

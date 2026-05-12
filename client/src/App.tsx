@@ -463,6 +463,41 @@ type PersistedPositionProfile = {
   updatedAt: string;
 };
 
+type ContinuityPreviewTask = {
+  id: string;
+  title: string;
+  dueDate: string | null;
+  urgency: string;
+  recurrence: string;
+  visibleFrom: string | null;
+  visibility: "work" | "personal" | "confidential";
+  action: "transfer_owner" | "delegate_coverage" | "exclude_personal" | "review_unbound";
+  contextHidden: boolean;
+};
+
+type ContinuityAssignmentPreview = {
+  profileId: string | null;
+  profileTitle: string;
+  mode: "transfer" | "delegate";
+  fromUserId: string;
+  toUserId: string;
+  delegateUntil: string | null;
+  summary: {
+    activeTasks: number;
+    recurringTasks: number;
+    futureRecurringTasks: number;
+    confidentialTasks: number;
+    personalTasksExcluded: number;
+    historicalTasks: number;
+    contextHiddenTasks: number;
+    unboundTasksNeedingReview: number;
+  };
+  includedTasks: ContinuityPreviewTask[];
+  excludedTasks: ContinuityPreviewTask[];
+  reviewTasks: ContinuityPreviewTask[];
+  warnings: string[];
+};
+
 type UrgencyClass = "urgency-high" | "urgency-medium" | "urgency-low";
 
 function urgencyClass(urgency: string): UrgencyClass {
@@ -5058,6 +5093,34 @@ function PositionProfilesPanel({
     status: ProfileAccessItem["status"];
   }>({ toolName: "", loginUrl: "", accountOwner: "", billingNotes: "", status: "needs_grant" });
   const assignmentRef = useRef<HTMLDivElement | null>(null);
+  const assignmentPreviewQuery = useQuery({
+    queryKey: [
+      "position-profile-assignment-preview",
+      selectedProfile?.id ?? "",
+      selectedProfile?.persisted ? selectedProfile.id : "",
+      selectedProfile ? String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id) : "",
+      targetUserId,
+      mode,
+      delegateUntil,
+      authenticated,
+    ],
+    enabled: Boolean(authenticated && assignmentDialogOpen && selectedProfile && targetUserId),
+    queryFn: async () => {
+      if (!selectedProfile || !targetUserId) throw new Error("Choose a profile and target user.");
+      const res = await apiRequest("POST", "/api/position-profiles/assign/preview", {
+        profileId: selectedProfile.persisted ? selectedProfile.id : undefined,
+        fromUserId: String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id),
+        toUserId: targetUserId,
+        mode,
+        delegateUntil: delegateUntil || null,
+        profileTitle: selectedProfile.title,
+        includeUnboundOwnerTasks: !selectedProfile.persisted,
+      });
+      const data = (await res.json()) as { ok: boolean; preview: ContinuityAssignmentPreview };
+      return data.preview;
+    },
+  });
+  const assignmentPreview = assignmentPreviewQuery.data ?? null;
 
   useEffect(() => {
     if (repositoryProfiles.length === 0) {
@@ -5313,16 +5376,25 @@ function PositionProfilesPanel({
         mode,
         delegateUntil: delegateUntil || null,
         profileTitle: selectedProfile.title,
+        includeUnboundOwnerTasks: !selectedProfile.persisted,
       });
-      return (await res.json()) as { ok: boolean; updated: number; mode: string; profile?: PersistedPositionProfile | null };
+      return (await res.json()) as {
+        ok: boolean;
+        updated: number;
+        mode: string;
+        profile?: PersistedPositionProfile | null;
+        preview?: ContinuityAssignmentPreview;
+      };
     },
     onSuccess: async (result) => {
       await invalidateWorkspace();
       if (result.profile?.id) setSelectedProfileId(result.profile.id);
       setAssignmentDialogOpen(false);
+      const recurring = result.preview?.summary.recurringTasks ?? 0;
+      const future = result.preview?.summary.futureRecurringTasks ?? 0;
       toast({
         title: mode === "transfer" ? "Profile transferred" : "Coverage delegated",
-        description: `${result.updated} active task${result.updated === 1 ? "" : "s"} updated for ${selectedProfile?.title ?? "the profile"}.`,
+        description: `${result.updated} active task${result.updated === 1 ? "" : "s"} updated. ${recurring} recurring ${recurring === 1 ? "item" : "items"} retained${future > 0 ? `, ${future} hidden until due window` : ""}.`,
       });
     },
     onError: (error: unknown) => {
@@ -6236,6 +6308,67 @@ function PositionProfilesPanel({
                   />
                 )}
               </div>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-profile-transfer-preview">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Continuity preview</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Donnit will move current role work, preserve recurring timing, and keep historical context available behind the task history toggle.
+                  </p>
+                </div>
+                {assignmentPreviewQuery.isFetching && <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />}
+              </div>
+              {assignmentPreviewQuery.isError ? (
+                <p className="mt-3 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  Could not load the preview. The transfer can still run, but review the profile after it finishes.
+                </p>
+              ) : assignmentPreview ? (
+                <div className="mt-3 space-y-3">
+                  <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                    <ReportMetric label="Will move" value={String(assignmentPreview.summary.activeTasks)} />
+                    <ReportMetric label="Recurring" value={String(assignmentPreview.summary.recurringTasks)} />
+                    <ReportMetric label="History" value={String(assignmentPreview.summary.historicalTasks)} />
+                    <ReportMetric label="Excluded" value={String(assignmentPreview.summary.personalTasksExcluded)} />
+                  </div>
+                  {assignmentPreview.includedTasks.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {assignmentPreview.includedTasks.slice(0, 4).map((task) => (
+                        <div key={task.id} className="flex items-start justify-between gap-3 rounded-md bg-muted/45 px-3 py-2 text-xs">
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium text-foreground">{task.title}</span>
+                            <span className="block truncate text-muted-foreground">
+                              {task.dueDate ?? "No date"} / {urgencyLabel(task.urgency)} / {task.recurrence === "none" ? "one-time" : task.recurrence}
+                              {task.visibleFrom ? ` / visible ${task.visibleFrom}` : ""}
+                            </span>
+                          </span>
+                          {task.visibility === "confidential" && (
+                            <span className="shrink-0 rounded-md bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                              Confidential
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                      No active profile tasks will move. Historical context will remain attached to the profile.
+                    </p>
+                  )}
+                  {assignmentPreview.warnings.length > 0 && (
+                    <ul className="space-y-1 text-xs leading-5 text-muted-foreground">
+                      {assignmentPreview.warnings.map((warning) => (
+                        <li key={warning} className="flex gap-2">
+                          <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-600" />
+                          <span>{warning}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-muted-foreground">Choose a target employee to preview the transition.</p>
+              )}
             </div>
             <div className="grid gap-3">
               {assignmentUsers.map((user) => {
