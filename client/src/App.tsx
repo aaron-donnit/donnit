@@ -1948,26 +1948,33 @@ function AppShellNav({
   items: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }>; count?: number; disabled?: boolean }>;
   currentUser: User | null;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const renderButton = (item: (typeof items)[number], compact = false) => {
     const Icon = item.icon;
     const active = view === item.id;
+    const showLabel = compact || expanded;
     return (
       <button
         key={item.id}
         type="button"
+        title={item.label}
         disabled={item.disabled}
         onClick={() => onViewChange(item.id)}
-        className={`flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+        className={`relative flex min-w-0 items-center rounded-md py-2 text-sm font-medium transition ${
           active
             ? "bg-brand-green text-white shadow-sm"
             : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        } ${compact ? "h-9 shrink-0" : "w-full"} disabled:pointer-events-none disabled:opacity-40`}
+        } ${compact ? "h-9 shrink-0 gap-2 px-3" : expanded ? "w-full gap-2 px-3" : "mx-auto size-10 justify-center px-0"} disabled:pointer-events-none disabled:opacity-40`}
         data-testid={`button-app-nav-${item.id}`}
       >
         <Icon className="size-4 shrink-0" />
-        <span className="truncate">{item.label}</span>
+        {showLabel && <span className="truncate">{item.label}</span>}
         {item.count ? (
-          <span className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-white/20 text-white" : "bg-background text-muted-foreground"}`}>
+          <span
+            className={`${
+              showLabel ? "ml-auto" : "absolute -right-1 -top-1"
+            } rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-white/20 text-white" : "bg-background text-muted-foreground"}`}
+          >
             {item.count > 99 ? "99+" : item.count}
           </span>
         ) : null}
@@ -1977,18 +1984,51 @@ function AppShellNav({
 
   return (
     <>
-      <aside className="hidden w-64 shrink-0 border-r border-border bg-muted/20 px-3 py-4 lg:flex lg:min-h-screen lg:flex-col">
-        <div className="mb-5 px-1">
-          <Wordmark onClick={() => onViewChange("home")} />
-          <p className="mt-2 text-xs text-muted-foreground">Work continuity command center</p>
+      <aside
+        className={`hidden shrink-0 border-r border-border bg-muted/20 px-3 py-4 transition-[width] duration-200 ease-out lg:flex lg:min-h-screen lg:flex-col ${
+          expanded ? "w-64" : "w-[72px]"
+        }`}
+        onMouseEnter={() => setExpanded(true)}
+        onMouseLeave={() => setExpanded(false)}
+        onFocus={() => setExpanded(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false);
+        }}
+        aria-label="Donnit navigation"
+      >
+        <div className={`mb-5 flex min-h-10 items-center ${expanded ? "justify-start px-1" : "justify-center"}`}>
+          {expanded ? (
+            <div>
+              <Wordmark onClick={() => onViewChange("home")} />
+              <p className="mt-2 text-xs text-muted-foreground">Work continuity command center</p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onViewChange("home")}
+              className="flex size-10 items-center justify-center rounded-md border border-brand-green/30 bg-brand-green text-white shadow-sm"
+              aria-label="Home"
+              data-testid="button-app-nav-logo-collapsed"
+            >
+              <Check className="size-5" />
+            </button>
+          )}
         </div>
         <nav className="space-y-1" aria-label="Donnit navigation">
           {items.map((item) => renderButton(item))}
         </nav>
-        <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-          <p className="font-medium text-foreground">{currentUser?.name ?? "Donnit user"}</p>
-          <p className="mt-0.5 capitalize">{currentUser?.role ?? "member"}</p>
-        </div>
+        {expanded ? (
+          <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">{currentUser?.name ?? "Donnit user"}</p>
+            <p className="mt-0.5 capitalize">{currentUser?.role ?? "member"}</p>
+          </div>
+        ) : (
+          <div className="mt-auto flex justify-center">
+            <div className="flex size-9 items-center justify-center rounded-full border border-border bg-background text-xs font-semibold text-foreground" title={currentUser?.name ?? "Donnit user"}>
+              {(currentUser?.name ?? "D").slice(0, 1).toUpperCase()}
+            </div>
+          </div>
+        )}
       </aside>
       <div className="border-b border-border bg-background px-3 py-2 lg:hidden">
         <div className="mb-2 flex items-center justify-between gap-3">
