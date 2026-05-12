@@ -289,20 +289,6 @@ type ChatMessage = {
   createdAt: string;
 };
 
-type TaskDraftInput = {
-  title?: string;
-  description?: string;
-  assignedToId?: Id;
-  dueDate?: string | null;
-  estimatedMinutes?: number;
-  urgency?: "low" | "normal" | "high" | "critical";
-  visibility?: "work" | "personal" | "confidential";
-  recurrence?: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
-  reminderDaysBefore?: number;
-  positionProfileId?: Id | null;
-  source?: string;
-};
-
 type EmailSuggestion = {
   id: Id;
   gmailMessageId?: string | null;
@@ -1190,19 +1176,46 @@ const dialogShellClass =
 const dialogHeaderClass = "shrink-0 border-b border-border px-5 py-4 pr-12";
 const dialogBodyClass = "min-h-0 flex-1 overflow-y-auto px-5 py-4";
 const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
+const REPEAT_DETAILS_PREFIX = "Repeat details:";
 
-function ChatPanel({ messages, onReviewTask }: { messages: ChatMessage[]; onReviewTask: (draft: TaskDraftInput) => void }) {
+function extractRepeatDetails(description: string) {
+  const match = description.match(/(?:^|\n)\s*Repeat details:\s*(.+)\s*$/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function stripRepeatDetails(description: string) {
+  return description.replace(/(?:\n{0,2})\s*Repeat details:\s*.+\s*$/i, "").trim();
+}
+
+function descriptionWithRepeatDetails(description: string, repeatDetails: string) {
+  const cleanDescription = stripRepeatDetails(description);
+  const cleanRepeat = repeatDetails.trim();
+  if (!cleanRepeat) return cleanDescription;
+  return `${cleanDescription}${cleanDescription ? "\n\n" : ""}${REPEAT_DETAILS_PREFIX} ${cleanRepeat}`;
+}
+
+function defaultRepeatDetails(recurrence: string, dueDate: string) {
+  if (recurrence === "none") return "";
+  const date = dueDate ? new Date(`${dueDate}T12:00:00`) : null;
+  const validDate = date && Number.isFinite(date.getTime()) ? date : null;
+  const weekday = validDate ? new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(validDate) : "selected weekday";
+  const monthDay = validDate ? new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(validDate) : "selected date";
+  if (recurrence === "daily") return "Every weekday";
+  if (recurrence === "weekly") return `Every ${weekday}`;
+  if (recurrence === "monthly") return `Monthly on the same day, or first ${weekday}`;
+  if (recurrence === "quarterly") return "Quarterly on the same schedule";
+  if (recurrence === "annual") return `Every year on ${monthDay}`;
+  return "";
+}
+
+function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
   const historyRef = useRef<HTMLDivElement | null>(null);
   const chat = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/chat", { message });
-      return (await res.json()) as { reviewTask?: TaskDraftInput };
-    },
-    onSuccess: async (result) => {
+    mutationFn: async () => apiRequest("POST", "/api/chat", { message }),
+    onSuccess: async () => {
       setMessage("");
       await invalidateWorkspace();
-      if (result.reviewTask) onReviewTask(result.reviewTask);
     },
     onError: (error: unknown) => {
       toast({
@@ -2469,6 +2482,7 @@ function TaskDetailDialog({
   const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
   const [visibility, setVisibility] = useState<"work" | "personal" | "confidential">("work");
   const [recurrence, setRecurrence] = useState("none");
+  const [repeatDetails, setRepeatDetails] = useState("");
   const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
   const [dueDate, setDueDate] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
@@ -2484,11 +2498,12 @@ function TaskDetailDialog({
   useEffect(() => {
     if (!task) return;
     setTitle(task.title);
-    setDescription(task.description);
+    setDescription(stripRepeatDetails(task.description));
     setStatus(task.status);
     setUrgency(task.urgency as "low" | "normal" | "high" | "critical");
     setVisibility(task.visibility ?? "work");
     setRecurrence(task.recurrence ?? "none");
+    setRepeatDetails(extractRepeatDetails(task.description));
     setReminderDaysBefore(task.reminderDaysBefore ?? 0);
     setDueDate(task.dueDate ?? "");
     setEstimatedMinutes(task.estimatedMinutes);
@@ -2528,7 +2543,7 @@ function TaskDetailDialog({
       if (readOnly) throw new Error("This team view is read-only.");
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
         title: title.trim(),
-        description: description.trim(),
+        description: descriptionWithRepeatDetails(description.trim(), recurrence === "none" ? "" : repeatDetails),
         status,
         urgency,
         visibility,
@@ -2789,8 +2804,8 @@ function TaskDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
-        <DialogHeader className="relative shrink-0 border-b border-border px-5 py-4 pr-16">
-          <div className="absolute right-4 top-4">
+        <DialogHeader className="relative shrink-0 border-b border-border px-5 py-4 pr-24">
+          <div className="absolute right-14 top-4">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -2834,7 +2849,11 @@ function TaskDetailDialog({
                     <select
                       id="task-detail-recurrence"
                       value={recurrence}
-                      onChange={(event) => setRecurrence(event.target.value)}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setRecurrence(next);
+                        setRepeatDetails((current) => current || defaultRepeatDetails(next, dueDate));
+                      }}
                       className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                       data-testid="select-task-detail-recurrence"
                     >
@@ -2846,6 +2865,18 @@ function TaskDetailDialog({
                       <option value="annual">Annual</option>
                     </select>
                   </div>
+                  {recurrence !== "none" && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="task-detail-repeat-pattern">Repeat pattern</Label>
+                      <Input
+                        id="task-detail-repeat-pattern"
+                        value={repeatDetails}
+                        onChange={(event) => setRepeatDetails(event.target.value)}
+                        placeholder="Every Tuesday, first Monday monthly, or May 15 every year"
+                        data-testid="input-task-detail-repeat-pattern"
+                      />
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <Label htmlFor="task-detail-reminder">Show early</Label>
                     <Input
@@ -7570,7 +7601,6 @@ function AssignTaskDialog({
   currentUserId,
   taskTemplates,
   positionProfiles = [],
-  initialDraft = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -7578,7 +7608,6 @@ function AssignTaskDialog({
   currentUserId: Id;
   taskTemplates: TaskTemplate[];
   positionProfiles?: PositionProfile[];
-  initialDraft?: TaskDraftInput | null;
 }) {
   const assignableUsers = useMemo(
     () =>
@@ -7600,6 +7629,7 @@ function AssignTaskDialog({
   const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
   const [visibility, setVisibility] = useState<"work" | "personal" | "confidential">("work");
   const [recurrence, setRecurrence] = useState<"none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual">("none");
+  const [repeatDetails, setRepeatDetails] = useState("");
   const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
   const [templateId, setTemplateId] = useState("");
   const [positionProfileId, setPositionProfileId] = useState("");
@@ -7616,19 +7646,19 @@ function AssignTaskDialog({
 
   useEffect(() => {
     if (!open) return;
-    const nextAssignee = initialDraft?.assignedToId != null ? String(initialDraft.assignedToId) : defaultAssigneeId;
-    setTitle(initialDraft?.title ?? "");
-    setDescription(initialDraft?.description ?? "");
-    setAssignedToId(nextAssignee);
-    setDueDate(initialDraft?.dueDate ?? "");
-    setEstimatedMinutes(initialDraft?.estimatedMinutes ?? 30);
-    setUrgency(initialDraft?.urgency ?? "normal");
-    setVisibility(initialDraft?.visibility ?? "work");
-    setRecurrence(initialDraft?.recurrence ?? "none");
-    setReminderDaysBefore(initialDraft?.reminderDaysBefore ?? 0);
+    setAssignedToId(defaultAssigneeId);
+    setTitle("");
+    setDescription("");
+    setDueDate("");
+    setEstimatedMinutes(30);
+    setUrgency("normal");
+    setVisibility("work");
+    setRecurrence("none");
+    setRepeatDetails("");
+    setReminderDaysBefore(0);
     setTemplateId("");
-    setPositionProfileId(initialDraft?.positionProfileId ? String(initialDraft.positionProfileId) : "");
-  }, [open, defaultAssigneeId, initialDraft]);
+    setPositionProfileId("");
+  }, [open, defaultAssigneeId]);
 
   useEffect(() => {
     if (visibility === "personal" && positionProfileId) {
@@ -7643,6 +7673,7 @@ function AssignTaskDialog({
     setUrgency(selectedTemplate.defaultUrgency);
     setEstimatedMinutes(selectedTemplate.defaultEstimatedMinutes);
     setRecurrence(selectedTemplate.defaultRecurrence);
+    setRepeatDetails((current) => current || defaultRepeatDetails(selectedTemplate.defaultRecurrence, dueDate));
     if (!description.trim() && selectedTemplate.description.trim()) {
       setDescription(selectedTemplate.description);
     }
@@ -7656,7 +7687,7 @@ function AssignTaskDialog({
       const isSelfAssigned = String(assignedTo) === String(assignedBy);
       const res = await apiRequest("POST", "/api/tasks", {
         title: title.trim(),
-        description: description.trim(),
+        description: descriptionWithRepeatDetails(description.trim(), recurrence === "none" ? "" : repeatDetails),
         status: isSelfAssigned ? "open" : "pending_acceptance",
         urgency,
         dueDate: dueDate || null,
@@ -7688,6 +7719,7 @@ function AssignTaskDialog({
       setUrgency("normal");
       setVisibility("work");
       setRecurrence("none");
+      setRepeatDetails("");
       setReminderDaysBefore(0);
       setTemplateId("");
       setPositionProfileId("");
@@ -7708,11 +7740,9 @@ function AssignTaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-lg`}>
         <DialogHeader className={dialogHeaderClass}>
-          <DialogTitle>{initialDraft ? "Review task" : "Manual task"}</DialogTitle>
+          <DialogTitle>Manual task</DialogTitle>
           <DialogDescription>
-            {initialDraft
-              ? "Review the parsed task before it lands on the assignee's list."
-              : "Create a task directly when chat is not the fastest path."}
+            Create a task directly when chat is not the fastest path.
           </DialogDescription>
         </DialogHeader>
         <div className={dialogBodyClass}>
@@ -7888,7 +7918,11 @@ function AssignTaskDialog({
               <select
                 id="assign-recurrence"
                 value={recurrence}
-                onChange={(event) => setRecurrence(event.target.value as "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual")}
+                onChange={(event) => {
+                  const next = event.target.value as "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+                  setRecurrence(next);
+                  setRepeatDetails((current) => current || defaultRepeatDetails(next, dueDate));
+                }}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 data-testid="select-assign-recurrence"
               >
@@ -7914,6 +7948,21 @@ function AssignTaskDialog({
               />
             </div>
           </div>
+          {recurrence !== "none" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-repeat-pattern">Repeat pattern</Label>
+              <Input
+                id="assign-repeat-pattern"
+                value={repeatDetails}
+                onChange={(event) => setRepeatDetails(event.target.value)}
+                placeholder="Every Tuesday, first Monday monthly, or May 15 every year"
+                data-testid="input-assign-repeat-pattern"
+              />
+              <p className="text-xs text-muted-foreground">
+                Keep this short. Donnit stores it with the task context for role continuity.
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="assign-description">Notes</Label>
             <Textarea
@@ -7934,7 +7983,7 @@ function AssignTaskDialog({
           </Button>
           <Button onClick={() => create.mutate()} disabled={!ready || create.isPending} data-testid="button-assign-submit">
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-            {initialDraft ? "Create reviewed task" : "Create task"}
+            Create task
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -9643,7 +9692,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [documentImportOpen, setDocumentImportOpen] = useState(false);
   const [assignTaskOpen, setAssignTaskOpen] = useState(false);
-  const [assignTaskDraft, setAssignTaskDraft] = useState<TaskDraftInput | null>(null);
   const [managerReportOpen, setManagerReportOpen] = useState(false);
   const [calendarExportOpen, setCalendarExportOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
@@ -10640,7 +10688,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       icon: UserPlus,
       primary: true,
       onClick: () => {
-        setAssignTaskDraft(null);
         setAssignTaskOpen(true);
       },
       hint: "Open a form to create a task directly",
@@ -10988,13 +11035,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         <div className="grid gap-4 lg:grid-cols-12">
           {/* Chat — left */}
           <div className="order-2 lg:sticky lg:top-[4.75rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.75rem)] lg:self-start xl:col-span-3">
-            <ChatPanel
-              messages={data.messages}
-              onReviewTask={(draft) => {
-                setAssignTaskDraft(draft);
-                setAssignTaskOpen(true);
-              }}
-            />
+            <ChatPanel messages={data.messages} />
           </div>
 
           {/* Work area — right */}
@@ -11134,15 +11175,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       />
       <AssignTaskDialog
         open={assignTaskOpen}
-        onOpenChange={(open) => {
-          setAssignTaskOpen(open);
-          if (!open) setAssignTaskDraft(null);
-        }}
+        onOpenChange={setAssignTaskOpen}
         users={data.users}
         currentUserId={data.currentUserId}
         taskTemplates={data.taskTemplates ?? []}
         positionProfiles={positionProfiles}
-        initialDraft={assignTaskDraft}
       />
       <Dialog open={managerReportOpen && canOpenManagerReports} onOpenChange={setManagerReportOpen}>
         <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
