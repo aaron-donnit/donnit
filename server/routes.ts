@@ -2332,7 +2332,23 @@ function pendingChatTaskExpired(task: PendingChatTask) {
 }
 
 function looksLikeNewTaskIntent(message: string) {
-  return /\b(assign|delegate|reassign|add|create|make|log|remind me|schedule|ask)\b/i.test(message);
+  return hasStandaloneTaskIntent(message);
+}
+
+function hasStandaloneTaskIntent(message: string) {
+  const text = message.toLowerCase().trim();
+  if (
+    /\b(assign|delegate|reassign|add|create|make|log|remind me|reminder|schedule|ask)\b/i.test(message)
+  ) {
+    return true;
+  }
+  if (/\b(?:i|we)\s+(?:need|have|want|plan|should|must)\s+to\b/.test(text)) return true;
+  if (/^(?:need|have|want|plan|should|must)\s+to\b/.test(text)) return true;
+  if (/\b(?:meeting|meet|appointment|call|interview|event)\b/.test(text) && Boolean(parseDueDate(message))) return true;
+  if (/\b(?:take|catch|ride|travel|go|drive|walk)\b.+\b(?:meeting|appointment|call|event)\b/.test(text)) {
+    return true;
+  }
+  return /\b(review|send|call|email|prepare|draft|complete|follow up|follow-up|reconcile|update|confirm|analyze|audit|submit|finish|meet)\b/i.test(message);
 }
 
 async function getPendingChatTaskFromMessages(store: DonnitStore, orgId: string) {
@@ -2356,6 +2372,7 @@ function looksLikeClarificationReply(message: string) {
   const text = message.toLowerCase().trim();
   const hasDueOrUrgency = Boolean(parseDueDate(message) || parseExplicitUrgency(message));
   if (!hasDueOrUrgency) return false;
+  if (hasStandaloneTaskIntent(message)) return false;
   return (
     /^(it|it'?s|this|that|due|by|on|urgent|high|medium|normal|low|critical)\b/.test(text) ||
     !/\b(assign|create|add|make|review|send|call|email|prepare|draft|complete|follow|reconcile|schedule|update|confirm|analyze|audit)\b/.test(text)
