@@ -41,6 +41,7 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Pin,
   Play,
   RefreshCcw,
   Repeat2,
@@ -2594,6 +2595,7 @@ function TaskList({
   viewLabel,
   onPinTask,
   readOnly = false,
+  inlineDetail = false,
 }: {
   tasks: Task[];
   users: User[];
@@ -2605,9 +2607,11 @@ function TaskList({
   viewLabel?: string;
   onPinTask?: (taskId: Id) => void;
   readOnly?: boolean;
+  inlineDetail?: boolean;
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [dialogTaskId, setDialogTaskId] = useState<string | null>(null);
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
   const [taskView, setTaskView] = useState<"active" | "mine" | "done" | "all">("active");
@@ -2622,6 +2626,7 @@ function TaskList({
     [locallyCompletedIds, tasks],
   );
   const selectedTask = visibleTasks.find((task) => String(task.id) === selectedTaskId) ?? null;
+  const dialogTask = visibleTasks.find((task) => String(task.id) === (dialogTaskId ?? selectedTaskId)) ?? null;
 
   useEffect(() => {
     setLocallyCompletedIds((current) => {
@@ -2750,6 +2755,10 @@ function TaskList({
     else groups.push({ ...group, tasks: [task] });
     return groups;
   }, []);
+  const inlineTask = selectedTask ?? open[0] ?? done[0] ?? null;
+  const inlineAssignee = inlineTask ? users.find((user) => String(user.id) === String(inlineTask.assignedToId)) : null;
+  const inlineTaskEvents = inlineTask ? events.filter((event) => String(event.taskId) === String(inlineTask.id)).slice(0, 4) : [];
+  const inlineTaskSubtasks = inlineTask ? subtasks.filter((subtask) => String(subtask.taskId) === String(inlineTask.id)) : [];
 
   return (
     <div className="panel flex flex-col" data-testid="panel-tasks">
@@ -2797,6 +2806,7 @@ function TaskList({
         </div>
       </div>
 
+      <div className={inlineDetail ? "tasks-split-layout" : ""}>
       <div className="flex flex-col gap-2 px-4 py-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 px-1 pt-1">
@@ -2887,17 +2897,121 @@ function TaskList({
           </>
         )}
       </div>
+      {inlineDetail && (
+        <aside className="task-inline-detail">
+          {inlineTask ? (
+            <>
+              <div className="task-inline-detail-head">
+                <div>
+                  <p className="ui-label">Task detail</p>
+                  <h3>{inlineTask.title}</h3>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onPinTask?.(inlineTask.id)}
+                  disabled={readOnly || !onPinTask}
+                  title="Pin to work window"
+                  data-testid={`button-inline-pin-task-${inlineTask.id}`}
+                >
+                  <Pin className="size-4" />
+                </Button>
+              </div>
+              <div className="task-inline-meta">
+                <span>Status</span>
+                <strong>{statusLabels[inlineTask.status] ?? inlineTask.status}</strong>
+                <span>Urgency</span>
+                <strong>{urgencyLabel(inlineTask.urgency)}</strong>
+                <span>Due</span>
+                <strong>{taskDueLabel(inlineTask)}</strong>
+                <span>Assignee</span>
+                <strong>{inlineAssignee?.name ?? "Unassigned"}</strong>
+                <span>Estimate</span>
+                <strong>{inlineTask.estimatedMinutes} min</strong>
+                {taskRepeatLabel(inlineTask) && (
+                  <>
+                    <span>Repeats</span>
+                    <strong>{taskRepeatLabel(inlineTask)}</strong>
+                  </>
+                )}
+              </div>
+              {inlineTask.description && (
+                <div className="task-inline-section">
+                  <p className="ui-label">Notes</p>
+                  <p>{stripRepeatDetails(inlineTask.description)}</p>
+                </div>
+              )}
+              <div className="task-inline-section">
+                <p className="ui-label">Subtasks {inlineTaskSubtasks.length > 0 ? `(${inlineTaskSubtasks.filter((item) => item.done).length}/${inlineTaskSubtasks.length})` : ""}</p>
+                {inlineTaskSubtasks.length > 0 ? (
+                  inlineTaskSubtasks.slice(0, 5).map((subtask) => (
+                    <div key={subtask.id} className="task-inline-list-item">
+                      <span className={`check-circle ${subtask.done ? "is-checked" : ""}`}>
+                        <Check className="size-3" />
+                      </span>
+                      <span>{subtask.title}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-muted-foreground">No subtasks yet.</p>
+                )}
+              </div>
+              <div className="task-inline-section">
+                <p className="ui-label">Activity</p>
+                {inlineTaskEvents.length > 0 ? (
+                  inlineTaskEvents.map((event) => (
+                    <div key={event.id} className="task-inline-list-item">
+                      <History className="size-3.5 text-muted-foreground" />
+                      <span>{activityEventLabel(event.type)}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-muted-foreground">No updates yet.</p>
+                )}
+              </div>
+              <div className="task-inline-actions">
+                <Button
+                  type="button"
+                  onClick={() => complete.mutate(inlineTask.id)}
+                  disabled={readOnly || inlineTask.status === "completed" || complete.isPending}
+                  data-testid={`button-inline-complete-task-${inlineTask.id}`}
+                >
+                  {complete.isPending && completingId === inlineTask.id ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                  Mark done
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDialogTaskId(String(inlineTask.id))}
+                  data-testid={`button-inline-open-task-${inlineTask.id}`}
+                >
+                  Open full task
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+              Select a task to see details.
+            </div>
+          )}
+        </aside>
+      )}
+      </div>
       <TaskDetailDialog
-        task={selectedTask}
+        task={inlineDetail ? dialogTask : selectedTask}
         users={users}
         subtasks={subtasks}
         events={events}
         authenticated={authenticated}
         positionProfiles={positionProfiles}
         readOnly={readOnly}
-        open={Boolean(selectedTask)}
+        open={inlineDetail ? Boolean(dialogTaskId) : Boolean(selectedTask)}
         onOpenChange={(open) => {
-          if (!open) setSelectedTaskId(null);
+          if (!open) {
+            if (inlineDetail) setDialogTaskId(null);
+            else setSelectedTaskId(null);
+          }
         }}
       />
     </div>
@@ -12051,6 +12165,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
                 onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 readOnly={teamWorkspaceViewActive}
+                inlineDetail
               />
             </section>
           )}
