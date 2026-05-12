@@ -92,1334 +92,88 @@ import {
 } from "@/components/ui/dropdown-menu";
 import NotFound from "@/pages/not-found";
 
-type Id = string | number;
-
-type AgendaItem = {
-  taskId: Id;
-  order: number;
-  title: string;
-  estimatedMinutes: number;
-  dueDate: string | null;
-  urgency: string;
-  startAt: string | null;
-  endAt: string | null;
-  timeZone: string;
-  scheduleStatus: "scheduled" | "unscheduled";
-};
-
-type AgendaPreference = "deep_work" | "communications" | "mixed";
-
-type AgendaPreferences = {
-  workdayStart: string;
-  workdayEnd: string;
-  lunchStart: string;
-  lunchMinutes: number;
-  meetingBufferMinutes: number;
-  minimumBlockMinutes: number;
-  focusBlockMinutes: number;
-  morningPreference: AgendaPreference;
-  afternoonPreference: AgendaPreference;
-};
-
-type AgendaSchedule = {
-  autoBuildEnabled: boolean;
-  buildTime: string;
-  lastAutoBuildDate: string | null;
-};
-
-const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
-  workdayStart: "09:00",
-  workdayEnd: "17:00",
-  lunchStart: "12:00",
-  lunchMinutes: 30,
-  meetingBufferMinutes: 10,
-  minimumBlockMinutes: 15,
-  focusBlockMinutes: 90,
-  morningPreference: "deep_work",
-  afternoonPreference: "communications",
-};
-
-const DEFAULT_AGENDA_SCHEDULE: AgendaSchedule = {
-  autoBuildEnabled: false,
-  buildTime: "07:30",
-  lastAutoBuildDate: null,
-};
-
-const CLIENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
-
-function localDateIso(value: Date | string = new Date(), timeZone = CLIENT_TIME_ZONE) {
-  const date = typeof value === "string" ? new Date(value) : value;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-function addLocalDays(days: number, baseDate = localDateIso()) {
-  const parsed = new Date(`${baseDate}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) return baseDate;
-  parsed.setUTCDate(parsed.getUTCDate() + days);
-  return parsed.toISOString().slice(0, 10);
-}
-
-function localTimeHHMM(value = new Date(), timeZone = CLIENT_TIME_ZONE) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(value);
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
-  return `${get("hour")}:${get("minute")}`;
-}
-
-function normalizeTimeLabel(value: string | null | undefined) {
-  if (!value) return null;
-  const match = value.match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  const suffix = hour >= 12 ? "PM" : "AM";
-  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${suffix}`;
-}
-
-function taskDueLabel(task: Pick<Task, "dueDate" | "dueTime" | "startTime" | "isAllDay">) {
-  if (!task.dueDate) return "No due date";
-  if (task.isAllDay) return `${task.dueDate} · all day`;
-  const time = normalizeTimeLabel(task.startTime ?? task.dueTime);
-  return time ? `${task.dueDate} · ${time}` : task.dueDate;
-}
-
-type User = {
-  id: Id;
-  name: string;
-  email: string;
-  role: string;
-  persona: string;
-  emailSignature?: string | null;
-  managerId: Id | null;
-  canAssign: boolean;
-  status?: "active" | "inactive";
-};
-
-type Task = {
-  id: Id;
-  title: string;
-  description: string;
-  status: string;
-  urgency: string;
-  dueDate: string | null;
-  dueTime: string | null;
-  startTime: string | null;
-  endTime: string | null;
-  isAllDay: boolean;
-  estimatedMinutes: number;
-  assignedToId: Id;
-  assignedById: Id;
-  delegatedToId: Id | null;
-  collaboratorIds: Id[];
-  source: string;
-  recurrence: string;
-  reminderDaysBefore: number;
-  positionProfileId: Id | null;
-  visibility: "work" | "personal" | "confidential";
-  visibleFrom: string | null;
-  acceptedAt: string | null;
-  deniedAt: string | null;
-  completedAt: string | null;
-  completionNotes: string;
-  createdAt: string;
-};
-
-type TaskEvent = {
-  id: Id;
-  taskId: Id;
-  actorId: Id;
-  type: string;
-  note: string;
-  createdAt: string;
-};
-
-type InheritedTaskContext = {
-  profileTitle: string;
-  fromUserId: Id | null;
-  toUserId: Id | null;
-  mode: string;
-  delegateUntil: string | null;
-  inheritedDescription: string;
-  inheritedCompletionNotes: string;
-  inheritedAt: string | null;
-};
-
-type LocalSubtask = {
-  id: string;
-  taskId: Id;
-  title: string;
-  done: boolean;
-  position: number;
-  completedAt: string | null;
-  createdAt: string;
-};
-
-type TaskSubtask = LocalSubtask;
-
-type TaskTemplateSubtask = {
-  id: Id;
-  templateId: Id;
-  title: string;
-  position: number;
-  createdAt: string;
-};
-
-type TaskTemplate = {
-  id: Id;
-  name: string;
-  description: string;
-  triggerPhrases: string[];
-  defaultUrgency: "low" | "normal" | "high" | "critical";
-  defaultEstimatedMinutes: number;
-  defaultRecurrence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
-  createdBy: Id | null;
-  createdAt: string;
-  updatedAt: string;
-  subtasks: TaskTemplateSubtask[];
-};
-
-type WorkspaceState = {
-  reviewedNotificationIds: string[];
-  agenda: {
-    excludedTaskIds: string[];
-    approved: boolean;
-    approvedAt: string | null;
-    preferences: AgendaPreferences;
-    taskOrder: string[];
-    schedule: AgendaSchedule;
-  };
-  onboarding: {
-    dismissed: boolean;
-    dismissedAt: string | null;
-  };
-};
-
-type ChatMessage = {
-  id: Id;
-  role: string;
-  content: string;
-  taskId: Id | null;
-  createdAt: string;
-};
-
-type EmailSuggestion = {
-  id: Id;
-  gmailMessageId?: string | null;
-  gmailThreadId?: string | null;
-  fromEmail: string;
-  subject: string;
-  preview: string;
-  body?: string;
-  receivedAt?: string | null;
-  actionItems?: string[];
-  suggestedTitle: string;
-  suggestedDueDate: string | null;
-  urgency: string;
-  status: string;
-  assignedToId: Id | null;
-  replySuggested?: boolean;
-  replyDraft?: string | null;
-  replyStatus?: "none" | "suggested" | "drafted" | "sent" | "copy" | "failed";
-  replySentAt?: string | null;
-  replyProviderMessageId?: string | null;
-  createdAt: string;
-};
-
-type SuggestionReplyResult = {
-  ok: boolean;
-  provider: "email" | "slack" | "sms" | "document";
-  delivery: "mailto" | "sent" | "copy";
-  target?: string;
-  subject?: string;
-  href?: string;
-  message?: string;
-  body?: string;
-  fallbackReason?: string;
-  providerMessageId?: string | null;
-  completedTask?: Task | null;
-};
-
-type SuggestionDraftReplyResult = {
-  ok: boolean;
-  draft: string;
-  rationale?: string;
-  suggestion?: EmailSuggestion | null;
-};
-
-type SuggestionPatch = {
-  suggestedTitle?: string;
-  suggestedDueDate?: string | null;
-  urgency?: "low" | "normal" | "high" | "critical";
-  preview?: string;
-};
-
-type Bootstrap = {
-  authenticated?: boolean;
-  bootstrapped?: boolean;
-  currentUserId: Id;
-  email?: string | null;
-  orgId?: string;
-  users: User[];
-  tasks: Task[];
-  events: TaskEvent[];
-  messages: ChatMessage[];
-  suggestions: EmailSuggestion[];
-  positionProfiles?: PersistedPositionProfile[];
-  subtasks?: TaskSubtask[];
-  taskTemplates?: TaskTemplate[];
-  workspaceState?: WorkspaceState;
-  agenda: AgendaItem[];
-  integrations: {
-    auth: { provider: string; status: string; projectId: string; schema?: string };
-    email: { provider: string; sourceId: string; status: string; mode: string };
-    slack?: {
-      provider: string;
-      status: string;
-      mode: string;
-      webhookConfigured?: boolean;
-      botConfigured?: boolean;
-      signingSecretConfigured?: boolean;
-      eventsConfigured?: boolean;
-      userMapping?: string;
-      unreadDelayMinutes?: number;
-    };
-    sms?: {
-      provider: string;
-      status: string;
-      mode: string;
-      webhookConfigured?: boolean;
-      signatureConfigured?: boolean;
-      accountConfigured?: boolean;
-      providerConfigured?: boolean;
-      fromNumberConfigured?: boolean;
-      inboundConfigured?: boolean;
-      routing?: string;
-    };
-    reminders: { channelOrder: string[]; reminderOrder: string[] };
-    app: { delivery: string; native: string };
-  };
-};
-
-type PositionProfile = {
-  id: string;
-  persisted: boolean;
-  title: string;
-  owner: User;
-  currentOwnerId: Id | null;
-  directManagerId: Id | null;
-  temporaryOwnerId: Id | null;
-  delegateUserId: Id | null;
-  delegateUntil: string | null;
-  status: "active" | "vacant" | "covered";
-  currentIncompleteTasks: Task[];
-  recurringTasks: Task[];
-  completedTasks: Task[];
-  criticalDates: string[];
-  howTo: string[];
-  tools: string[];
-  stakeholders: string[];
-  accessItems: ProfileAccessItem[];
-  institutionalMemory: Record<string, unknown>;
-  riskScore: number;
-  riskLevel: "low" | "medium" | "high";
-  riskReasons: string[];
-  transitionChecklist: string[];
-  lastUpdatedAt: string | null;
-};
-
-type ProfileAccessItem = {
-  id: string;
-  toolName: string;
-  loginUrl: string;
-  accountOwner: string;
-  billingNotes: string;
-  status: "active" | "needs_grant" | "needs_reset" | "remove_access" | "pending";
-  updatedAt: string;
-};
-
-type PersistedPositionProfile = {
-  id: string;
-  title: string;
-  status: "active" | "vacant" | "covered";
-  currentOwnerId: Id | null;
-  directManagerId: Id | null;
-  temporaryOwnerId: Id | null;
-  delegateUserId: Id | null;
-  delegateUntil: string | null;
-  autoUpdateRules: Record<string, unknown>;
-  institutionalMemory: Record<string, unknown>;
-  riskScore: number;
-  riskSummary: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type ContinuityPreviewTask = {
-  id: string;
-  title: string;
-  dueDate: string | null;
-  urgency: string;
-  recurrence: string;
-  visibleFrom: string | null;
-  visibility: "work" | "personal" | "confidential";
-  action: "transfer_owner" | "delegate_coverage" | "exclude_personal" | "review_unbound";
-  contextHidden: boolean;
-};
-
-type ContinuityAssignmentPreview = {
-  profileId: string | null;
-  profileTitle: string;
-  mode: "transfer" | "delegate";
-  fromUserId: string;
-  toUserId: string;
-  delegateUntil: string | null;
-  summary: {
-    activeTasks: number;
-    recurringTasks: number;
-    futureRecurringTasks: number;
-    confidentialTasks: number;
-    personalTasksExcluded: number;
-    historicalTasks: number;
-    contextHiddenTasks: number;
-    unboundTasksNeedingReview: number;
-  };
-  includedTasks: ContinuityPreviewTask[];
-  excludedTasks: ContinuityPreviewTask[];
-  reviewTasks: ContinuityPreviewTask[];
-  warnings: string[];
-};
-
-type UrgencyClass = "urgency-high" | "urgency-medium" | "urgency-low";
-
-function urgencyClass(urgency: string): UrgencyClass {
-  if (urgency === "critical" || urgency === "high") return "urgency-high";
-  if (urgency === "normal" || urgency === "medium") return "urgency-medium";
-  return "urgency-low";
-}
-
-function urgencyLabel(urgency: string) {
-  if (urgency === "critical") return "Overdue";
-  if (urgency === "high") return "High";
-  if (urgency === "normal" || urgency === "medium") return "Medium";
-  return "Low";
-}
-
-const statusLabels: Record<string, string> = {
-  open: "Open",
-  pending_acceptance: "Needs acceptance",
-  accepted: "Accepted",
-  denied: "Denied",
-  completed: "Done",
-};
-
-function useBootstrap() {
-  return useQuery<Bootstrap>({ queryKey: ["/api/bootstrap"] });
-}
-
-function invalidateWorkspace() {
-  return queryClient.invalidateQueries({ queryKey: ["/api/bootstrap"] });
-}
-
-function sortSubtasks(subtasks: TaskSubtask[]) {
-  return [...subtasks].sort((a, b) => {
-    if (a.position !== b.position) return a.position - b.position;
-    return a.createdAt.localeCompare(b.createdAt);
-  });
-}
-
-function normalizeLocalSubtasks(taskId: Id, value: unknown): LocalSubtask[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item, index): LocalSubtask | null => {
-      if (!item || typeof item !== "object") return null;
-      const record = item as Record<string, unknown>;
-      const id = typeof record.id === "string" ? record.id : `subtask-${Date.now()}-${index}`;
-      const title = typeof record.title === "string" ? record.title.trim() : "";
-      if (!title) return null;
-      const done = record.done === true;
-      return {
-        id,
-        taskId,
-        title,
-        done,
-        position: typeof record.position === "number" ? record.position : index,
-        completedAt: typeof record.completedAt === "string" ? record.completedAt : null,
-        createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
-      };
-    })
-    .filter((item): item is LocalSubtask => item !== null);
-}
-
-function apiErrorMessage(error: unknown, fallback: string) {
-  const raw = error instanceof Error ? error.message : String(error ?? "");
-  const sep = raw.indexOf(": ");
-  if (sep > -1) {
-    try {
-      const parsed = JSON.parse(raw.slice(sep + 2)) as { message?: unknown };
-      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
-    } catch {
-      // Keep the raw message below.
-    }
-  }
-  return raw || fallback;
-}
-
-function parseInheritedTaskContext(events: TaskEvent[], taskId: Id): InheritedTaskContext | null {
-  const event = events.find((item) => (
-    String(item.taskId) === String(taskId) &&
-    (item.type === "position_profile_transferred" || item.type === "position_profile_delegated")
-  ));
-  if (!event) return null;
-  try {
-    const parsed = JSON.parse(event.note) as Partial<InheritedTaskContext>;
-    return {
-      profileTitle: typeof parsed.profileTitle === "string" && parsed.profileTitle.trim() ? parsed.profileTitle : "Position Profile",
-      fromUserId: parsed.fromUserId ?? null,
-      toUserId: parsed.toUserId ?? null,
-      mode: typeof parsed.mode === "string" ? parsed.mode : event.type.replace("position_profile_", ""),
-      delegateUntil: typeof parsed.delegateUntil === "string" ? parsed.delegateUntil : null,
-      inheritedDescription: typeof parsed.inheritedDescription === "string" ? parsed.inheritedDescription : "",
-      inheritedCompletionNotes: typeof parsed.inheritedCompletionNotes === "string" ? parsed.inheritedCompletionNotes : "",
-      inheritedAt: typeof parsed.inheritedAt === "string" ? parsed.inheritedAt : event.createdAt,
-    };
-  } catch {
-    return {
-      profileTitle: "Position Profile",
-      fromUserId: null,
-      toUserId: null,
-      mode: event.type.replace("position_profile_", ""),
-      delegateUntil: null,
-      inheritedDescription: "",
-      inheritedCompletionNotes: event.note,
-      inheritedAt: event.createdAt,
-    };
-  }
-}
-
-function titleCase(value: string) {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function positionTitleForUser(user: User) {
-  const persona = titleCase(user.persona || "");
-  const role = titleCase(user.role || "member");
-  if (persona && persona.toLowerCase() !== "operator" && !role.toLowerCase().includes(persona.toLowerCase())) {
-    return `${persona} ${role === "Owner" ? "Lead" : role}`;
-  }
-  if (role === "Owner") return "Founder / Owner";
-  if (role === "Admin") return "Workspace Admin";
-  if (role === "Manager") return "Department Manager";
-  return "Team Member";
-}
-
-function inferTaskCadence(task: Task) {
-  const text = `${task.title} ${task.description}`.toLowerCase();
-  if (task.recurrence === "annual" || /\bannual|yearly|anniversary|birthday\b/.test(text)) return "Annual";
-  if (/\bquarterly|q[1-4]\b/.test(text)) return "Quarterly";
-  if (/\bmonthly|month-end|month end\b/.test(text)) return "Monthly";
-  if (/\bweekly|every week|friday|monday|tuesday|wednesday|thursday\b/.test(text)) return "Weekly";
-  if (/\bdaily|standup|each day|every day\b/.test(text)) return "Daily";
-  return task.recurrence !== "none" ? titleCase(task.recurrence) : "As needed";
-}
-
-function taskRepeatLabel(task: Task) {
-  if (task.recurrence === "none" && inferTaskCadence(task) === "As needed") return "";
-  const details = extractRepeatDetails(task.description);
-  return details ? `${inferTaskCadence(task)} / ${details}` : inferTaskCadence(task);
-}
-
-function taskKnowledgeText(task: Task) {
-  return [task.description, task.completionNotes]
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function inferToolsFromTasks(tasks: Task[]) {
-  const text = tasks.map((task) => `${task.title} ${task.description} ${task.completionNotes}`).join(" ").toLowerCase();
-  const tools: Array<[string, RegExp]> = [
-    ["Gmail", /\bgmail|email|inbox\b/],
-    ["Slack", /\bslack|channel\b/],
-    ["Google Calendar", /\bcalendar|meeting|schedule\b/],
-    ["LinkedIn", /\blinkedin|recruiting\b/],
-    ["Vercel", /\bvercel|deployment|deploy\b/],
-    ["Supabase", /\bsupabase|database|auth\b/],
-    ["Payroll", /\bpayroll|hris|benefits\b/],
-    ["Billing", /\bbilling|invoice|receipt|expense|contract\b/],
-  ];
-  return tools.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
-}
-
-function memoryStringArray(memory: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = memory[key];
-    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-  }
-  return [];
-}
-
-type LearnedHowToNote = {
-  taskId: string;
-  title: string;
-  note: string;
-  source: string;
-  capturedAt: string | null;
-};
-
-type LearnedRecurringResponsibility = {
-  taskId: string;
-  title: string;
-  cadence: string;
-  repeatDetails: string;
-  dueDate: string | null;
-  showEarlyDays: number;
-  updatedAt: string | null;
-};
-
-type LearnedTaskSignal = {
-  taskId: string;
-  title: string;
-  status: string;
-  urgency: string;
-  dueDate: string | null;
-  source: string;
-  recurrence: string;
-  eventType: string;
-  capturedAt: string | null;
-};
-
-function memoryRecordArray(memory: Record<string, unknown>, key: string) {
-  const value = memory[key];
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
-}
-
-function memoryHowToNotes(memory: Record<string, unknown>): LearnedHowToNote[] {
-  return memoryRecordArray(memory, "howToNotes")
-    .map((record): LearnedHowToNote | null => {
-      const note = typeof record.note === "string" ? record.note.trim() : "";
-      if (!note) return null;
-      return {
-        taskId: String(record.taskId ?? ""),
-        title: typeof record.title === "string" && record.title.trim() ? record.title : "Task context",
-        note,
-        source: typeof record.source === "string" ? record.source : "task",
-        capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : null,
-      };
-    })
-    .filter((item): item is LearnedHowToNote => item !== null)
-    .slice(0, 8);
-}
-
-function memoryRecurringResponsibilities(memory: Record<string, unknown>): LearnedRecurringResponsibility[] {
-  return memoryRecordArray(memory, "recurringResponsibilities")
-    .map((record): LearnedRecurringResponsibility | null => {
-      const title = typeof record.title === "string" ? record.title.trim() : "";
-      if (!title) return null;
-      return {
-        taskId: String(record.taskId ?? title),
-        title,
-        cadence: typeof record.cadence === "string" && record.cadence !== "none" ? titleCase(record.cadence) : "Recurring",
-        repeatDetails: typeof record.repeatDetails === "string" ? record.repeatDetails.trim() : "",
-        dueDate: typeof record.dueDate === "string" ? record.dueDate : null,
-        showEarlyDays: typeof record.showEarlyDays === "number" ? record.showEarlyDays : 0,
-        updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : null,
-      };
-    })
-    .filter((item): item is LearnedRecurringResponsibility => item !== null)
-    .slice(0, 8);
-}
-
-function recurringResponsibilitiesFromTasks(tasks: Task[]): LearnedRecurringResponsibility[] {
-  return tasks
-    .filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed")
-    .map((task) => ({
-      taskId: String(task.id),
-      title: task.title,
-      cadence: taskRepeatLabel(task) || inferTaskCadence(task),
-      repeatDetails: extractRepeatDetails(task.description),
-      dueDate: task.dueDate,
-      showEarlyDays: task.reminderDaysBefore ?? 0,
-      updatedAt: task.createdAt ?? null,
-    }))
-    .slice(0, 12);
-}
-
-function mergeRecurringResponsibilities(
-  learned: LearnedRecurringResponsibility[],
-  liveTasks: LearnedRecurringResponsibility[],
-) {
-  const seen = new Set<string>();
-  const output: LearnedRecurringResponsibility[] = [];
-  for (const item of [...learned, ...liveTasks]) {
-    const key = `${item.taskId || ""}:${item.title.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(item);
-  }
-  return output.slice(0, 12);
-}
-
-function memoryRecentSignals(memory: Record<string, unknown>): LearnedTaskSignal[] {
-  return memoryRecordArray(memory, "recentTaskSignals")
-    .map((record): LearnedTaskSignal | null => {
-      const title = typeof record.title === "string" ? record.title.trim() : "";
-      if (!title) return null;
-      return {
-        taskId: String(record.taskId ?? title),
-        title,
-        status: typeof record.status === "string" ? record.status : "open",
-        urgency: typeof record.urgency === "string" ? record.urgency : "normal",
-        dueDate: typeof record.dueDate === "string" ? record.dueDate : null,
-        source: typeof record.source === "string" ? record.source : "task",
-        recurrence: typeof record.recurrence === "string" ? record.recurrence : "none",
-        eventType: typeof record.eventType === "string" ? record.eventType : "updated",
-        capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : null,
-      };
-    })
-    .filter((item): item is LearnedTaskSignal => item !== null)
-    .slice(0, 8);
-}
-
-function memorySourceMix(memory: Record<string, unknown>) {
-  const sourceMix = memory.sourceMix;
-  if (!sourceMix || typeof sourceMix !== "object" || Array.isArray(sourceMix)) return [];
-  return Object.entries(sourceMix as Record<string, unknown>)
-    .map(([source, count]) => ({ source, count: typeof count === "number" ? count : Number(count) || 0 }))
-    .filter((item) => item.count > 0)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 8);
-}
-
-function memoryAccessItems(memory: Record<string, unknown>): ProfileAccessItem[] {
-  const value = memory.accessItems;
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item, index): ProfileAccessItem | null => {
-      if (!item || typeof item !== "object") return null;
-      const record = item as Record<string, unknown>;
-      const toolName = typeof record.toolName === "string" ? record.toolName.trim() : "";
-      if (!toolName) return null;
-      const status = typeof record.status === "string" && ["active", "needs_grant", "needs_reset", "remove_access", "pending"].includes(record.status)
-        ? record.status as ProfileAccessItem["status"]
-        : "pending";
-      return {
-        id: typeof record.id === "string" && record.id ? record.id : `access-${Date.now()}-${index}`,
-        toolName,
-        loginUrl: typeof record.loginUrl === "string" ? record.loginUrl : "",
-        accountOwner: typeof record.accountOwner === "string" ? record.accountOwner : "",
-        billingNotes: typeof record.billingNotes === "string" ? record.billingNotes : "",
-        status,
-        updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
-      };
-    })
-    .filter((item): item is ProfileAccessItem => item !== null)
-    .slice(0, 40);
-}
-
-function mergeProfileRecord(profile: PositionProfile, record: PersistedPositionProfile): PositionProfile {
-  const memory = record.institutionalMemory ?? {};
-  const accessItems = memoryAccessItems(memory);
-  const learnedHowTo = memoryHowToNotes(memory).map((item) => item.note);
-  const learnedRecurring = memoryRecurringResponsibilities(memory).map((item) => item.title);
-  const howTo = Array.from(new Set([...memoryStringArray(memory, ["howTo"]), ...learnedHowTo, ...profile.howTo])).slice(0, 6);
-  const tools = Array.from(new Set([...memoryStringArray(memory, ["tools", "toolAccess"]), ...accessItems.map((item) => item.toolName), ...profile.tools])).slice(0, 8);
-  const stakeholders = Array.from(new Set([...memoryStringArray(memory, ["stakeholders", "contacts"]), ...profile.stakeholders])).slice(0, 8);
-  const criticalDates = Array.from(new Set([...memoryStringArray(memory, ["criticalDates"]), ...profile.criticalDates])).slice(0, 6);
-  const learnedRecurringChecklist = learnedRecurring.length > 0
-    ? [`Review ${learnedRecurring.length} learned recurring ${learnedRecurring.length === 1 ? "responsibility" : "responsibilities"}.`]
-    : [];
-  const transitionChecklist = Array.from(
-    new Set([...memoryStringArray(memory, ["transitionChecklist"]), ...learnedRecurringChecklist, ...profile.transitionChecklist]),
-  ).slice(0, 7);
-  const riskReasons = Array.from(
-    new Set([record.riskSummary, ...profile.riskReasons].filter((item): item is string => Boolean(item))),
-  ).slice(0, 5);
-  const riskScore = Math.max(record.riskScore ?? 0, profile.riskScore);
-
-  return {
-    ...profile,
-    id: record.id,
-    persisted: true,
-    title: record.title || profile.title,
-    status: record.status || profile.status,
-    currentOwnerId: record.currentOwnerId,
-    directManagerId: record.directManagerId,
-    temporaryOwnerId: record.temporaryOwnerId,
-    delegateUserId: record.delegateUserId,
-    delegateUntil: record.delegateUntil,
-    howTo,
-    tools,
-    stakeholders,
-    accessItems,
-    institutionalMemory: memory,
-    criticalDates,
-    transitionChecklist,
-    riskScore,
-    riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
-    riskReasons,
-    lastUpdatedAt: record.updatedAt ?? profile.lastUpdatedAt,
-  };
-}
-
-function buildEmptyPositionProfile(record: PersistedPositionProfile, users: User[]): PositionProfile | null {
-  const owner =
-    users.find((user) => String(user.id) === String(record.currentOwnerId)) ??
-    users[0] ??
-    null;
-  if (!owner) return null;
-  const base: PositionProfile = {
-    id: record.id,
-    persisted: true,
-    title: record.title,
-    owner,
-    currentOwnerId: record.currentOwnerId,
-    directManagerId: record.directManagerId,
-    temporaryOwnerId: record.temporaryOwnerId,
-    delegateUserId: record.delegateUserId,
-    delegateUntil: record.delegateUntil,
-    status: record.status,
-    currentIncompleteTasks: [],
-    recurringTasks: [],
-    completedTasks: [],
-    criticalDates: [],
-    howTo: [],
-    tools: [],
-    stakeholders: [],
-    accessItems: [],
-    institutionalMemory: record.institutionalMemory ?? {},
-    riskScore: record.riskScore ?? 0,
-    riskLevel: (record.riskScore ?? 0) >= 60 ? "high" : (record.riskScore ?? 0) >= 30 ? "medium" : "low",
-    riskReasons: record.riskSummary ? [record.riskSummary] : [],
-    transitionChecklist: [
-      "Assign or confirm the current owner for this job title.",
-      "Add recurring responsibilities as they are discovered.",
-      "Attach tool access and account ownership details.",
-      "Review current open work before handoff.",
-    ],
-    lastUpdatedAt: record.updatedAt ?? record.createdAt,
-  };
-  return mergeProfileRecord(base, record);
-}
-
-function buildPositionProfiles(
-  tasks: Task[],
-  users: User[],
-  events: TaskEvent[],
-  persistedProfiles: PersistedPositionProfile[] = [],
-): PositionProfile[] {
-  const today = localDateIso();
-  const derivedProfiles: PositionProfile[] = users.map((user) => {
-    const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility !== "personal");
-    const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
-    const completedTasks = owned.filter((task) => task.status === "completed");
-    const recurringTasks = owned.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
-    const criticalDates = Array.from(
-      new Set(
-        owned
-          .filter((task) => task.dueDate && (task.recurrence !== "none" || task.urgency === "critical" || task.urgency === "high"))
-          .map((task) => `${task.dueDate}: ${task.title}`),
-      ),
-    ).slice(0, 4);
-    const howTo = Array.from(
-      new Set(
-        owned
-          .map(taskKnowledgeText)
-          .filter((text) => text.length >= 30)
-          .map((text) => text.slice(0, 180)),
-      ),
-    ).slice(0, 4);
-    const stakeholderNames = users
-      .filter((candidate) => String(candidate.id) !== String(user.id))
-      .filter((candidate) =>
-        owned.some((task) => {
-          const text = `${task.title} ${task.description} ${task.completionNotes}`.toLowerCase();
-          return text.includes(candidate.name.toLowerCase()) || String(task.assignedById) === String(candidate.id);
-        }),
-      )
-      .map((candidate) => candidate.name)
-      .slice(0, 4);
-    const overdue = currentIncompleteTasks.filter((task) => task.dueDate && task.dueDate < today);
-    const high = currentIncompleteTasks.filter((task) => task.urgency === "critical" || task.urgency === "high");
-    const missingHowTo = recurringTasks.filter((task) => taskKnowledgeText(task).length < 30);
-    const riskScore = Math.min(
-      100,
-      overdue.length * 24 +
-        high.length * 12 +
-        Math.max(0, currentIncompleteTasks.length - 5) * 4 +
-        missingHowTo.length * 8 +
-        (inferToolsFromTasks(owned).length === 0 && owned.length > 0 ? 8 : 0),
-    );
-    const riskReasons = [
-      overdue.length > 0 ? `${overdue.length} overdue task${overdue.length === 1 ? "" : "s"}` : "",
-      high.length > 0 ? `${high.length} high-urgency task${high.length === 1 ? "" : "s"}` : "",
-      missingHowTo.length > 0 ? `${missingHowTo.length} recurring item${missingHowTo.length === 1 ? "" : "s"} need better how-to notes` : "",
-      currentIncompleteTasks.length > 0 ? `${currentIncompleteTasks.length} active task${currentIncompleteTasks.length === 1 ? "" : "s"} to cover` : "",
-    ].filter(Boolean);
-    const recentEvents = events
-      .filter((event) => owned.some((task) => String(task.id) === String(event.taskId)))
-      .map((event) => event.createdAt)
-      .sort()
-      .at(-1);
-    const title = positionTitleForUser(user);
-    return {
-      id: `position-${String(user.id)}`,
-      persisted: false,
-      title,
-      owner: user,
-      currentOwnerId: user.id,
-      directManagerId: user.managerId,
-      temporaryOwnerId: null,
-      delegateUserId: null,
-      delegateUntil: null,
-      status: currentIncompleteTasks.some((task) => task.delegatedToId) ? "covered" : "active",
-      currentIncompleteTasks,
-      recurringTasks,
-      completedTasks,
-      criticalDates,
-      howTo,
-      tools: inferToolsFromTasks(owned),
-      stakeholders: stakeholderNames,
-      accessItems: [],
-      institutionalMemory: {},
-      riskScore,
-      riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
-      riskReasons,
-      transitionChecklist: [
-        `Review ${currentIncompleteTasks.length} current incomplete task${currentIncompleteTasks.length === 1 ? "" : "s"}.`,
-        recurringTasks.length > 0
-          ? `Confirm next occurrence for ${recurringTasks.length} recurring ${recurringTasks.length === 1 ? "responsibility" : "responsibilities"}.`
-          : "Confirm whether this role has recurring responsibilities.",
-        "Verify tool access, account ownership, billing, and recovery contacts.",
-        howTo.length > 0 ? "Review saved how-to context before reassigning." : "Add how-to notes for recurring responsibilities.",
-        "Assign the profile owner or set a delegate coverage period.",
-      ],
-      lastUpdatedAt: recentEvents ?? owned.map((task) => task.createdAt).sort().at(-1) ?? null,
-    } satisfies PositionProfile;
-  });
-
-  const usedRecordIds = new Set<string>();
-  const merged = derivedProfiles.map((profile) => {
-    const record = persistedProfiles.find((item) => String(item.currentOwnerId) === String(profile.owner.id));
-    if (!record) return profile;
-    usedRecordIds.add(record.id);
-    const profileTasks = tasks.filter(
-      (task) =>
-        task.visibility !== "personal" &&
-        (String(task.positionProfileId ?? "") === record.id || String(task.assignedToId) === String(profile.owner.id)),
-    );
-    return mergeProfileRecord(
-      {
-        ...profile,
-        currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"),
-        recurringTasks: profileTasks.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"),
-        completedTasks: profileTasks.filter((task) => task.status === "completed"),
-      },
-      record,
-    );
-  });
-  for (const record of persistedProfiles) {
-    if (usedRecordIds.has(record.id)) continue;
-    const profile = buildEmptyPositionProfile(record, users);
-    if (profile) merged.push(profile);
-  }
-  return merged.sort((a, b) => a.title.localeCompare(b.title));
-}
-
-function canAdministerProfiles(user: User | null | undefined) {
-  return user?.role === "owner" || user?.role === "admin";
-}
-
-function canManageWorkspaceMembers(user: User | null | undefined) {
-  return user?.role === "owner" || user?.role === "admin";
-}
-
-function canViewManagerReports(user: User | null | undefined) {
-  return user?.role === "owner" || user?.role === "admin" || user?.role === "manager";
-}
-
-function isActiveUser(user: User) {
-  return user.status !== "inactive";
-}
-
-function latestOpenUpdateRequest(task: Task, events: TaskEvent[]) {
-  const taskEvents = events
-    .filter((event) => String(event.taskId) === String(task.id))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const request = taskEvents.find((event) => event.type === "update_requested");
-  if (!request) return undefined;
-  const response = taskEvents.find(
-    (event) =>
-      event.createdAt > request.createdAt &&
-      String(event.actorId) !== String(request.actorId) &&
-      ["updated", "note_added", "completed", "accepted", "denied"].includes(event.type),
-  );
-  return response ? undefined : request;
-}
-
-function teamMembersForUser(users: User[], currentUser: User | null | undefined, currentUserId: Id | null | undefined) {
-  if (!currentUser || !currentUserId) return [];
-  if (!["owner", "admin", "manager"].includes(currentUser.role)) return [];
-  return users.filter((user) => {
-    if (!isActiveUser(user)) return false;
-    if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
-    return String(user.managerId) === String(currentUserId);
-  });
-}
-
-function profilePrimaryOwnerId(profile: PositionProfile) {
-  return profile.currentOwnerId ?? profile.owner.id;
-}
-
-function profilesForUser(positionProfiles: PositionProfile[], userId: Id) {
-  const id = String(userId);
-  return positionProfiles.filter(
-    (profile) =>
-      String(profilePrimaryOwnerId(profile)) === id ||
-      String(profile.temporaryOwnerId ?? "") === id ||
-      String(profile.delegateUserId ?? "") === id,
-  );
-}
-
-function profileAssignmentLabel(profile: PositionProfile, users: User[]) {
-  const owner = users.find((user) => String(user.id) === String(profilePrimaryOwnerId(profile)));
-  const temporary = users.find((user) => String(user.id) === String(profile.temporaryOwnerId));
-  const delegate = users.find((user) => String(user.id) === String(profile.delegateUserId));
-  const ownerLabel = owner?.name ?? "Vacant";
-  const coverage = [
-    temporary ? `covered by ${temporary.name}` : "",
-    delegate ? `delegated to ${delegate.name}` : "",
-  ].filter(Boolean);
-  return coverage.length > 0 ? `${ownerLabel}, ${coverage.join(", ")}` : ownerLabel;
-}
-
-function isVisibleWorkTask(task: Task) {
-  if (!task.visibleFrom) return true;
-  if (task.status === "completed" || task.status === "denied") return true;
-  return task.visibleFrom <= localDateIso();
-}
-
-function escapeIcsText(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
-}
-
-function formatIcsLocalDateTime(value: string) {
-  return value.replace(/[-:]/g, "").replace(/\.\d+$/, "");
-}
-
-function formatAgendaTime(value: string | null) {
-  if (!value) return "";
-  const match = value.match(/T(\d{2}):(\d{2})/);
-  if (!match) return "";
-  const hour24 = Number(match[1]);
-  const minute = match[2];
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${hour12}:${minute} ${suffix}`;
-}
-
-function formatAgendaSlot(item: AgendaItem) {
-  if (!item.startAt || !item.endAt || item.scheduleStatus !== "scheduled") {
-    return "Needs an open calendar slot";
-  }
-  return `${item.startAt.slice(0, 10)} / ${formatAgendaTime(item.startAt)}-${formatAgendaTime(item.endAt)}`;
-}
-
-function normalizeAgendaPreferences(input?: Partial<AgendaPreferences> | null): AgendaPreferences {
-  return {
-    ...DEFAULT_AGENDA_PREFERENCES,
-    ...(input ?? {}),
-    lunchMinutes: Number(input?.lunchMinutes ?? DEFAULT_AGENDA_PREFERENCES.lunchMinutes),
-    meetingBufferMinutes: Number(input?.meetingBufferMinutes ?? DEFAULT_AGENDA_PREFERENCES.meetingBufferMinutes),
-    minimumBlockMinutes: Number(input?.minimumBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.minimumBlockMinutes),
-    focusBlockMinutes: Number(input?.focusBlockMinutes ?? DEFAULT_AGENDA_PREFERENCES.focusBlockMinutes),
-  };
-}
-
-function normalizeAgendaSchedule(input?: Partial<AgendaSchedule> | null): AgendaSchedule {
-  const buildTime = /^\d{1,2}:\d{2}$/.test(String(input?.buildTime ?? ""))
-    ? String(input?.buildTime)
-    : DEFAULT_AGENDA_SCHEDULE.buildTime;
-  return {
-    autoBuildEnabled: input?.autoBuildEnabled === true,
-    buildTime,
-    lastAutoBuildDate: typeof input?.lastAutoBuildDate === "string" ? input.lastAutoBuildDate : null,
-  };
-}
-
-function isTimeAtOrAfter(current: string, target: string) {
-  return current.localeCompare(target) >= 0;
-}
-
-function orderAgendaItems(agenda: AgendaItem[], taskOrder: string[]) {
-  if (taskOrder.length === 0) return agenda;
-  const indexById = new Map(taskOrder.map((id, index) => [id, index]));
-  return [...agenda].sort((a, b) => {
-    const aIndex = indexById.get(String(a.taskId)) ?? Number.MAX_SAFE_INTEGER;
-    const bIndex = indexById.get(String(b.taskId)) ?? Number.MAX_SAFE_INTEGER;
-    if (aIndex !== bIndex) return aIndex - bIndex;
-    return a.order - b.order;
-  });
-}
-
-function downloadAgendaCalendar(agenda: AgendaItem[]) {
-  const scheduled = agenda.filter((item) => item.startAt && item.endAt && item.scheduleStatus === "scheduled");
-  if (scheduled.length === 0) {
-    toast({
-      title: "No scheduled blocks to export",
-      description: "Build the agenda after connecting Google Calendar so Donnit can find open times.",
-    });
-    return;
-  }
-
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  const events = scheduled.map((item) => {
-    return [
-      "BEGIN:VEVENT",
-      `UID:donnit-${item.taskId}-${stamp}@donnit`,
-      `DTSTAMP:${stamp}`,
-      `DTSTART;TZID=${item.timeZone}:${formatIcsLocalDateTime(item.startAt!)}`,
-      `DTEND;TZID=${item.timeZone}:${formatIcsLocalDateTime(item.endAt!)}`,
-      `SUMMARY:${escapeIcsText(item.title)}`,
-      `DESCRIPTION:${escapeIcsText(`${item.urgency} urgency / ${item.estimatedMinutes} minutes`)}`,
-      "END:VEVENT",
-    ].join("\r\n");
-  });
-
-  const ics = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Donnit//Agenda Export//EN",
-    "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
-    ...events,
-    "END:VCALENDAR",
-  ].join("\r\n");
-  const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `donnit-agenda-${localDateIso()}.ics`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  toast({
-    title: "Calendar file ready",
-    description: `Exported ${scheduled.length} scheduled agenda block${scheduled.length === 1 ? "" : "s"} as an .ics file.`,
-  });
-}
-
-function Wordmark({ onClick }: { onClick?: () => void }) {
-  const content = (
-    <>
-      <span className="brand-mark" aria-hidden="true">
-        <Check className="size-4" strokeWidth={3.25} />
-      </span>
-      <span className="brand-text" aria-hidden="true">
-        <span className="brand-text-base">Donn</span>
-        <span className="brand-text-accent">it</span>
-      </span>
-    </>
-  );
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className="brand-lockup rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        aria-label="Go to Donnit home"
-        onClick={onClick}
-        data-testid="button-donnit-home"
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <span className="brand-lockup" aria-label="Donnit">
-      {content}
-    </span>
-  );
-}
-
-function ThemeToggle() {
-  const [mode, setMode] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const initial = prefersDark ? "dark" : "light";
-    setMode(initial);
-    document.documentElement.classList.toggle("dark", initial === "dark");
-  }, []);
-
-  function toggle() {
-    const next = mode === "dark" ? "light" : "dark";
-    setMode(next);
-    document.documentElement.classList.toggle("dark", next === "dark");
-  }
-
-  return (
-    <Button
-      variant="outline"
-      size="icon"
-      onClick={toggle}
-      aria-label={`Switch to ${mode === "dark" ? "light" : "dark"} mode`}
-      data-testid="button-theme-toggle"
-    >
-      {mode === "dark" ? <Sun /> : <Moon />}
-    </Button>
-  );
-}
-
-type FunctionAction = {
-  id: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  onClick?: () => void;
-  loading?: boolean;
-  primary?: boolean;
-  disabled?: boolean;
-  hint?: string;
-};
-
-type MenuActionGroup = {
-  label: string;
-  actions: FunctionAction[];
-};
-
-type AppView = "home" | "tasks" | "agenda" | "inbox" | "team" | "profiles" | "reports" | "admin" | "settings";
+import type {
+  Id,
+  AgendaItem,
+  AgendaPreference,
+  AgendaPreferences,
+  AgendaSchedule,
+  User,
+  Task,
+  TaskEvent,
+  InheritedTaskContext,
+  LocalSubtask,
+  TaskSubtask,
+  TaskTemplateSubtask,
+  TaskTemplate,
+  WorkspaceState,
+  ChatMessage,
+  EmailSuggestion,
+  SuggestionReplyResult,
+  SuggestionDraftReplyResult,
+  SuggestionPatch,
+  Bootstrap,
+  PositionProfile,
+  ProfileAccessItem,
+  PersistedPositionProfile,
+  ContinuityPreviewTask,
+  ContinuityAssignmentPreview,
+  UrgencyClass,
+} from "@/app/types";
+import {
+  DEFAULT_AGENDA_PREFERENCES,
+  DEFAULT_AGENDA_SCHEDULE,
+  CLIENT_TIME_ZONE,
+  dialogShellClass,
+  dialogHeaderClass,
+  dialogBodyClass,
+  dialogFooterClass,
+  REPEAT_DETAILS_PREFIX,
+  EMAIL_SIGNATURE_TEMPLATES,
+  EMAIL_SIGNATURE_TEMPLATE_KEY,
+  EMAIL_SIGNATURE_CUSTOM_KEY,
+} from "@/app/constants";
+import { localDateIso, addLocalDays, localTimeHHMM, normalizeTimeLabel, taskDueLabel } from "@/app/lib/date";
+import { urgencyClass, urgencyLabel, statusLabels } from "@/app/lib/urgency";
+import { useBootstrap, invalidateWorkspace } from "@/app/lib/hooks";
+import { sortSubtasks, normalizeLocalSubtasks, apiErrorMessage, parseInheritedTaskContext } from "@/app/lib/tasks";
+import { titleCase, positionTitleForUser, inferTaskCadence, taskRepeatLabel, taskKnowledgeText, inferToolsFromTasks } from "@/app/lib/task-text";
+import {
+  LearnedHowToNote,
+  LearnedRecurringResponsibility,
+  LearnedTaskSignal,
+  memoryStringArray,
+  memoryRecordArray,
+  memoryHowToNotes,
+  memoryRecurringResponsibilities,
+  recurringResponsibilitiesFromTasks,
+  mergeRecurringResponsibilities,
+  memoryRecentSignals,
+  memorySourceMix,
+  memoryAccessItems,
+} from "@/app/lib/memory";
+import { canAdministerProfiles, canManageWorkspaceMembers, canViewManagerReports, isActiveUser, teamMembersForUser, isVisibleWorkTask, latestOpenUpdateRequest } from "@/app/lib/permissions";
+import { mergeProfileRecord, buildEmptyPositionProfile, buildPositionProfiles, profilePrimaryOwnerId, profilesForUser, profileAssignmentLabel } from "@/app/lib/profiles";
+import { escapeIcsText, formatIcsLocalDateTime, formatAgendaTime, formatAgendaSlot, normalizeAgendaPreferences, normalizeAgendaSchedule, isTimeAtOrAfter, orderAgendaItems, downloadAgendaCalendar } from "@/app/lib/agenda";
+import { activityEventLabel, eventSearchText } from "@/app/lib/activity";
+import { formatReceivedAt, parseSuggestionInsight, readCustomEmailSignature, readPreferredEmailSignatureTemplate, resolveEmailSignature, applyEmailSignature } from "@/app/lib/suggestions";
+import { type DerivedNotification, buildNotifications } from "@/app/lib/notifications";
+import { extractRepeatDetails, stripRepeatDetails, descriptionWithRepeatDetails, defaultRepeatDetails } from "@/app/lib/repeat";
+import type { AppView } from "@/app/types";
+import type { FunctionAction, MenuActionGroup } from "@/app/chrome/FunctionBar";
+import Wordmark from "@/app/chrome/Wordmark";
+import ThemeToggle from "@/app/chrome/ThemeToggle";
+import FunctionBar, { FunctionActionButton } from "@/app/chrome/FunctionBar";
+import WorkspaceMenu from "@/app/chrome/WorkspaceMenu";
+import AppShellNav from "@/app/chrome/AppShellNav";
+import NotificationCenter from "@/app/chrome/NotificationCenter";
 
 type SupportRailView = "today" | "agenda" | "team" | "reports";
 
-type OnboardingStep = {
-  id: string;
-  title: string;
-  detail: string;
-  done: boolean;
-  actionLabel: string;
-  onAction: () => void;
-};
-
-function FunctionActionButton({ action }: { action: FunctionAction }) {
-  return (
-    <button
-      type="button"
-      onClick={action.onClick}
-      disabled={action.disabled || action.loading}
-      title={action.hint ?? action.label}
-      className={`fn-chip ${action.primary ? "fn-primary" : ""}`}
-      data-testid={`button-fn-${action.id}`}
-    >
-      {action.loading ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <action.icon className="size-4" />
-      )}
-      <span>{action.label}</span>
-    </button>
-  );
-}
-
-function FunctionBar({
-  addTaskActions,
-  primaryActions,
-}: {
-  addTaskActions: FunctionAction[];
-  primaryActions: FunctionAction[];
-}) {
-  return (
-    <div
-      className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0"
-      data-testid="bar-functions"
-      role="toolbar"
-      aria-label="Workspace functions"
-    >
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button data-testid="button-add-task-menu">
-            <ListPlus className="size-4" />
-            Add task
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-64">
-          <DropdownMenuLabel>Add task from</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {addTaskActions.map((action) => (
-            <DropdownMenuItem
-              key={action.id}
-              disabled={action.disabled || action.loading}
-              onClick={action.onClick}
-              data-testid={`menu-add-task-${action.id}`}
-            >
-              {action.loading ? <Loader2 className="size-4 animate-spin" /> : <action.icon className="size-4" />}
-              <span>{action.label}</span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {primaryActions.map((action) => (
-        <FunctionActionButton key={action.id} action={action} />
-      ))}
-    </div>
-  );
-}
-
-const dialogShellClass =
-  "flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0";
-const dialogHeaderClass = "shrink-0 border-b border-border px-5 py-4 pr-12";
-const dialogBodyClass = "min-h-0 flex-1 overflow-y-auto px-5 py-4";
-const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
-const REPEAT_DETAILS_PREFIX = "Repeat details:";
-
-function extractRepeatDetails(description: string) {
-  const match = description.match(/(?:^|\n)\s*Repeat(?: details)?:\s*(.+)\s*$/i);
-  return match?.[1]?.trim() ?? "";
-}
-
-function stripRepeatDetails(description: string) {
-  return description.replace(/(?:\n{0,2})\s*Repeat(?: details)?:\s*.+\s*$/i, "").trim();
-}
-
-function descriptionWithRepeatDetails(description: string, repeatDetails: string) {
-  const cleanDescription = stripRepeatDetails(description);
-  const cleanRepeat = repeatDetails.trim();
-  if (!cleanRepeat) return cleanDescription;
-  return `${cleanDescription}${cleanDescription ? "\n\n" : ""}${REPEAT_DETAILS_PREFIX} ${cleanRepeat}`;
-}
-
-function defaultRepeatDetails(recurrence: string, dueDate: string) {
-  if (recurrence === "none") return "";
-  const date = dueDate ? new Date(`${dueDate}T12:00:00`) : null;
-  const validDate = date && Number.isFinite(date.getTime()) ? date : null;
-  const weekday = validDate ? new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(validDate) : "selected weekday";
-  const monthDay = validDate ? new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(validDate) : "selected date";
-  if (recurrence === "daily") return "Every weekday";
-  if (recurrence === "weekly") return `Every ${weekday}`;
-  if (recurrence === "monthly") return `Monthly on the same day, or first ${weekday}`;
-  if (recurrence === "quarterly") return "Quarterly on the same schedule";
-  if (recurrence === "annual") return `Every year on ${monthDay}`;
-  return "";
-}
+const demoMailto =
+  "mailto:hello@donnit.ai?subject=Book%20a%20Donnit%20demo&body=I%20want%20to%20see%20how%20Donnit%20can%20help%20my%20team.";
+const pricingMailto =
+  "mailto:hello@donnit.ai?subject=Donnit%20pricing&body=I%20want%20to%20learn%20which%20Donnit%20plan%20fits%20my%20team.";
 
 function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
@@ -1592,37 +346,16 @@ function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   );
 }
 
-const demoMailto =
-  "mailto:hello@donnit.ai?subject=Book%20a%20Donnit%20demo&body=I%20want%20to%20see%20how%20Donnit%20can%20help%20my%20team.";
-const pricingMailto =
-  "mailto:hello@donnit.ai?subject=Donnit%20pricing&body=I%20want%20to%20learn%20which%20Donnit%20plan%20fits%20my%20team.";
-
 function LandingPage() {
   const goToLogin = () => {
     window.location.hash = "/app";
   };
   const integrations = ["Slack", "Gmail", "Outlook", "Teams", "Calendar", "SMS soon"];
-  const proofPoints = [
-    "AI task capture",
-    "Role memory",
-    "Calendar-ready work",
-  ];
+  const proofPoints = ["AI task capture", "Role memory", "Calendar-ready work"];
   const flow = [
-    {
-      icon: Sparkles,
-      title: "Capture",
-      copy: "Slack, email, chat, and notes become task suggestions.",
-    },
-    {
-      icon: UserRoundCheck,
-      title: "Clarify",
-      copy: "Donnit adds owners, deadlines, urgency, and context.",
-    },
-    {
-      icon: BriefcaseBusiness,
-      title: "Carry Forward",
-      copy: "Recurring work builds a living Position Profile.",
-    },
+    { icon: Sparkles, title: "Capture", copy: "Slack, email, chat, and notes become task suggestions." },
+    { icon: UserRoundCheck, title: "Clarify", copy: "Donnit adds owners, deadlines, urgency, and context." },
+    { icon: BriefcaseBusiness, title: "Carry Forward", copy: "Recurring work builds a living Position Profile." },
   ];
   const heroSignals = [
     { source: "Email", title: "Vendor renewal attached", meta: "Renew by Friday" },
@@ -1630,18 +363,9 @@ function LandingPage() {
     { source: "Recurring", title: "Board packet week", meta: "Prep agenda draft" },
   ];
   const continuitySteps = [
-    {
-      title: "Before a move",
-      copy: "Capture the real rhythm of the role while work is happening.",
-    },
-    {
-      title: "During coverage",
-      copy: "Assign temporary ownership without mixing roles together.",
-    },
-    {
-      title: "For the next person",
-      copy: "Give them the playbook, not a guessing game.",
-    },
+    { title: "Before a move", copy: "Capture the real rhythm of the role while work is happening." },
+    { title: "During coverage", copy: "Assign temporary ownership without mixing roles together." },
+    { title: "For the next person", copy: "Give them the playbook, not a guessing game." },
   ];
   const dailyTasks = [
     ["Approve suggested renewal task", "AI captured from Gmail", "Today"],
@@ -1665,12 +389,8 @@ function LandingPage() {
             <a href="#pricing" className="hover:text-foreground">Pricing</a>
           </nav>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={goToLogin} data-testid="button-landing-login">
-              Login
-            </Button>
-            <Button size="sm" onClick={goToLogin} data-testid="button-landing-start-top">
-              Start free
-            </Button>
+            <Button variant="outline" size="sm" onClick={goToLogin} data-testid="button-landing-login">Login</Button>
+            <Button size="sm" onClick={goToLogin} data-testid="button-landing-start-top">Start free</Button>
           </div>
         </div>
       </header>
@@ -1680,48 +400,34 @@ function LandingPage() {
           <div className="mx-auto max-w-4xl text-center">
             <p className="ui-label">AI-powered work continuity</p>
             <h1 className="mt-4 text-5xl font-semibold leading-[1.02] text-foreground md:text-7xl">
-              Work remembered.
-              <span className="block text-brand-green">Handoffs handled.</span>
+              Work remembered.<span className="block text-brand-green">Handoffs handled.</span>
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">
               Donnit turns Slack, email, and notes into tasks, agendas, and role memory.
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Button size="lg" className="landing-primary-cta" onClick={goToLogin} data-testid="button-landing-start">
-                Start free
-                <ArrowRight className="size-4" />
+                Start free<ArrowRight className="size-4" />
               </Button>
               <Button size="lg" variant="outline" asChild data-testid="button-landing-demo-hero">
                 <a href={demoMailto}>Book demo</a>
               </Button>
             </div>
             <p className="mt-3 text-sm text-muted-foreground">14 days. No card. One role to start.</p>
-            <div className="landing-proof-strip mt-7">
-              {proofPoints.map((point) => (
-                <span key={point}>{point}</span>
-              ))}
-            </div>
+            <div className="landing-proof-strip mt-7">{proofPoints.map((point) => <span key={point}>{point}</span>)}</div>
           </div>
-
           <div className="landing-product-stage mt-10" aria-label="Donnit turns work inputs into approved tasks and role memory">
             <div className="landing-stage-column">
               <p className="ui-label">Inputs</p>
               <div className="mt-3 space-y-3">
                 {heroSignals.map((signal, index) => (
                   <div key={signal.title} className="landing-stage-card" style={{ animationDelay: `${index * 420}ms` }}>
-                    <span>{signal.source}</span>
-                    <strong>{signal.title}</strong>
-                    <small>{signal.meta}</small>
+                    <span>{signal.source}</span><strong>{signal.title}</strong><small>{signal.meta}</small>
                   </div>
                 ))}
               </div>
             </div>
-
-            <div className="landing-ai-core">
-              <Sparkles className="size-6" />
-              <span>AI intake</span>
-            </div>
-
+            <div className="landing-ai-core"><Sparkles className="size-6" /><span>AI intake</span></div>
             <div className="landing-stage-column landing-stage-output">
               <div className="flex items-center justify-between gap-3">
                 <p className="ui-label">Donnit</p>
@@ -1730,19 +436,11 @@ function LandingPage() {
               <div className="mt-3 space-y-2">
                 {dailyTasks.map(([task, source, time], index) => (
                   <div key={task} className="landing-stage-task" style={{ animationDelay: `${index * 180}ms` }}>
-                    <Check className="size-4" />
-                    <div>
-                      <strong>{task}</strong>
-                      <small>{source}</small>
-                    </div>
-                    <span>{time}</span>
+                    <Check className="size-4" /><div><strong>{task}</strong><small>{source}</small></div><span>{time}</span>
                   </div>
                 ))}
               </div>
-              <div className="landing-memory-pill">
-                <BriefcaseBusiness className="size-4" />
-                Updates Position Profile
-              </div>
+              <div className="landing-memory-pill"><BriefcaseBusiness className="size-4" />Updates Position Profile</div>
             </div>
           </div>
         </div>
@@ -1752,37 +450,26 @@ function LandingPage() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
             <p className="ui-label">Role handoffs</p>
-            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-              Less scramble. Cleaner starts.
-            </h2>
-            <p className="mt-4 text-lg leading-8 text-muted-foreground">
-              Donnit builds Position Profiles from real work, not stale job descriptions.
-            </p>
+            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Less scramble. Cleaner starts.</h2>
+            <p className="mt-4 text-lg leading-8 text-muted-foreground">Donnit builds Position Profiles from real work, not stale job descriptions.</p>
           </div>
           <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_0.9fr] lg:items-start">
             <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
               {continuitySteps.map((step) => (
                 <div key={step.title} className="landing-continuity-step rounded-md border border-border bg-card p-4">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-brand-green text-white">
-                    <Check className="size-4" />
-                  </span>
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-brand-green text-white"><Check className="size-4" /></span>
                   <h3 className="mt-4 text-lg font-semibold">{step.title}</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">{step.copy}</p>
                 </div>
               ))}
               <Button asChild className="w-fit sm:col-span-3 lg:col-span-1">
-                <a href={demoMailto}>
-                  See Position Profile
-                  <ArrowRight className="size-4" />
-                </a>
+                <a href={demoMailto}>See Position Profile<ArrowRight className="size-4" /></a>
               </Button>
             </div>
             <div className="landing-profile-preview rounded-md border border-border bg-card p-4">
               <p className="ui-label">Position profile</p>
               <h3 className="mt-2 text-xl font-semibold">Executive Assistant to the CEO</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Automatically built from recurring tasks, notes, completions, and handoff context.
-              </p>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">Automatically built from recurring tasks, notes, completions, and handoff context.</p>
               <div className="mt-5 space-y-2">
                 {["Weekly board packet prep", "Annual insurance renewal", "CEO travel hold review", "Vendor invoice reconciliation"].map((task, index) => (
                   <div key={task} className="flex items-center justify-between gap-3 rounded-md bg-background px-3 py-2">
@@ -1800,16 +487,12 @@ function LandingPage() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
             <p className="ui-label">How it works</p>
-            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-              Capture. Clarify. Carry forward.
-            </h2>
+            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Capture. Clarify. Carry forward.</h2>
           </div>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
             {flow.map((item, index) => (
               <div key={item.title} className="landing-flow-step rounded-md border border-border bg-card p-5 text-center">
-                <div className="mx-auto flex size-11 items-center justify-center rounded-md bg-brand-green/10 text-brand-green">
-                  <item.icon className="size-5" />
-                </div>
+                <div className="mx-auto flex size-11 items-center justify-center rounded-md bg-brand-green/10 text-brand-green"><item.icon className="size-5" /></div>
                 <p className="ui-label mt-5">0{index + 1}</p>
                 <h3 className="mt-1 text-xl font-semibold">{item.title}</h3>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.copy}</p>
@@ -1824,12 +507,8 @@ function LandingPage() {
           <div className="grid gap-8 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
             <div className="max-w-xl">
               <p className="ui-label">Daily work</p>
-              <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-                Your day, already sorted.
-              </h2>
-              <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">
-                Type it. Approve it. Schedule it. Donnit keeps the context close.
-              </p>
+              <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Your day, already sorted.</h2>
+              <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">Type it. Approve it. Schedule it. Donnit keeps the context close.</p>
             </div>
             <div className="landing-daily-preview rounded-md border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
@@ -1839,10 +518,7 @@ function LandingPage() {
               <div className="mt-4 space-y-2">
                 {dailyTasks.map(([task, source, time]) => (
                   <div key={task} className="grid gap-2 rounded-md bg-background px-3 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                    <div>
-                      <p className="text-sm font-medium">{task}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{source}</p>
-                    </div>
+                    <div><p className="text-sm font-medium">{task}</p><p className="mt-1 text-xs text-muted-foreground">{source}</p></div>
                     <span className="text-xs text-muted-foreground">{time}</span>
                   </div>
                 ))}
@@ -1856,15 +532,11 @@ function LandingPage() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
             <p className="ui-label">Works where work starts</p>
-            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">
-              Slack, email, and calendar first. SMS next.
-            </h2>
+            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Slack, email, and calendar first. SMS next.</h2>
           </div>
           <div className="mx-auto mt-8 grid max-w-4xl grid-cols-2 gap-3 sm:grid-cols-3">
             {integrations.map((name) => (
-              <div key={name} className="rounded-md border border-border bg-card px-4 py-4 text-center text-sm font-medium">
-                {name}
-              </div>
+              <div key={name} className="rounded-md border border-border bg-card px-4 py-4 text-center text-sm font-medium">{name}</div>
             ))}
           </div>
         </div>
@@ -1875,9 +547,7 @@ function LandingPage() {
           <div className="mx-auto max-w-3xl text-center">
             <p className="ui-label">Pricing</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Start small. Prove value.</h2>
-            <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
-              Begin with one role or one team. Expand when the workflow is working.
-            </p>
+            <p className="mx-auto mt-4 max-w-xl text-muted-foreground">Begin with one role or one team. Expand when the workflow is working.</p>
           </div>
           <div className="mx-auto mt-8 grid max-w-4xl gap-4 md:grid-cols-2">
             {pricingOptions.map(([name, price, copy, cta]) => (
@@ -1888,15 +558,14 @@ function LandingPage() {
                 {cta === "Start free" ? (
                   <Button className="mt-5" onClick={goToLogin}>{cta}</Button>
                 ) : (
-                  <Button className="mt-5" variant="outline" asChild>
-                    <a href={demoMailto}>{cta}</a>
-                  </Button>
+                  <Button className="mt-5" variant="outline" asChild><a href={demoMailto}>{cta}</a></Button>
                 )}
               </div>
             ))}
           </div>
           <p className="mt-5 text-center text-sm text-muted-foreground">
-            Need procurement details or a larger rollout? <a href={pricingMailto} className="text-foreground underline underline-offset-4">See pricing options</a>.
+            Need procurement details or a larger rollout?{" "}
+            <a href={pricingMailto} className="text-foreground underline underline-offset-4">See pricing options</a>.
           </p>
         </div>
       </section>
@@ -1906,15 +575,12 @@ function LandingPage() {
           <p className="ui-label">Get started</p>
           <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Try Donnit with one role.</h2>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Button size="lg" className="landing-primary-cta" onClick={goToLogin}>
-              Start free
-            </Button>
-            <Button size="lg" variant="outline" asChild>
-              <a href={demoMailto}>Book demo</a>
-            </Button>
+            <Button size="lg" className="landing-primary-cta" onClick={goToLogin}>Start free</Button>
+            <Button size="lg" variant="outline" asChild><a href={demoMailto}>Book demo</a></Button>
           </div>
         </div>
       </section>
+
       <footer className="landing-footer border-t border-border px-4 py-8 lg:px-6">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
           <Wordmark />
@@ -1930,200 +596,14 @@ function LandingPage() {
   );
 }
 
-function WorkspaceMenu({
-  primaryActions,
-  menuGroups,
-}: {
-  primaryActions: FunctionAction[];
-  menuGroups: MenuActionGroup[];
-}) {
-  const renderItem = (action: FunctionAction) => (
-    <DropdownMenuItem
-      key={action.id}
-      disabled={action.disabled || action.loading}
-      onSelect={(event) => {
-        if (action.disabled || action.loading) {
-          event.preventDefault();
-          return;
-        }
-        action.onClick?.();
-      }}
-      data-testid={`menu-action-${action.id}`}
-    >
-      {action.loading ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <action.icon className="size-4" />
-      )}
-      <span>{action.label}</span>
-    </DropdownMenuItem>
-  );
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" aria-label="Open workspace menu" data-testid="button-workspace-menu">
-          <Menu className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>All options</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <ListChecks className="size-4" />
-            Daily actions
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-56">
-            {primaryActions.map(renderItem)}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        {menuGroups.map((group) => (
-          <DropdownMenuSub key={group.label}>
-            <DropdownMenuSubTrigger>
-              {group.label === "Tools sync" ? (
-                <RefreshCcw className="size-4" />
-              ) : group.label === "Admin" ? (
-                <ShieldCheck className="size-4" />
-              ) : (
-                <SlidersHorizontal className="size-4" />
-              )}
-              {group.label}
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-56">
-              {group.actions.map(renderItem)}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function AppShellNav({
-  view,
-  onViewChange,
-  items,
-  currentUser,
-}: {
-  view: AppView;
-  onViewChange: (view: AppView) => void;
-  items: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }>; count?: number; disabled?: boolean }>;
-  currentUser: User | null;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const groups = [
-    { label: "Work", ids: ["home", "tasks", "agenda", "inbox"] as AppView[] },
-    { label: "People", ids: ["team", "profiles", "reports"] as AppView[] },
-    { label: "Workspace", ids: ["admin", "settings"] as AppView[] },
-  ]
-    .map((group) => ({
-      ...group,
-      items: group.ids.map((id) => items.find((item) => item.id === id)).filter(Boolean) as typeof items,
-    }))
-    .filter((group) => group.items.length > 0);
-  const renderButton = (item: (typeof items)[number], compact = false) => {
-    const Icon = item.icon;
-    const active = view === item.id;
-    const showLabel = compact || expanded;
-    return (
-      <button
-        key={item.id}
-        type="button"
-        title={item.label}
-        disabled={item.disabled}
-        onClick={() => onViewChange(item.id)}
-        className={`relative flex min-w-0 items-center rounded-md py-2 text-sm font-medium transition ${
-          active
-            ? "bg-brand-green text-white shadow-sm"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        } ${compact ? "h-9 shrink-0 gap-2 px-3" : expanded ? "w-full gap-2 px-3" : "mx-auto size-10 justify-center px-0"} disabled:pointer-events-none disabled:opacity-40`}
-        data-testid={`button-app-nav-${item.id}`}
-      >
-        <Icon className="size-4 shrink-0" />
-        {showLabel && <span className="truncate">{item.label}</span>}
-        {item.count ? (
-          <span
-            className={`${
-              showLabel ? "ml-auto" : "absolute -right-1 -top-1"
-            } rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-white/20 text-white" : "bg-background text-muted-foreground"}`}
-          >
-            {item.count > 99 ? "99+" : item.count}
-          </span>
-        ) : null}
-      </button>
-    );
-  };
-
-  return (
-    <>
-      <aside
-        className={`hidden shrink-0 border-r border-border bg-muted/20 px-3 py-4 transition-[width] duration-200 ease-out lg:flex lg:min-h-screen lg:flex-col ${
-          expanded ? "w-[220px]" : "w-14"
-        }`}
-        onMouseEnter={() => setExpanded(true)}
-        onMouseLeave={() => setExpanded(false)}
-        onFocus={() => setExpanded(true)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false);
-        }}
-        aria-label="Donnit navigation"
-      >
-        <div className={`mb-5 flex min-h-10 items-center ${expanded ? "justify-start px-1" : "justify-center"}`}>
-          {expanded ? (
-            <div>
-              <Wordmark onClick={() => onViewChange("home")} />
-              <p className="mt-2 text-xs text-muted-foreground">Work continuity command center</p>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onViewChange("home")}
-              className="flex size-10 items-center justify-center rounded-md border border-brand-green/30 bg-brand-green text-white shadow-sm"
-              aria-label="Home"
-              data-testid="button-app-nav-logo-collapsed"
-            >
-              <Check className="size-5" />
-            </button>
-          )}
-        </div>
-        <nav className="space-y-2" aria-label="Donnit navigation">
-          {groups.map((group, index) => (
-            <div key={group.label} className={index > 0 ? "border-t border-border pt-2" : ""}>
-              {expanded && (
-                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {group.label}
-                </p>
-              )}
-              <div className="space-y-1">{group.items.map((item) => renderButton(item))}</div>
-            </div>
-          ))}
-        </nav>
-        {expanded ? (
-          <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground">{currentUser?.name ?? "Donnit user"}</p>
-            <p className="mt-0.5 capitalize">{currentUser?.role ?? "member"}</p>
-          </div>
-        ) : (
-          <div className="mt-auto flex justify-center">
-            <div className="flex size-9 items-center justify-center rounded-full border border-border bg-background text-xs font-semibold text-foreground" title={currentUser?.name ?? "Donnit user"}>
-              {(currentUser?.name ?? "D").slice(0, 1).toUpperCase()}
-            </div>
-          </div>
-        )}
-      </aside>
-      <div className="border-b border-border bg-background px-3 py-2 lg:hidden">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <Wordmark onClick={() => onViewChange("home")} />
-          <span className="text-xs text-muted-foreground capitalize">{currentUser?.role ?? "member"}</span>
-        </div>
-        <nav className="flex gap-1 overflow-x-auto pb-1" aria-label="Donnit mobile navigation">
-          {items.map((item) => renderButton(item, true))}
-        </nav>
-      </div>
-    </>
-  );
-}
+type OnboardingStep = {
+  id: string;
+  title: string;
+  detail: string;
+  done: boolean;
+  actionLabel: string;
+  onAction: () => void;
+};
 
 function OnboardingChecklist({
   steps,
@@ -7324,75 +5804,6 @@ function AcceptancePanel({
   );
 }
 
-function formatReceivedAt(value: string | null | undefined): string {
-  if (!value) return "Unknown date";
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return value.slice(0, 24);
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function parseSuggestionInsight(actionItems: string[]) {
-  const take = (prefix: string) => {
-    const found = actionItems.find((item) => item.toLowerCase().startsWith(prefix.toLowerCase()));
-    return found ? found.slice(prefix.length).trim() : null;
-  };
-  const metaPrefixes = [
-    "Why Donnit suggested this:",
-    "Confidence:",
-    "Estimated time:",
-    "Source excerpt:",
-  ];
-  return {
-    why: take("Why Donnit suggested this:"),
-    confidence: take("Confidence:"),
-    estimate: take("Estimated time:"),
-    excerpt: take("Source excerpt:"),
-    nextSteps: actionItems.filter(
-      (item) => !metaPrefixes.some((prefix) => item.toLowerCase().startsWith(prefix.toLowerCase())),
-    ),
-  };
-}
-
-const EMAIL_SIGNATURE_TEMPLATES = [
-  { id: "none", label: "No signature", body: "" },
-  { id: "custom", label: "Custom signature", body: "" },
-  { id: "best", label: "Best", body: "Best," },
-  { id: "thanks", label: "Thanks", body: "Thanks," },
-  { id: "donnit", label: "Donnit", body: "Best,\nDonnit" },
-  { id: "followup", label: "Follow-up", body: "Thanks,\nI will follow up shortly." },
-];
-
-const EMAIL_SIGNATURE_TEMPLATE_KEY = "donnit.emailSignatureTemplate";
-const EMAIL_SIGNATURE_CUSTOM_KEY = "donnit.emailSignatureCustom";
-
-function readCustomEmailSignature() {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(EMAIL_SIGNATURE_CUSTOM_KEY) ?? "";
-}
-
-function readPreferredEmailSignatureTemplate() {
-  if (typeof window === "undefined") return "best";
-  return window.localStorage.getItem(EMAIL_SIGNATURE_TEMPLATE_KEY) ?? (readCustomEmailSignature().trim() ? "custom" : "best");
-}
-
-function resolveEmailSignature(templateId: string, customSignature: string) {
-  if (templateId === "custom") return customSignature;
-  return EMAIL_SIGNATURE_TEMPLATES.find((item) => item.id === templateId)?.body ?? "";
-}
-
-function applyEmailSignature(message: string, signature: string) {
-  const cleanMessage = message
-    .replace(/\n{2,}(best regards|best|thanks|thank you|regards|sincerely),?\s*(?:\n[\w\s.,&'-]{1,120}){0,4}\s*$/i, "")
-    .trimEnd();
-  if (!signature.trim()) return cleanMessage;
-  return `${cleanMessage}\n\n${signature.trim()}`;
-}
-
 function SuggestionCard({
   suggestion,
   onApprove,
@@ -7937,30 +6348,6 @@ function DoneLogPanel({
   );
 }
 
-function activityEventLabel(type: string) {
-  return titleCase(type.replace(/_/g, " "));
-}
-
-function eventSearchText(event: TaskEvent, task: Task | undefined, user: User | undefined) {
-  return [
-    event.type,
-    event.note,
-    event.createdAt,
-    task?.title,
-    task?.description,
-    task?.completionNotes,
-    task?.dueDate,
-    task?.source,
-    task?.urgency,
-    task?.status,
-    user?.name,
-    user?.email,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
 function ActivityLogPanel({
   events,
   tasks,
@@ -8252,184 +6639,6 @@ function SupportRail({
       )}
 
     </div>
-  );
-}
-
-type DerivedNotification = {
-  id: string;
-  title: string;
-  detail: string;
-  severity: "high" | "normal" | "low";
-  source: "approval" | "task";
-  taskId?: Id;
-  suggestionId?: Id;
-};
-
-function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[], events: TaskEvent[] = [], currentUserId?: Id): DerivedNotification[] {
-  const today = localDateIso();
-  const soonIso = addLocalDays(2, today);
-  const active = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
-  const items: DerivedNotification[] = [];
-
-  for (const suggestion of suggestions.filter((item) => item.status === "pending")) {
-    items.push({
-      id: `suggestion-${suggestion.id}`,
-      title: "Approval waiting",
-      detail: suggestion.suggestedTitle,
-      severity: "normal",
-      source: "approval",
-      suggestionId: suggestion.id,
-    });
-  }
-
-  if (currentUserId) {
-    for (const event of events.filter((item) => item.type === "accepted" || item.type === "denied")) {
-      const task = tasks.find((candidate) => String(candidate.id) === String(event.taskId));
-      if (!task) continue;
-      const assignedByCurrentUser = String(task.assignedById) === String(currentUserId);
-      const actedBySomeoneElse = String(event.actorId) !== String(currentUserId);
-      if (!assignedByCurrentUser || !actedBySomeoneElse) continue;
-      items.push({
-        id: `assignment-response-${task.id}-${event.id}`,
-        title: event.type === "accepted" ? "Task accepted" : "Task declined",
-        detail: event.type === "accepted" ? task.title : `${task.title}${event.note ? ` - ${event.note}` : ""}`,
-        severity: event.type === "denied" ? "high" : "normal",
-        source: "task",
-        taskId: task.id,
-      });
-    }
-  }
-
-  for (const task of active) {
-    const latestUpdateRequest = latestOpenUpdateRequest(task, events);
-    const updateVisibleToCurrentUser =
-      !currentUserId ||
-      String(task.assignedToId) === String(currentUserId) ||
-      String(task.delegatedToId ?? "") === String(currentUserId) ||
-      (task.collaboratorIds ?? []).some((id) => String(id) === String(currentUserId));
-    if (latestUpdateRequest && updateVisibleToCurrentUser && String(latestUpdateRequest.actorId) !== String(currentUserId ?? "")) {
-      items.push({
-        id: `update-request-${task.id}-${latestUpdateRequest.id}`,
-        title: "Update requested",
-        detail: task.title,
-        severity: "normal",
-        source: "task",
-        taskId: task.id,
-      });
-    }
-    if (task.dueDate && task.dueDate < today) {
-      items.push({
-        id: `overdue-${task.id}`,
-        title: "Past due",
-        detail: task.title,
-        severity: "high",
-        source: "task",
-        taskId: task.id,
-      });
-    } else if (task.dueDate && task.dueDate <= soonIso) {
-      items.push({
-        id: `soon-${task.id}`,
-        title: task.dueDate === today ? "Due today" : "Due soon",
-        detail: task.title,
-        severity: task.urgency === "critical" || task.urgency === "high" ? "high" : "normal",
-        source: "task",
-        taskId: task.id,
-      });
-    }
-    if (task.status === "pending_acceptance") {
-      items.push({
-        id: `acceptance-${task.id}`,
-        title: "Needs acceptance",
-        detail: task.title,
-        severity: "normal",
-        source: "approval",
-        taskId: task.id,
-      });
-    }
-    if (task.delegatedToId) {
-      items.push({
-        id: `delegated-${task.id}`,
-        title: "Delegated work open",
-        detail: task.title,
-        severity: "low",
-        source: "task",
-        taskId: task.id,
-      });
-    }
-  }
-
-  return items.slice(0, 12);
-}
-
-function NotificationCenter({
-  notifications,
-  onReviewed,
-  onOpenNotification,
-}: {
-  notifications: DerivedNotification[];
-  onReviewed: (ids: string[]) => void;
-  onOpenNotification: (notification: DerivedNotification) => void;
-}) {
-  const highCount = notifications.filter((item) => item.severity === "high").length;
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" aria-label="Open notifications" data-testid="button-notifications">
-          <span className="relative inline-flex">
-            <Bell className="size-4" />
-            {notifications.length > 0 && (
-              <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-green px-1 text-[10px] font-bold text-white">
-                {notifications.length}
-              </span>
-            )}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuLabel>
-          Notifications{highCount > 0 ? ` - ${highCount} urgent` : ""}
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {notifications.length === 0 ? (
-          <DropdownMenuItem disabled>No task alerts right now.</DropdownMenuItem>
-        ) : (
-          notifications.map((item) => (
-            <DropdownMenuItem
-              key={item.id}
-              className="items-start gap-2"
-              onClick={() => {
-                onReviewed([item.id]);
-                onOpenNotification(item);
-              }}
-              data-testid={`notification-item-${item.id}`}
-            >
-              <span
-                className={`mt-1 size-2 shrink-0 rounded-full ${
-                  item.severity === "high"
-                    ? "bg-destructive"
-                    : item.severity === "normal"
-                      ? "bg-brand-green"
-                      : "bg-muted-foreground"
-                }`}
-              />
-              <span className="min-w-0">
-                <span className="block text-xs font-medium text-foreground">{item.title}</span>
-                <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>
-              </span>
-            </DropdownMenuItem>
-          ))
-        )}
-        {notifications.length > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => onReviewed(notifications.map((item) => item.id))}>
-              <Check className="size-4" />
-              Clear reviewed
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -12683,12 +10892,4 @@ export default App;
 
 // Type-only re-exports kept for compatibility with any other modules that
 // imported these from App.tsx historically.
-export type {
-  Task,
-  TaskEvent,
-  ChatMessage,
-  EmailSuggestion,
-  AgendaItem,
-  Bootstrap,
-  User,
-};
+export type { Task, TaskEvent, ChatMessage, EmailSuggestion, AgendaItem, Bootstrap, User } from "@/app/types";
