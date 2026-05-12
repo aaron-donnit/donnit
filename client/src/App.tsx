@@ -5639,6 +5639,49 @@ function PositionProfilesPanel({
   const recurringKnowledgeGaps = (selectedProfile?.recurringTasks ?? [])
     .filter((task) => taskKnowledgeText(task).length < 30)
     .slice(0, 4);
+  const profileReadinessItems = selectedProfile
+    ? [
+        {
+          label: "Owner or coverage assigned",
+          detail: temporaryOwner
+            ? `Temporarily covered by ${temporaryOwner.name}`
+            : delegateOwner
+              ? `Delegated to ${delegateOwner.name}`
+              : handoffOwner
+                ? `Owned by ${handoffOwner.name}`
+                : "No owner assigned",
+          done: Boolean(handoffOwner || temporaryOwner || delegateOwner),
+        },
+        {
+          label: "Current work captured",
+          detail: `${selectedProfile.currentIncompleteTasks.length} open task${selectedProfile.currentIncompleteTasks.length === 1 ? "" : "s"}`,
+          done: selectedProfile.currentIncompleteTasks.length > 0 || selectedProfile.completedTasks.length > 0,
+        },
+        {
+          label: "Recurring work mapped",
+          detail: `${selectedProfile.recurringTasks.length} recurring responsibilit${selectedProfile.recurringTasks.length === 1 ? "y" : "ies"}`,
+          done: selectedProfile.recurringTasks.length > 0,
+        },
+        {
+          label: "Historical memory available",
+          detail: `${selectedProfile.completedTasks.length} historical task${selectedProfile.completedTasks.length === 1 ? "" : "s"} plus ${learnedHowToNotes.length} how-to note${learnedHowToNotes.length === 1 ? "" : "s"}`,
+          done: selectedProfile.completedTasks.length > 0 || learnedHowToNotes.length > 0,
+        },
+        {
+          label: "Recurring how-to context",
+          detail: recurringKnowledgeGaps.length === 0
+            ? "No recurring context gaps detected"
+            : `${recurringKnowledgeGaps.length} recurring item${recurringKnowledgeGaps.length === 1 ? "" : "s"} need notes`,
+          done: selectedProfile.recurringTasks.length > 0 && recurringKnowledgeGaps.length === 0,
+        },
+        {
+          label: "Tool access documented",
+          detail: `${selectedProfile.accessItems.length} access item${selectedProfile.accessItems.length === 1 ? "" : "s"} recorded`,
+          done: selectedProfile.accessItems.length > 0,
+        },
+      ]
+    : [];
+  const profileReadinessDone = profileReadinessItems.filter((item) => item.done).length;
   const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
@@ -6234,18 +6277,48 @@ function PositionProfilesPanel({
             )}
 
             <div className="rounded-md border border-border bg-background px-3 py-2">
-              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-                <ListChecks className="size-4 text-muted-foreground" />
-                Transition checklist
-              </p>
-              <ul className="space-y-1 text-xs text-muted-foreground">
-                {selectedProfile.transitionChecklist.slice(0, 5).map((item) => (
-                  <li key={item} className="flex gap-2">
-                    <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
-                    <span>{item}</span>
-                  </li>
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                    <ListChecks className="size-4 text-muted-foreground" />
+                    Handoff readiness
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    What Donnit needs before this role can be safely covered or reassigned.
+                  </p>
+                </div>
+                <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
+                  {profileReadinessDone}/{profileReadinessItems.length}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {profileReadinessItems.map((item) => (
+                  <div key={item.label} className="flex items-start gap-2 rounded-md bg-muted/45 px-2 py-2 text-xs">
+                    {item.done ? (
+                      <Check className="mt-0.5 size-3.5 shrink-0 text-brand-green" />
+                    ) : (
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block font-medium text-foreground">{item.label}</span>
+                      <span className="mt-0.5 block text-muted-foreground">{item.detail}</span>
+                    </span>
+                  </div>
                 ))}
-              </ul>
+              </div>
+              {selectedProfile.transitionChecklist.length > 0 && (
+                <div className="mt-3 border-t border-border pt-2">
+                  <p className="mb-1 text-xs font-medium text-foreground">Next transition steps</p>
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {selectedProfile.transitionChecklist.slice(0, 4).map((item) => (
+                      <li key={item} className="flex gap-2">
+                        <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <div className="rounded-md border border-border bg-background px-3 py-3">
