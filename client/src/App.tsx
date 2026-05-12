@@ -635,6 +635,12 @@ function inferTaskCadence(task: Task) {
   return task.recurrence !== "none" ? titleCase(task.recurrence) : "As needed";
 }
 
+function taskRepeatLabel(task: Task) {
+  if (task.recurrence === "none" && inferTaskCadence(task) === "As needed") return "";
+  const details = extractRepeatDetails(task.description);
+  return details ? `${inferTaskCadence(task)} / ${details}` : inferTaskCadence(task);
+}
+
 function taskKnowledgeText(task: Task) {
   return [task.description, task.completionNotes]
     .filter(Boolean)
@@ -1236,12 +1242,12 @@ const dialogFooterClass = "shrink-0 border-t border-border px-5 py-3";
 const REPEAT_DETAILS_PREFIX = "Repeat details:";
 
 function extractRepeatDetails(description: string) {
-  const match = description.match(/(?:^|\n)\s*Repeat details:\s*(.+)\s*$/i);
+  const match = description.match(/(?:^|\n)\s*Repeat(?: details)?:\s*(.+)\s*$/i);
   return match?.[1]?.trim() ?? "";
 }
 
 function stripRepeatDetails(description: string) {
-  return description.replace(/(?:\n{0,2})\s*Repeat details:\s*.+\s*$/i, "").trim();
+  return description.replace(/(?:\n{0,2})\s*Repeat(?: details)?:\s*.+\s*$/i, "").trim();
 }
 
 function descriptionWithRepeatDetails(description: string, repeatDetails: string) {
@@ -2087,10 +2093,9 @@ function TaskRow({
   const collaboratorCount = task.collaboratorIds?.length ?? 0;
   const isDone = task.status === "completed";
   const latestUpdateRequest = latestOpenUpdateRequest(task, events);
+  const repeatLabel = taskRepeatLabel(task);
   const contextHints = [
-    task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"
-      ? `${inferTaskCadence(task)} responsibility`
-      : "",
+    repeatLabel ? `${repeatLabel} responsibility` : "",
     task.description ? task.description.slice(0, 140) : "",
     task.completionNotes ? `Last note: ${task.completionNotes.slice(0, 120)}` : "",
     task.source !== "manual" ? `Source: ${task.source}` : "",
@@ -2178,6 +2183,12 @@ function TaskRow({
             <Clock3 className="size-3.5" />
             {task.estimatedMinutes} min
           </span>
+          {repeatLabel && (
+            <span className="inline-flex items-center gap-1 font-medium text-foreground" data-testid={`text-task-repeat-${task.id}`}>
+              <Repeat2 className="size-3.5" />
+              {repeatLabel}
+            </span>
+          )}
           <span className="inline-flex items-center gap-1">
             <UserRoundCheck className="size-3.5" />
             {assignee?.name ?? "Unassigned"}

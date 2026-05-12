@@ -908,10 +908,77 @@ function parseAnnualReminderDays(message: string) {
   return text.includes("birthday") || text.includes("anniversary") || text.includes("annual") ? 15 : 0;
 }
 
+function parseTaskRecurrence(message: string): DonnitTask["recurrence"] {
+  const text = message.toLowerCase();
+  if (/\b(?:every day|each day|daily|weekday|weekdays)\b/.test(text)) return "daily";
+  if (/\b(?:every week|each week|weekly|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/.test(text)) {
+    return "weekly";
+  }
+  if (/\b(?:every month|each month|monthly|month end|eom|first\s+\w+\s+of\s+(?:the\s+)?month|last\s+\w+\s+of\s+(?:the\s+)?month)\b/.test(text)) {
+    return "monthly";
+  }
+  if (/\b(?:every quarter|each quarter|quarterly|quarter end|eoq|qbr|q[1-4])\b/.test(text)) return "quarterly";
+  if (/\b(?:every year|each year|yearly|annually|annual|birthday|anniversary)\b/.test(text)) return "annual";
+  return "none";
+}
+
+function recurrenceDetailsFromMessage(message: string, recurrence: DonnitTask["recurrence"], dueDate: string | null) {
+  if (recurrence === "none") return "";
+  const text = message.toLowerCase();
+  const weekday = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b/i)?.[1];
+  const ordinalWeekday = text.match(/\b(first|second|third|fourth|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (ordinalWeekday) return `${titleCase(ordinalWeekday[1])} ${titleCase(ordinalWeekday[2])}`;
+  if (weekday && recurrence === "weekly") return `Every ${titleCase(weekday)}`;
+  if (/\b(?:weekday|weekdays)\b/i.test(message)) return "Every weekday";
+  if (/\b(?:month end|eom)\b/i.test(message)) return "End of each month";
+  if (/\b(?:quarter end|eoq)\b/i.test(message)) return "End of each quarter";
+  if (dueDate) {
+    const parsed = new Date(`${dueDate}T12:00:00Z`);
+    if (Number.isFinite(parsed.getTime())) {
+      const weekdayName = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(parsed);
+      const monthDay = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: "UTC" }).format(parsed);
+      if (recurrence === "weekly") return `Every ${weekdayName}`;
+      if (recurrence === "monthly") return `Monthly around the ${parsed.getUTCDate()}${daySuffix(parsed.getUTCDate())}`;
+      if (recurrence === "quarterly") return `Quarterly around ${monthDay}`;
+      if (recurrence === "annual") return `Every year on ${monthDay}`;
+    }
+  }
+  return titleCase(recurrence);
+}
+
+function descriptionWithServerRepeatDetails(description: string, repeatDetails: string) {
+  const cleaned = description.trim();
+  const repeat = repeatDetails.trim();
+  if (!repeat || /Repeat details:/i.test(cleaned)) return cleaned;
+  return `${cleaned}${cleaned ? "\n\n" : ""}Repeat details: ${repeat}`;
+}
+
+function daySuffix(day: number) {
+  if (day >= 11 && day <= 13) return "th";
+  switch (day % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function parseChatTask(message: string, users: User[]): InsertTask {
   const assignee = findAssignee(message, users);
   const reminderDaysBefore = parseAnnualReminderDays(message);
-  const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
+  const recurrence = parseTaskRecurrence(message);
   const assignedToId = assignee?.id ?? DEMO_USER_ID;
   const assignedById = DEMO_USER_ID;
   const title = titleFromMessage(message, assigneeAliases(assignee?.name, assignee?.email)) || "Untitled task";
@@ -922,7 +989,7 @@ function parseChatTask(message: string, users: User[]): InsertTask {
 
   return {
     title,
-    description: message,
+    description: descriptionWithServerRepeatDetails(message, recurrenceDetailsFromMessage(message, recurrence, dueDate)),
     status: assignedToId === assignedById ? "open" : "pending_acceptance",
     urgency,
     dueDate,
@@ -1579,6 +1646,26 @@ async function requireWorkspaceMemberContext(auth: NonNullable<Request["donnitAu
 
 function memberDisplayName(member: { profile?: { full_name?: string | null; email?: string | null } | null }) {
   return member.profile?.full_name || member.profile?.email || "Member";
+}
+
+function firstNameForTaskReference(displayName: string) {
+  const trimmed = displayName.trim();
+  if (!trimmed || trimmed === "Member") return "the requester";
+  const emailPrefix = trimmed.includes("@") ? trimmed.split("@")[0] : trimmed;
+  const first = emailPrefix.split(/[.\s_-]+/).filter(Boolean)[0] ?? emailPrefix;
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : "the requester";
+}
+
+function rewriteRequesterReferencesInTitle(title: string, requesterName: string, shouldRewrite: boolean) {
+  if (!shouldRewrite) return title;
+  const possessive = requesterName === "the requester" ? "the requester's" : `${requesterName}'s`;
+  const rewritten = title
+    .replace(/\bme\b/gi, requesterName)
+    .replace(/\bmy\b/gi, possessive)
+    .replace(/\bmine\b/gi, possessive)
+    .replace(/\s+/g, " ")
+    .trim();
+  return rewritten ? rewritten.charAt(0).toUpperCase() + rewritten.slice(1) : title;
 }
 
 function visibleFromForRecurringTask(input: {
@@ -2538,7 +2625,7 @@ function parseChatTaskAuthenticated(
     : null;
   const assignee = explicit ?? members.find((m) => m.user_id === selfId) ?? members[0];
   const reminderDaysBefore = parseAnnualReminderDays(message);
-  const recurrence = reminderDaysBefore > 0 || /annual|birthday|anniversary/i.test(message) ? "annual" : "none";
+  const recurrence = parseTaskRecurrence(message);
   const assignedToId = assignee?.user_id ?? selfId;
   const title =
     titleFromMessage(message, assigneeAliases(assignee?.profile?.full_name, assignee?.profile?.email)) || "Untitled task";
@@ -2548,7 +2635,7 @@ function parseChatTaskAuthenticated(
   const timing = parseTaskTime(message, estimatedMinutes);
   return {
     title,
-    description: message,
+    description: descriptionWithServerRepeatDetails(message, recurrenceDetailsFromMessage(message, recurrence, dueDate)),
     status: assignedToId === selfId ? "open" : "pending_acceptance",
     urgency,
     dueDate,
@@ -2762,6 +2849,7 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
   const action = taskActionForSentence(task.title);
   const timeText = formatChatTime(task.due_time ?? task.start_time);
   const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}${timeText ? ` at ${timeText}` : ""}` : "";
+  const recurrenceText = task.recurrence !== "none" ? ` It repeats ${task.recurrence}.` : "";
   const urgencyText =
     task.urgency === "critical"
       ? " It is marked critical."
@@ -2774,7 +2862,7 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
       : task.visibility === "personal"
         ? " This task was marked as personal."
         : "";
-  return `I assigned ${assigneeName} to ${action}${dueText}.${urgencyText}${visibilitySentence}`;
+  return `I assigned ${assigneeName} to ${action}${dueText}.${recurrenceText}${urgencyText}${visibilitySentence}`;
 }
 
 function buildPendingFromTaskInput(input: {
@@ -5346,7 +5434,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             })
           : null;
         const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? fallbackInput.assignedToId;
-        const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+        const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate ?? null;
         const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
         const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
         const resolvedEndTime =
@@ -5355,15 +5443,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           (resolvedStartTime ? addMinutesToTime(resolvedStartTime, ai?.estimatedMinutes ?? fallbackInput.estimatedMinutes ?? 30) : null);
         const resolvedUrgency =
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
+        const resolvedRecurrence: DonnitTask["recurrence"] =
+          (ai?.recurrence && ai.recurrence !== "none" ? ai.recurrence : fallbackInput.recurrence ?? "none") as DonnitTask["recurrence"];
+        const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
         const resolvedTitle = ai
           ? normalizeAiTitle(ai.title, fallbackInput.title, [
               ...assigneeAliases(aiAssignee?.profile?.full_name, aiAssignee?.profile?.email),
             ])
           : fallbackInput.title;
+        const requester = members.find((member) => member.user_id === auth.userId);
+        const finalTitle = rewriteRequesterReferencesInTitle(
+          resolvedTitle,
+          firstNameForTaskReference(memberDisplayName(requester ?? {})),
+          String(assignedToId) !== String(auth.userId),
+        );
+        const repeatDetails = recurrenceDetailsFromMessage(parsed.data.message, resolvedRecurrence, resolvedDueDate);
         const taskInput = ai
           ? {
-              title: resolvedTitle,
-              description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+              title: finalTitle,
+              description: descriptionWithServerRepeatDetails(
+                `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+                repeatDetails,
+              ),
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
               urgency: resolvedUrgency,
               dueDate: resolvedDueDate,
@@ -5375,11 +5476,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               assignedToId,
               assignedById: auth.userId,
               source: "chat" as const,
-              recurrence: ai.recurrence,
-              reminderDaysBefore: ai.reminderDaysBefore,
+              recurrence: resolvedRecurrence,
+              reminderDaysBefore: resolvedReminderDaysBefore,
               visibility: ai.visibility ?? fallbackInput.visibility,
             }
-          : fallbackInput;
+          : {
+              ...fallbackInput,
+              title: finalTitle,
+              description: descriptionWithServerRepeatDetails(fallbackInput.description ?? parsed.data.message, repeatDetails),
+              recurrence: resolvedRecurrence,
+              reminderDaysBefore: resolvedReminderDaysBefore,
+            };
         const positionProfiles = taskInput.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
         const profileResolution = resolveChatPositionProfile({
           profiles: positionProfiles,
@@ -5463,7 +5570,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       : null;
     const aiAssignee = explicitAssignment ? matchAiAssignee(ai?.assigneeHint ?? null, users) : null;
     const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId ?? DEMO_USER_ID;
-    const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+    const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate ?? null;
     const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
     const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
     const resolvedEndTime =
@@ -5472,13 +5579,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (resolvedStartTime ? addMinutesToTime(resolvedStartTime, ai?.estimatedMinutes ?? fallbackInput.estimatedMinutes ?? 30) : null);
     const resolvedUrgency =
       resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
+    const resolvedRecurrence: DonnitTask["recurrence"] =
+      (ai?.recurrence && ai.recurrence !== "none" ? ai.recurrence : fallbackInput.recurrence ?? "none") as DonnitTask["recurrence"];
+    const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
     const resolvedTitle = ai
       ? normalizeAiTitle(ai.title, fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
       : fallbackInput.title;
+    const requester = users.find((user) => user.id === DEMO_USER_ID);
+    const finalTitle = rewriteRequesterReferencesInTitle(
+      resolvedTitle,
+      firstNameForTaskReference(requester?.name ?? "Demo Owner"),
+      String(assignedToId) !== String(DEMO_USER_ID),
+    );
+    const repeatDetails = recurrenceDetailsFromMessage(parsed.data.message, resolvedRecurrence, resolvedDueDate);
     const taskInput = ai
       ? {
-          title: resolvedTitle,
-          description: `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+          title: finalTitle,
+          description: descriptionWithServerRepeatDetails(
+            `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+            repeatDetails,
+          ),
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
           urgency: resolvedUrgency,
           dueDate: resolvedDueDate,
@@ -5490,11 +5610,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           assignedToId,
           assignedById: DEMO_USER_ID,
           source: "chat" as const,
-          recurrence: ai.recurrence,
-          reminderDaysBefore: ai.reminderDaysBefore,
+          recurrence: resolvedRecurrence,
+          reminderDaysBefore: resolvedReminderDaysBefore,
           visibility: ai.visibility ?? fallbackInput.visibility,
         }
-      : fallbackInput;
+      : {
+          ...fallbackInput,
+          title: finalTitle,
+          description: descriptionWithServerRepeatDetails(fallbackInput.description ?? parsed.data.message, repeatDetails),
+          recurrence: resolvedRecurrence,
+          reminderDaysBefore: resolvedReminderDaysBefore,
+        };
     if (explicitAssignment && !explicitMentionedUser && !aiAssignee) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assistant = await storage.createChatMessage({
