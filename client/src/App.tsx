@@ -684,6 +684,7 @@ type LearnedRecurringResponsibility = {
   taskId: string;
   title: string;
   cadence: string;
+  repeatDetails: string;
   dueDate: string | null;
   showEarlyDays: number;
   updatedAt: string | null;
@@ -732,6 +733,7 @@ function memoryRecurringResponsibilities(memory: Record<string, unknown>): Learn
         taskId: String(record.taskId ?? title),
         title,
         cadence: typeof record.cadence === "string" && record.cadence !== "none" ? titleCase(record.cadence) : "Recurring",
+        repeatDetails: typeof record.repeatDetails === "string" ? record.repeatDetails.trim() : "",
         dueDate: typeof record.dueDate === "string" ? record.dueDate : null,
         showEarlyDays: typeof record.showEarlyDays === "number" ? record.showEarlyDays : 0,
         updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : null,
@@ -748,6 +750,7 @@ function recurringResponsibilitiesFromTasks(tasks: Task[]): LearnedRecurringResp
       taskId: String(task.id),
       title: task.title,
       cadence: taskRepeatLabel(task) || inferTaskCadence(task),
+      repeatDetails: extractRepeatDetails(task.description),
       dueDate: task.dueDate,
       showEarlyDays: task.reminderDaysBefore ?? 0,
       updatedAt: task.createdAt ?? null,
@@ -5633,6 +5636,9 @@ function PositionProfilesPanel({
     ? selectedMemory.stats as Record<string, unknown>
     : {};
   const learnedRecurringCount = Math.max(Number(learnedStats.recurringTasks ?? 0) || 0, learnedRecurringResponsibilities.length);
+  const recurringKnowledgeGaps = (selectedProfile?.recurringTasks ?? [])
+    .filter((task) => taskKnowledgeText(task).length < 30)
+    .slice(0, 4);
   const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
@@ -6097,7 +6103,7 @@ function PositionProfilesPanel({
                         <div key={`${item.taskId}-${item.title}`} className="rounded-md bg-background px-2 py-2 text-xs">
                           <p className="truncate font-medium text-foreground">{item.title}</p>
                           <p className="mt-0.5 text-muted-foreground">
-                            {item.cadence}{item.dueDate ? ` / due ${item.dueDate}` : ""}{item.showEarlyDays > 0 ? ` / shows ${item.showEarlyDays} days early` : ""}
+                            {item.repeatDetails || item.cadence}{item.dueDate ? ` / due ${item.dueDate}` : ""}{item.showEarlyDays > 0 ? ` / shows ${item.showEarlyDays} days early` : ""}
                           </p>
                         </div>
                       ))}
@@ -6128,6 +6134,35 @@ function PositionProfilesPanel({
                   )}
                 </div>
               </div>
+              {recurringKnowledgeGaps.length > 0 && (
+                <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium text-foreground">Recurring work needs context</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Add notes or completion details so a replacement can run these without guessing.
+                      </p>
+                    </div>
+                    <span className="rounded-md bg-background px-2 py-1 text-[11px] text-muted-foreground">
+                      {recurringKnowledgeGaps.length}
+                    </span>
+                  </div>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {recurringKnowledgeGaps.map((task) => (
+                      <button
+                        key={String(task.id)}
+                        type="button"
+                        onClick={() => setSelectedProfileTaskId(String(task.id))}
+                        className="rounded-md bg-background px-2 py-2 text-left text-xs transition hover:bg-muted"
+                        data-testid={`button-position-profile-knowledge-gap-${task.id}`}
+                      >
+                        <span className="block truncate font-medium text-foreground">{task.title}</span>
+                        <span className="mt-0.5 block truncate text-muted-foreground">{taskRepeatLabel(task) || "Recurring responsibility"}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_.8fr]">
                 <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
                   <p className="mb-2 text-xs font-medium text-foreground">How-to notes Donnit captured</p>

@@ -2045,6 +2045,11 @@ function compactMemoryText(value: string | null | undefined, max = 280) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function repeatDetailsFromDescription(value: string | null | undefined) {
+  const match = String(value ?? "").match(/(?:^|\n)\s*Repeat(?: details)?:\s*(.+)\s*$/i);
+  return match?.[1]?.trim() ?? "";
+}
+
 function uniqueMemoryItems<T>(items: T[], keyFor: (item: T) => string, max = 20) {
   const seen = new Set<string>();
   const output: T[] = [];
@@ -2101,6 +2106,7 @@ async function enrichPositionProfileMemoryFromTask(input: {
             taskId: input.task.id,
             title: input.task.title,
             cadence: input.task.recurrence,
+            repeatDetails: repeatDetailsFromDescription(input.task.description),
             dueDate: input.task.due_date,
             showEarlyDays: input.task.reminder_days_before,
             updatedAt: capturedAt,
