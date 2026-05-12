@@ -100,6 +100,10 @@ export type DonnitTask = {
   status: "open" | "pending_acceptance" | "accepted" | "denied" | "completed";
   urgency: "low" | "normal" | "high" | "critical";
   due_date: string | null;
+  due_time: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  is_all_day: boolean;
   estimated_minutes: number;
   assigned_to: string;
   assigned_by: string;
@@ -384,11 +388,15 @@ export class DonnitStore {
       | "completion_notes"
       | "delegated_to"
       | "collaborator_ids"
+      | "due_time"
+      | "start_time"
+      | "end_time"
+      | "is_all_day"
       | "position_profile_id"
       | "visibility"
       | "visible_from"
     > &
-      Partial<Pick<DonnitTask, "delegated_to" | "collaborator_ids" | "position_profile_id" | "visibility" | "visible_from">>,
+      Partial<Pick<DonnitTask, "delegated_to" | "collaborator_ids" | "due_time" | "start_time" | "end_time" | "is_all_day" | "position_profile_id" | "visibility" | "visible_from">>,
   ): Promise<DonnitTask> {
     const { data, error } = await this.client
       .from(DONNIT_TABLES.tasks)

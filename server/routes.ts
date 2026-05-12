@@ -566,6 +566,86 @@ function parseDueDate(message: string) {
   return null;
 }
 
+function normalizeTimeOnly(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function addMinutesToTime(value: string, minutes: number) {
+  const normalized = normalizeTimeOnly(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(":").map(Number);
+  const total = Math.min(Math.max(hour * 60 + minute + Math.max(minutes, 5), 0), 23 * 60 + 59);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function clockTimeFromMatch(hourRaw: string, minuteRaw: string | undefined, meridiemRaw: string | undefined) {
+  let hour = Number(hourRaw);
+  const minute = minuteRaw ? Number(minuteRaw) : 0;
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  const meridiem = meridiemRaw?.toLowerCase().replace(/\./g, "");
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
+  if (hour < 0 || hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseTaskTime(message: string, estimatedMinutes = 30) {
+  const text = message.toLowerCase();
+  const isAllDay = /\b(all day|all-day)\b/.test(text);
+  if (isAllDay) {
+    return { dueTime: null, startTime: null, endTime: null, isAllDay: true };
+  }
+
+  const range = text.match(
+    /\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\s*(?:-|to|until)\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b/i,
+  );
+  if (range) {
+    const endTime = clockTimeFromMatch(range[4], range[5], range[6]);
+    const startMeridiem = range[3] ?? range[6];
+    const startTime = clockTimeFromMatch(range[1], range[2], startMeridiem);
+    if (startTime && endTime) return { dueTime: startTime, startTime, endTime, isAllDay: false };
+  }
+
+  const namedTime = text.match(/\b(?:at|@|by|before|around)?\s*(noon|midnight)\b/i);
+  const explicit = text.match(/\b(?:at|@|by|before|around)?\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b/i);
+  const inferred =
+    !namedTime && !explicit
+      ? text.match(/\b(morning|afternoon|evening)\b/i)
+      : null;
+  const dueTime = namedTime
+    ? namedTime[1].toLowerCase() === "noon"
+      ? "12:00"
+      : "00:00"
+    : explicit
+      ? clockTimeFromMatch(explicit[1], explicit[2], explicit[3])
+      : inferred
+        ? inferred[1].toLowerCase() === "morning"
+          ? "09:00"
+          : inferred[1].toLowerCase() === "afternoon"
+            ? "13:00"
+            : "17:00"
+        : null;
+  const isFixedEvent =
+    Boolean(dueTime) &&
+    /\b(meeting|meet|appointment|interview|demo|event|call|train|flight|travel|drive|go to|attend)\b/.test(text) &&
+    !/\b(by|before|deadline|due)\b/.test(text);
+  return {
+    dueTime,
+    startTime: isFixedEvent && dueTime ? dueTime : null,
+    endTime: isFixedEvent && dueTime ? addMinutesToTime(dueTime, estimatedMinutes) : null,
+    isAllDay: false,
+  };
+}
+
 function isPastDue(dueDate: string | null) {
   return Boolean(dueDate && dueDate < todayIso());
 }
@@ -766,6 +846,8 @@ function parseChatTask(message: string, users: User[]): InsertTask {
   const title = titleFromMessage(message, assigneeAliases(assignee?.name, assignee?.email)) || "Untitled task";
   const dueDate = parseDueDate(message);
   const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
+  const estimatedMinutes = parseEstimate(message);
+  const timing = parseTaskTime(message, estimatedMinutes);
 
   return {
     title,
@@ -773,7 +855,11 @@ function parseChatTask(message: string, users: User[]): InsertTask {
     status: assignedToId === assignedById ? "open" : "pending_acceptance",
     urgency,
     dueDate,
-    estimatedMinutes: parseEstimate(message),
+    dueTime: timing.dueTime,
+    startTime: timing.startTime,
+    endTime: timing.endTime,
+    isAllDay: timing.isAllDay,
+    estimatedMinutes,
     assignedToId,
     assignedById,
     source: "chat",
@@ -960,6 +1046,13 @@ function formatDateTimeLocal(date: string, minute: number) {
   return `${date}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 }
 
+function timeToMinute(value: string | null | undefined) {
+  const normalized = normalizeTimeOnly(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
 function getZonedParts(value: Date | string, timeZone: string) {
   const date = typeof value === "string" ? new Date(value) : value;
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -1039,6 +1132,10 @@ function scheduleTasks<T extends {
   title: string;
   estimatedMinutes: number;
   dueDate: string | null;
+  dueTime?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  isAllDay?: boolean;
   urgency: string;
   status: string;
 }>(
@@ -1056,8 +1153,35 @@ function scheduleTasks<T extends {
   const workdayStartMinute = parseClockMinute(preferences.workdayStart, DEFAULT_AGENDA_PREFERENCES.workdayStart);
   const workdayEndMinute = parseClockMinute(preferences.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
   const workdayMinutes = Math.max(workdayEndMinute - workdayStartMinute, 60);
+  const agendaByTaskId = new Map<string, AgendaItem>();
+
+  candidates.forEach((task, index) => {
+    if (!task.dueDate || task.isAllDay) return;
+    const fixedStart = timeToMinute(task.startTime ?? task.dueTime ?? null);
+    if (fixedStart === null) return;
+    const fixedEnd = timeToMinute(task.endTime) ?? fixedStart + Math.min(Math.max(task.estimatedMinutes, 5), workdayMinutes);
+    const endMinute = Math.min(Math.max(fixedEnd, fixedStart + 5), 23 * 60 + 59);
+    mutableBusy.set(task.dueDate, [
+      ...(mutableBusy.get(task.dueDate) ?? []),
+      { date: task.dueDate, startMinute: fixedStart, endMinute },
+    ]);
+    agendaByTaskId.set(String(task.id), {
+      taskId: task.id,
+      order: index + 1,
+      title: task.title,
+      estimatedMinutes: Math.max(endMinute - fixedStart, 5),
+      dueDate: task.dueDate,
+      urgency: task.urgency,
+      startAt: formatDateTimeLocal(task.dueDate, fixedStart),
+      endAt: formatDateTimeLocal(task.dueDate, endMinute),
+      timeZone,
+      scheduleStatus: "scheduled" as const,
+    });
+  });
 
   return candidates.map((task, index) => {
+    const fixed = agendaByTaskId.get(String(task.id));
+    if (fixed) return fixed;
     const estimate = Math.min(Math.max(task.estimatedMinutes, preferences.minimumBlockMinutes, 5), workdayMinutes);
     const firstDate = task.dueDate && task.dueDate >= today ? task.dueDate : today;
     for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
@@ -1103,6 +1227,10 @@ function buildAgenda<T extends {
   title: string;
   estimatedMinutes: number;
   dueDate: string | null;
+  dueTime?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  isAllDay?: boolean;
   urgency: string;
   status: string;
 }>(tasks: T[], busyByDate: Map<string, CalendarBusyBlock[]> = new Map(), timeZone = DEFAULT_CALENDAR_TIME_ZONE, preferences = DEFAULT_AGENDA_PREFERENCES): AgendaItem[] {
@@ -1123,6 +1251,10 @@ function toClientTask(task: DonnitTask) {
     status: task.status,
     urgency: task.urgency,
     dueDate: task.due_date,
+    dueTime: normalizeTimeOnly(task.due_time),
+    startTime: normalizeTimeOnly(task.start_time),
+    endTime: normalizeTimeOnly(task.end_time),
+    isAllDay: task.is_all_day ?? false,
     estimatedMinutes: task.estimated_minutes,
     assignedToId: task.assigned_to,
     assignedById: task.assigned_by,
@@ -1987,13 +2119,19 @@ function parseChatTaskAuthenticated(
     titleFromMessage(message, assigneeAliases(assignee?.profile?.full_name, assignee?.profile?.email)) || "Untitled task";
   const dueDate = parseDueDate(message);
   const urgency = isPastDue(dueDate) ? "critical" : parseUrgency(message);
+  const estimatedMinutes = parseEstimate(message);
+  const timing = parseTaskTime(message, estimatedMinutes);
   return {
     title,
     description: message,
     status: assignedToId === selfId ? "open" : "pending_acceptance",
     urgency,
     dueDate,
-    estimatedMinutes: parseEstimate(message),
+    dueTime: timing.dueTime,
+    startTime: timing.startTime,
+    endTime: timing.endTime,
+    isAllDay: timing.isAllDay,
+    estimatedMinutes,
     assignedToId,
     assignedById: selfId,
     source: "chat" as const,
@@ -2164,11 +2302,21 @@ function formatChatDueDate(value: string | null) {
   return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(parsed);
 }
 
+function formatChatTime(value: string | null | undefined) {
+  const normalized = normalizeTimeOnly(value);
+  if (!normalized) return "";
+  const [hour, minute] = normalized.split(":").map(Number);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
 function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>) {
   const assignee = members.find((member) => member.user_id === task.assigned_to);
   const assigneeName = memberDisplayName(assignee ?? {});
   const action = taskActionForSentence(task.title);
-  const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}` : "";
+  const timeText = formatChatTime(task.due_time ?? task.start_time);
+  const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}${timeText ? ` at ${timeText}` : ""}` : "";
   const urgencyText =
     task.urgency === "critical"
       ? " It is marked critical."
@@ -2190,6 +2338,10 @@ function buildPendingFromTaskInput(input: {
   status: string;
   urgency: "low" | "normal" | "high" | "critical";
   dueDate: string | null;
+  dueTime?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  isAllDay?: boolean;
   estimatedMinutes: number;
   assignedToId: string;
   assignedById: string;
@@ -2205,6 +2357,10 @@ function buildPendingFromTaskInput(input: {
     status: input.status as PendingChatTask["status"],
     urgency: input.urgency,
     dueDate: input.dueDate,
+    dueTime: input.dueTime ?? null,
+    startTime: input.startTime ?? null,
+    endTime: input.endTime ?? null,
+    isAllDay: input.isAllDay ?? false,
     estimatedMinutes: input.estimatedMinutes,
     assignedToId: input.assignedToId,
     assignedById: input.assignedById,
@@ -2298,6 +2454,7 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
   const explicitUrgency = parseExplicitUrgency(message);
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
   const estimatedMinutes = /\d/.test(message) ? parseEstimate(message) : task.estimatedMinutes;
+  const timing = parseTaskTime(message, estimatedMinutes);
   const profileResolution = resolveChatPositionProfile({
     profiles,
     assignedToId: task.assignedToId,
@@ -2319,6 +2476,10 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
     dueDate,
     urgency,
     estimatedMinutes,
+    dueTime: timing.dueTime ?? task.dueTime ?? null,
+    startTime: timing.startTime ?? task.startTime ?? null,
+    endTime: timing.endTime ?? task.endTime ?? null,
+    isAllDay: timing.isAllDay || task.isAllDay || false,
     positionProfileId,
     missing,
   };
@@ -2404,6 +2565,10 @@ const pendingChatTaskSchema = z.object({
   status: z.enum(["open", "pending_acceptance", "accepted", "denied", "completed"]),
   urgency: z.enum(["low", "normal", "high", "critical"]),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  dueTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  isAllDay: z.boolean().optional(),
   estimatedMinutes: z.number().int().min(5).max(1440),
   assignedToId: z.string().min(1),
   assignedById: z.string().min(1),
@@ -2722,6 +2887,10 @@ type AiTaskExtraction = {
   description: string;
   urgency: "low" | "normal" | "high" | "critical";
   dueDate: string | null;
+  dueTime: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  isAllDay: boolean;
   estimatedMinutes: number;
   assigneeHint: string | null;
   visibility: "work" | "personal" | "confidential";
@@ -2753,6 +2922,10 @@ const aiTaskExtractionSchema = z.object({
   description: z.string().trim().max(1200).default(""),
   urgency: z.enum(["low", "normal", "high", "critical"]),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  dueTime: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  isAllDay: z.boolean(),
   estimatedMinutes: z.number().int().min(5).max(1440),
   assigneeHint: z.string().trim().max(160).nullable(),
   visibility: z.enum(["work", "personal", "confidential"]),
@@ -2895,6 +3068,7 @@ async function extractTaskWithAi(input: {
                 "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
                 "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
                 "Descriptions should explain the next step in one or two plain sentences.",
+                "Extract structured timing. Use dueTime for a clear time like noon, 3pm, or 14:30. For meetings, calls, appointments, interviews, travel, or other fixed-time events, also set startTime and endTime. Use null time fields when the user only gives a date. Use isAllDay=true only when the user explicitly says all day.",
                 "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
                 "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
                 "When the user says 'not urgent' or 'no rush', set urgency=normal and do not include that phrase in the title.",
@@ -2950,6 +3124,10 @@ async function extractTaskWithAi(input: {
                 description: { type: "string" },
                 urgency: { type: "string", enum: ["low", "normal", "high", "critical"] },
                 dueDate: { anyOf: [{ type: "string", format: "date" }, { type: "null" }] },
+                dueTime: { anyOf: [{ type: "string", pattern: "^\\d{2}:\\d{2}$" }, { type: "null" }] },
+                startTime: { anyOf: [{ type: "string", pattern: "^\\d{2}:\\d{2}$" }, { type: "null" }] },
+                endTime: { anyOf: [{ type: "string", pattern: "^\\d{2}:\\d{2}$" }, { type: "null" }] },
+                isAllDay: { type: "boolean" },
                 estimatedMinutes: { type: "integer" },
                 assigneeHint: { anyOf: [{ type: "string" }, { type: "null" }] },
                 visibility: { type: "string", enum: ["work", "personal", "confidential"] },
@@ -2968,6 +3146,10 @@ async function extractTaskWithAi(input: {
                 "description",
                 "urgency",
                 "dueDate",
+                "dueTime",
+                "startTime",
+                "endTime",
+                "isAllDay",
                 "estimatedMinutes",
                 "assigneeHint",
                 "visibility",
@@ -4635,6 +4817,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             status: merged.status as DonnitTask["status"],
             urgency: merged.urgency,
             due_date: merged.dueDate,
+            ...(merged.dueTime ? { due_time: merged.dueTime } : {}),
+            ...(merged.startTime ? { start_time: merged.startTime } : {}),
+            ...(merged.endTime ? { end_time: merged.endTime } : {}),
+            ...(merged.isAllDay ? { is_all_day: true } : {}),
             estimated_minutes: merged.estimatedMinutes,
             assigned_to: merged.assignedToId,
             assigned_by: merged.assignedById,
@@ -4691,6 +4877,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           : null;
         const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? fallbackInput.assignedToId;
         const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+        const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
+        const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
+        const resolvedEndTime =
+          normalizeTimeOnly(ai?.endTime) ??
+          fallbackInput.endTime ??
+          (resolvedStartTime ? addMinutesToTime(resolvedStartTime, ai?.estimatedMinutes ?? fallbackInput.estimatedMinutes ?? 30) : null);
         const resolvedUrgency =
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
         const resolvedTitle = ai
@@ -4705,6 +4897,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
               urgency: resolvedUrgency,
               dueDate: resolvedDueDate,
+              dueTime: resolvedDueTime,
+              startTime: resolvedStartTime,
+              endTime: resolvedEndTime,
+              isAllDay: ai.isAllDay || fallbackInput.isAllDay,
               estimatedMinutes: ai.estimatedMinutes,
               assignedToId,
               assignedById: auth.userId,
@@ -4750,6 +4946,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: taskInput.status as DonnitTask["status"],
           urgency: taskInput.urgency,
           due_date: taskInput.dueDate,
+          ...(taskInput.dueTime ? { due_time: taskInput.dueTime } : {}),
+          ...(taskInput.startTime ? { start_time: taskInput.startTime } : {}),
+          ...(taskInput.endTime ? { end_time: taskInput.endTime } : {}),
+          ...(taskInput.isAllDay ? { is_all_day: true } : {}),
           estimated_minutes: taskInput.estimatedMinutes,
           assigned_to: taskInput.assignedToId,
           assigned_by: taskInput.assignedById,
@@ -4785,8 +4985,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     );
     const fallbackInput = parseChatTask(parsed.data.message, users);
     const aiAssignee = matchAiAssignee(ai?.assigneeHint ?? null, users);
-    const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId;
+    const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId ?? DEMO_USER_ID;
     const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
+    const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
+    const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
+    const resolvedEndTime =
+      normalizeTimeOnly(ai?.endTime) ??
+      fallbackInput.endTime ??
+      (resolvedStartTime ? addMinutesToTime(resolvedStartTime, ai?.estimatedMinutes ?? fallbackInput.estimatedMinutes ?? 30) : null);
     const resolvedUrgency =
       resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
     const resolvedTitle = ai
@@ -4799,6 +5005,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
           urgency: resolvedUrgency,
           dueDate: resolvedDueDate,
+          dueTime: resolvedDueTime,
+          startTime: resolvedStartTime,
+          endTime: resolvedEndTime,
+          isAllDay: ai.isAllDay || fallbackInput.isAllDay,
           estimatedMinutes: ai.estimatedMinutes,
           assignedToId,
           assignedById: DEMO_USER_ID,
@@ -4940,6 +5150,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: data.status as DonnitTask["status"],
           urgency: data.urgency,
           due_date: data.dueDate ?? null,
+          ...(normalizeTimeOnly(data.dueTime) ? { due_time: normalizeTimeOnly(data.dueTime) } : {}),
+          ...(normalizeTimeOnly(data.startTime) ? { start_time: normalizeTimeOnly(data.startTime) } : {}),
+          ...(normalizeTimeOnly(data.endTime) ? { end_time: normalizeTimeOnly(data.endTime) } : {}),
+          ...(data.isAllDay ? { is_all_day: true } : {}),
           estimated_minutes: data.estimatedMinutes ?? 30,
           assigned_to: typeof data.assignedToId === "string" ? data.assignedToId : auth.userId,
           assigned_by: typeof data.assignedById === "string" ? data.assignedById : auth.userId,
@@ -5008,6 +5222,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         if (data.urgency !== undefined) patch.urgency = data.urgency;
         if (data.dueDate !== undefined) patch.due_date = data.dueDate;
+        if (data.dueTime !== undefined) patch.due_time = normalizeTimeOnly(data.dueTime);
+        if (data.startTime !== undefined) patch.start_time = normalizeTimeOnly(data.startTime);
+        if (data.endTime !== undefined) patch.end_time = normalizeTimeOnly(data.endTime);
+        if (data.isAllDay !== undefined) patch.is_all_day = data.isAllDay;
         if (data.estimatedMinutes !== undefined) patch.estimated_minutes = data.estimatedMinutes;
         if (data.assignedToId !== undefined) patch.assigned_to = String(data.assignedToId);
         if (data.recurrence !== undefined) patch.recurrence = data.recurrence;
@@ -5110,6 +5328,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     if (data.urgency !== undefined) patch.urgency = data.urgency;
     if (data.dueDate !== undefined) patch.dueDate = data.dueDate;
+    if (data.dueTime !== undefined) patch.dueTime = normalizeTimeOnly(data.dueTime);
+    if (data.startTime !== undefined) patch.startTime = normalizeTimeOnly(data.startTime);
+    if (data.endTime !== undefined) patch.endTime = normalizeTimeOnly(data.endTime);
+    if (data.isAllDay !== undefined) patch.isAllDay = data.isAllDay;
     if (data.estimatedMinutes !== undefined) patch.estimatedMinutes = data.estimatedMinutes;
     if (data.assignedToId !== undefined) {
       const assignedToId = parseDemoUserId(data.assignedToId);

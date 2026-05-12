@@ -174,6 +174,24 @@ function localTimeHHMM(value = new Date(), timeZone = CLIENT_TIME_ZONE) {
   return `${get("hour")}:${get("minute")}`;
 }
 
+function normalizeTimeLabel(value: string | null | undefined) {
+  if (!value) return null;
+  const match = value.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function taskDueLabel(task: Pick<Task, "dueDate" | "dueTime" | "startTime" | "isAllDay">) {
+  if (!task.dueDate) return "No due date";
+  if (task.isAllDay) return `${task.dueDate} · all day`;
+  const time = normalizeTimeLabel(task.startTime ?? task.dueTime);
+  return time ? `${task.dueDate} · ${time}` : task.dueDate;
+}
+
 type User = {
   id: Id;
   name: string;
@@ -193,6 +211,10 @@ type Task = {
   status: string;
   urgency: string;
   dueDate: string | null;
+  dueTime: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  isAllDay: boolean;
   estimatedMinutes: number;
   assignedToId: Id;
   assignedById: Id;
@@ -2115,7 +2137,7 @@ function TaskRow({
             data-testid={`text-task-due-${task.id}`}
           >
             <CalendarClock className="size-3.5" />
-            {task.dueDate ?? "No due date"}
+            {taskDueLabel(task)}
           </span>
           <span className="inline-flex items-center gap-1">
             <Clock3 className="size-3.5" />
@@ -2530,6 +2552,10 @@ function TaskDetailDialog({
   const [repeatDetails, setRepeatDetails] = useState("");
   const [reminderDaysBefore, setReminderDaysBefore] = useState(0);
   const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [isAllDay, setIsAllDay] = useState(false);
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [assignedToId, setAssignedToId] = useState("");
   const [positionProfileId, setPositionProfileId] = useState("");
@@ -2551,6 +2577,10 @@ function TaskDetailDialog({
     setRepeatDetails(extractRepeatDetails(task.description));
     setReminderDaysBefore(task.reminderDaysBefore ?? 0);
     setDueDate(task.dueDate ?? "");
+    setDueTime(task.dueTime ?? "");
+    setStartTime(task.startTime ?? "");
+    setEndTime(task.endTime ?? "");
+    setIsAllDay(task.isAllDay ?? false);
     setEstimatedMinutes(task.estimatedMinutes);
     setAssignedToId(String(task.assignedToId));
     setPositionProfileId(task.positionProfileId ? String(task.positionProfileId) : "");
@@ -2595,6 +2625,10 @@ function TaskDetailDialog({
         recurrence,
         reminderDaysBefore,
         dueDate: dueDate || null,
+        dueTime: isAllDay ? null : dueTime || null,
+        startTime: isAllDay ? null : startTime || null,
+        endTime: isAllDay ? null : endTime || null,
+        isAllDay,
         estimatedMinutes,
         assignedToId,
         positionProfileId: visibility === "personal" ? null : positionProfileId || null,
@@ -3126,6 +3160,14 @@ function TaskDetailDialog({
                 disabled={readOnly}
                 data-testid="input-task-detail-due"
               />
+              <Input
+                type="time"
+                value={dueTime}
+                onChange={(event) => setDueTime(event.target.value)}
+                disabled={readOnly || isAllDay}
+                aria-label="Due time"
+                data-testid="input-task-detail-due-time"
+              />
               <div className="grid grid-cols-2 gap-1.5">
                 <Button
                   type="button"
@@ -3161,6 +3203,41 @@ function TaskDetailDialog({
                 onChange={(event) => setEstimatedMinutes(Number(event.target.value) || 30)}
                 disabled={readOnly}
                 data-testid="input-task-detail-estimate"
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-[auto_1fr_1fr] sm:items-end">
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={isAllDay}
+                onChange={(event) => setIsAllDay(event.target.checked)}
+                disabled={readOnly}
+                className="size-4 rounded border-border accent-brand-green"
+                data-testid="checkbox-task-detail-all-day"
+              />
+              All day
+            </label>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-start-time">Fixed start</Label>
+              <Input
+                id="task-detail-start-time"
+                type="time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                disabled={readOnly || isAllDay}
+                data-testid="input-task-detail-start-time"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-detail-end-time">Fixed end</Label>
+              <Input
+                id="task-detail-end-time"
+                type="time"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+                disabled={readOnly || isAllDay}
+                data-testid="input-task-detail-end-time"
               />
             </div>
           </div>
@@ -7670,6 +7747,10 @@ function AssignTaskDialog({
   const [description, setDescription] = useState("");
   const [assignedToId, setAssignedToId] = useState(defaultAssigneeId);
   const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [isAllDay, setIsAllDay] = useState(false);
   const [estimatedMinutes, setEstimatedMinutes] = useState(30);
   const [urgency, setUrgency] = useState<"low" | "normal" | "high" | "critical">("normal");
   const [visibility, setVisibility] = useState<"work" | "personal" | "confidential">("work");
@@ -7695,6 +7776,10 @@ function AssignTaskDialog({
     setTitle("");
     setDescription("");
     setDueDate("");
+    setDueTime("");
+    setStartTime("");
+    setEndTime("");
+    setIsAllDay(false);
     setEstimatedMinutes(30);
     setUrgency("normal");
     setVisibility("work");
@@ -7736,6 +7821,10 @@ function AssignTaskDialog({
         status: isSelfAssigned ? "open" : "pending_acceptance",
         urgency,
         dueDate: dueDate || null,
+        dueTime: isAllDay ? null : dueTime || null,
+        startTime: isAllDay ? null : startTime || null,
+        endTime: isAllDay ? null : endTime || null,
+        isAllDay,
         estimatedMinutes,
         assignedToId: assignedTo,
         assignedById: assignedBy,
@@ -7760,6 +7849,10 @@ function AssignTaskDialog({
       setTitle("");
       setDescription("");
       setDueDate("");
+      setDueTime("");
+      setStartTime("");
+      setEndTime("");
+      setIsAllDay(false);
       setEstimatedMinutes(30);
       setUrgency("normal");
       setVisibility("work");
@@ -7905,6 +7998,14 @@ function AssignTaskDialog({
                 onChange={(event) => setDueDate(event.target.value)}
                 data-testid="input-assign-due"
               />
+              <Input
+                type="time"
+                value={dueTime}
+                onChange={(event) => setDueTime(event.target.value)}
+                disabled={isAllDay}
+                aria-label="Due time"
+                data-testid="input-assign-due-time"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="assign-estimate">Minutes</Label>
@@ -7933,6 +8034,40 @@ function AssignTaskDialog({
                 <option value="high">High</option>
                 <option value="critical">Critical</option>
               </select>
+            </div>
+          </div>
+          <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-[auto_1fr_1fr] sm:items-end">
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={isAllDay}
+                onChange={(event) => setIsAllDay(event.target.checked)}
+                className="size-4 rounded border-border accent-brand-green"
+                data-testid="checkbox-assign-all-day"
+              />
+              All day
+            </label>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-start-time">Fixed start</Label>
+              <Input
+                id="assign-start-time"
+                type="time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                disabled={isAllDay}
+                data-testid="input-assign-start-time"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="assign-end-time">Fixed end</Label>
+              <Input
+                id="assign-end-time"
+                type="time"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+                disabled={isAllDay}
+                data-testid="input-assign-end-time"
+              />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">

@@ -57,6 +57,10 @@ function getDb(): BetterSQLite3Database {
       status TEXT NOT NULL DEFAULT 'open',
       urgency TEXT NOT NULL DEFAULT 'normal',
       due_date TEXT,
+      due_time TEXT,
+      start_time TEXT,
+      end_time TEXT,
+      is_all_day INTEGER NOT NULL DEFAULT 0,
       estimated_minutes INTEGER NOT NULL DEFAULT 30,
       assigned_to_id INTEGER NOT NULL,
       assigned_by_id INTEGER NOT NULL,
@@ -120,6 +124,18 @@ function getDb(): BetterSQLite3Database {
   }
   if (!taskColumns.has("visible_from")) {
     sqlite.exec("ALTER TABLE tasks ADD COLUMN visible_from TEXT");
+  }
+  if (!taskColumns.has("due_time")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN due_time TEXT");
+  }
+  if (!taskColumns.has("start_time")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN start_time TEXT");
+  }
+  if (!taskColumns.has("end_time")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN end_time TEXT");
+  }
+  if (!taskColumns.has("is_all_day")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN is_all_day INTEGER NOT NULL DEFAULT 0");
   }
   cachedDb = drizzle(sqlite);
   seedIfEmpty(cachedDb);
