@@ -2144,7 +2144,7 @@ function parseChatTaskAuthenticated(
   };
 }
 
-type PendingChatMissingField = "title" | "dueDate" | "urgency" | "positionProfile";
+type PendingChatMissingField = "title" | "assignee" | "dueDate" | "urgency" | "positionProfile";
 
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
@@ -2174,6 +2174,14 @@ function isGenericAssignmentTitle(title: string) {
 
 function hasExplicitAssignmentIntent(message: string) {
   return /\b(?:assign|delegate|reassign)\b/i.test(message);
+}
+
+function findMentionedMember(
+  message: string,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+) {
+  const text = message.toLowerCase();
+  return members.find((member) => textMentionsAssignee(text, member.profile?.full_name, member.profile?.email)) ?? null;
 }
 
 function normalizedProfileSearchText(value: string) {
@@ -2246,6 +2254,13 @@ function missingChatQuestion(
   const intro = `I can assign ${assigneeName} to ${lowercaseFirst(task.title)}${visibilityText}.`;
   const missing = pendingChatMissing(task);
   const needsTitle = missing.includes("title");
+  if (missing.includes("assignee") && needsTitle) {
+    return "Who should own this task, and what should they do?";
+  }
+  if (missing.includes("assignee")) {
+    const memberNames = members.map(memberDisplayName).filter(Boolean).slice(0, 6).join(", ");
+    return `Who should own "${task.title}"?${memberNames ? ` I can assign it to: ${memberNames}.` : ""}`;
+  }
   if (needsTitle && missing.includes("dueDate") && missing.includes("urgency")) {
     return `What should ${assigneeName} do, when is it due, and how urgent is it?`;
   }
@@ -2450,9 +2465,16 @@ async function clearPendingChatTask(store: DonnitStore, orgId: string) {
   }
 }
 
-function mergePendingChatTask(task: PendingChatTask, message: string, profiles: DonnitPositionProfile[] = []): PendingChatTask {
+function mergePendingChatTask(
+  task: PendingChatTask,
+  message: string,
+  profiles: DonnitPositionProfile[] = [],
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>> = [],
+): PendingChatTask {
   const replyTitle = task.missing.includes("title") ? titleFromMessage(message) : task.title;
   const title = replyTitle && !isGenericAssignmentTitle(replyTitle) ? replyTitle : task.title;
+  const mentionedAssignee = task.missing.includes("assignee") ? findMentionedMember(message, members) : null;
+  const assignedToId = mentionedAssignee?.user_id ?? task.assignedToId;
   const dueDate = parseDueDate(message) ?? task.dueDate;
   const explicitUrgency = parseExplicitUrgency(message);
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
@@ -2460,13 +2482,14 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
   const timing = parseTaskTime(message, estimatedMinutes);
   const profileResolution = resolveChatPositionProfile({
     profiles,
-    assignedToId: task.assignedToId,
+    assignedToId,
     message,
     visibility: task.visibility,
   });
   const positionProfileId = task.positionProfileId ?? profileResolution.positionProfileId;
   const missing = task.missing.filter((item) => {
     if (item === "title") return isGenericAssignmentTitle(title);
+    if (item === "assignee") return !mentionedAssignee;
     if (item === "dueDate") return !dueDate;
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
@@ -2479,6 +2502,8 @@ function mergePendingChatTask(task: PendingChatTask, message: string, profiles: 
     dueDate,
     urgency,
     estimatedMinutes,
+    assignedToId,
+    status: assignedToId === task.assignedById ? "open" : "pending_acceptance",
     dueTime: timing.dueTime ?? task.dueTime ?? null,
     startTime: timing.startTime ?? task.startTime ?? null,
     endTime: timing.endTime ?? task.endTime ?? null,
@@ -2580,7 +2605,7 @@ const pendingChatTaskSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(365),
   visibility: z.enum(["work", "personal", "confidential"]),
   positionProfileId: z.string().nullable().optional(),
-  missing: z.array(z.enum(["title", "dueDate", "urgency", "positionProfile"])).default([]),
+  missing: z.array(z.enum(["title", "assignee", "dueDate", "urgency", "positionProfile"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -4802,7 +4827,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
 
           const positionProfiles = pending.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
-          const merged = mergePendingChatTask(pending, parsed.data.message, positionProfiles);
+          const merged = mergePendingChatTask(pending, parsed.data.message, positionProfiles, members);
           if (pendingChatMissing(merged).length > 0) {
             await setPendingChatTask(store, orgId, merged);
             const assistant = await store.createChatMessage(orgId, {
@@ -4924,7 +4949,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           visibility: taskInput.visibility ?? "work",
         });
         const missing: PendingChatMissingField[] = [];
-        if (hasExplicitAssignmentIntent(parsed.data.message) && isGenericAssignmentTitle(taskInput.title)) missing.push("title");
+        const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
+        if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
+        if (explicitAssignment && !explicitMentionedMember && !aiAssignee) missing.push("assignee");
         if (!taskInput.dueDate) missing.push("dueDate");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
@@ -4991,6 +5018,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     );
     const fallbackInput = parseChatTask(parsed.data.message, users);
     const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
+    const explicitMentionedUser = explicitAssignment
+      ? users.find((user) => textMentionsAssignee(parsed.data.message.toLowerCase(), user.name, user.email))
+      : null;
     const aiAssignee = explicitAssignment ? matchAiAssignee(ai?.assigneeHint ?? null, users) : null;
     const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId ?? DEMO_USER_ID;
     const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate;
@@ -5025,6 +5055,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           visibility: ai.visibility ?? fallbackInput.visibility,
         }
       : fallbackInput;
+    if (explicitAssignment && !explicitMentionedUser && !aiAssignee) {
+      await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
+      const assistant = await storage.createChatMessage({
+        role: "assistant",
+        content: `Who should own "${taskInput.title}"? I could not match the person you named to a workspace user.`,
+        taskId: null,
+      });
+      res.json({ assistant, pending: true });
+      return;
+    }
+    if (ai && (ai.shouldCreateTask === false || ai.confidence === "low")) {
+      await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
+      const assistant = await storage.createChatMessage({
+        role: "assistant",
+        content: "I am not fully sure what task to create from that. What should be done, and when is it due?",
+        taskId: null,
+      });
+      res.json({ assistant, pending: true });
+      return;
+    }
     const task = await storage.createTask(taskInput);
     await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: task.id });
     const assignee = users.find((user) => user.id === task.assignedToId);
