@@ -88,8 +88,8 @@ The wrapper logs estimated cost per model call and accumulates cost per AI sessi
 
 Current model policy:
 
-- Small/fast model: `process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini"`
-- Reasoning model placeholder: `process.env.DONNIT_REASONING_MODEL ?? DONNIT_AI_MODEL`
+- Small/fast model: `process.env.DONNIT_AI_MODEL ?? "gpt-5-mini"`
+- Reasoning model placeholder: `process.env.DONNIT_REASONING_MODEL ?? "gpt-5"`
 
 The reasoning model is recorded in policy metadata but not used by this Stage 1 proof feature.
 
@@ -139,4 +139,3 @@ What I'll do after you confirm:
 If you want to proceed differently, say "proceed with <alternative>".
 If you want me to pause entirely, say "pause".
 === END HANDOFF ===
-

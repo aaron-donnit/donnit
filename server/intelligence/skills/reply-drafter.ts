@@ -177,7 +177,7 @@ export async function draftSuggestionReplyWithAgent(input: {
   replyScenario: (suggestion: Pick<DonnitEmailSuggestion, "subject" | "suggested_title" | "preview"> & { body?: string | null }) => string;
   createResponse?: CreateResponse;
 }): Promise<ReplyDraftResult> {
-  const model = process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini";
+  const model = process.env.DONNIT_AI_MODEL ?? "gpt-5-mini";
   const observability = await AiObservability.start({
     store: input.store,
     orgId: input.orgId,
@@ -187,7 +187,7 @@ export async function draftSuggestionReplyWithAgent(input: {
     modelPolicy: {
       provider: "openai",
       smallModel: model,
-      reasoningModel: process.env.DONNIT_REASONING_MODEL ?? model,
+      reasoningModel: process.env.DONNIT_REASONING_MODEL ?? "gpt-5",
     },
     metadata: {
       suggestionId: input.suggestionId,

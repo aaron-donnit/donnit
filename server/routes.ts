@@ -2892,7 +2892,7 @@ async function extractTaskWithAi(input: {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
+        model: process.env.DONNIT_AI_MODEL ?? "gpt-5-mini",
         input: [
           {
             role: "system",
@@ -3629,7 +3629,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           googleRedirectUri: Boolean(process.env.GOOGLE_REDIRECT_URI),
           gmailOauthStateSecret: Boolean(process.env.GMAIL_OAUTH_STATE_SECRET),
           openAiApiKey: Boolean(process.env.OPENAI_API_KEY),
-          donnitAiModel: process.env.DONNIT_AI_MODEL ?? "gpt-4o-mini",
+          donnitAiModel: process.env.DONNIT_AI_MODEL ?? "gpt-5-mini",
         },
       });
     } catch (err) {

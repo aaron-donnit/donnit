@@ -97,7 +97,8 @@ Known environment variables and secrets mentioned:
 
 - `DONNIT_HEALTH_TOKEN` was added.
 - `OPENAI_API_KEY` is required for AI task interpretation.
-- `DONNIT_AI_MODEL` is optional.
+- `DONNIT_AI_MODEL` is optional. MVP default is `gpt-5-mini` for task, email, Slack, SMS, document, and reply drafting intelligence.
+- `DONNIT_REASONING_MODEL` is optional. Use `gpt-5` for deeper role-continuity workflows such as handover packets.
 - `DONNIT_SLACK_WEBHOOK_TOKEN` protects Slack suggestion/event test calls.
 - `SLACK_SIGNING_SECRET` verifies Slack Events API calls.
 - `SLACK_BOT_TOKEN` enables Slack user lookup and direct outbound Slack replies.
@@ -374,4 +375,3 @@ As of 2026-05-08:
 - Vercel status for that commit returned success.
 - TypeScript check passed.
 - Production build passed when run outside the sandbox due to a local Vite config read permission issue inside the sandbox.
-
