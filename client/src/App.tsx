@@ -741,6 +741,35 @@ function memoryRecurringResponsibilities(memory: Record<string, unknown>): Learn
     .slice(0, 8);
 }
 
+function recurringResponsibilitiesFromTasks(tasks: Task[]): LearnedRecurringResponsibility[] {
+  return tasks
+    .filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed")
+    .map((task) => ({
+      taskId: String(task.id),
+      title: task.title,
+      cadence: taskRepeatLabel(task) || inferTaskCadence(task),
+      dueDate: task.dueDate,
+      showEarlyDays: task.reminderDaysBefore ?? 0,
+      updatedAt: task.createdAt ?? null,
+    }))
+    .slice(0, 12);
+}
+
+function mergeRecurringResponsibilities(
+  learned: LearnedRecurringResponsibility[],
+  liveTasks: LearnedRecurringResponsibility[],
+) {
+  const seen = new Set<string>();
+  const output: LearnedRecurringResponsibility[] = [];
+  for (const item of [...learned, ...liveTasks]) {
+    const key = `${item.taskId || ""}:${item.title.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output.slice(0, 12);
+}
+
 function memoryRecentSignals(memory: Record<string, unknown>): LearnedTaskSignal[] {
   return memoryRecordArray(memory, "recentTaskSignals")
     .map((record): LearnedTaskSignal | null => {
@@ -989,7 +1018,15 @@ function buildPositionProfiles(
         task.visibility !== "personal" &&
         (String(task.positionProfileId ?? "") === record.id || String(task.assignedToId) === String(profile.owner.id)),
     );
-    return mergeProfileRecord({ ...profile, currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"), completedTasks: profileTasks.filter((task) => task.status === "completed") }, record);
+    return mergeProfileRecord(
+      {
+        ...profile,
+        currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"),
+        recurringTasks: profileTasks.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"),
+        completedTasks: profileTasks.filter((task) => task.status === "completed"),
+      },
+      record,
+    );
   });
   for (const record of persistedProfiles) {
     if (usedRecordIds.has(record.id)) continue;
@@ -5586,12 +5623,16 @@ function PositionProfilesPanel({
   };
   const selectedMemory = selectedProfile?.institutionalMemory ?? {};
   const learnedHowToNotes = memoryHowToNotes(selectedMemory);
-  const learnedRecurringResponsibilities = memoryRecurringResponsibilities(selectedMemory);
+  const learnedRecurringResponsibilities = mergeRecurringResponsibilities(
+    memoryRecurringResponsibilities(selectedMemory),
+    recurringResponsibilitiesFromTasks(selectedProfile?.recurringTasks ?? []),
+  );
   const learnedTaskSignals = memoryRecentSignals(selectedMemory);
   const learnedSourceMix = memorySourceMix(selectedMemory);
   const learnedStats = selectedMemory.stats && typeof selectedMemory.stats === "object" && !Array.isArray(selectedMemory.stats)
     ? selectedMemory.stats as Record<string, unknown>
     : {};
+  const learnedRecurringCount = Math.max(Number(learnedStats.recurringTasks ?? 0) || 0, learnedRecurringResponsibilities.length);
   const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
@@ -6039,7 +6080,7 @@ function PositionProfilesPanel({
                   <p className="text-muted-foreground">signals</p>
                 </div>
                 <div className="rounded-md bg-muted px-2 py-2">
-                  <p className="font-semibold tabular-nums text-foreground">{Number(learnedStats.recurringTasks ?? learnedRecurringResponsibilities.length) || 0}</p>
+                  <p className="font-semibold tabular-nums text-foreground">{learnedRecurringCount}</p>
                   <p className="text-muted-foreground">recurring</p>
                 </div>
                 <div className="rounded-md bg-muted px-2 py-2">
