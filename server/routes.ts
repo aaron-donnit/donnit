@@ -483,6 +483,70 @@ const monthIndexes: Record<string, number> = {
 const monthNamePattern =
   "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
 
+const donnitLanguageLexicon = {
+  taskCreationPhrases: [
+    "add", "create", "make", "log", "capture", "track", "put", "remind me", "remember to",
+    "I need to", "we need to", "need to", "have to", "should", "must", "please handle",
+    "can you", "could you", "make sure", "don't forget", "follow up", "circle back",
+    "close the loop", "take care of", "look into", "check on", "get done", "knock out",
+  ],
+  assignmentPhrases: [
+    "assign", "delegate", "reassign", "route to", "hand off", "handoff", "transfer",
+    "give this to", "put this on", "put this on their plate", "have {person} do",
+    "get {person} to", "ask {person} to", "send this to {person} to handle",
+  ],
+  selfOwnedContactPhrases: [
+    "call {person}", "email {person}", "message {person}", "text {person}", "slack {person}",
+    "ping {person}", "follow up with {person}", "check in with {person}", "meet with {person}",
+    "sync with {person}", "ask {person} about", "send {person} a note",
+  ],
+  urgencyPhrases: {
+    critical: ["critical", "emergency", "blocker", "fire drill", "P0", "sev1", "immediately", "drop everything"],
+    high: ["urgent", "asap", "high priority", "important", "P1", "time sensitive", "by EOD", "before close"],
+    normal: ["normal", "standard", "regular priority", "not urgent", "no rush", "when you can"],
+    low: ["low priority", "whenever", "someday", "backlog", "nice to have", "P3"],
+  },
+  timeAndDatePhrases: {
+    today: ["today", "EOD", "COB", "close of business", "end of day", "EOB"],
+    week: ["EOW", "end of week", "next week", "this week"],
+    monthQuarterYear: ["EOM", "EOQ", "EOY", "month end", "quarter end", "year end"],
+    relative: ["tomorrow", "next Monday", "this Friday", "morning", "afternoon", "evening", "noon", "midnight"],
+  },
+  recurrencePhrases: [
+    "daily", "weekly", "monthly", "quarterly", "annually", "annual", "every day", "every week",
+    "every month", "every quarter", "each quarter", "first Monday", "last Friday",
+  ],
+  privacyPhrases: {
+    confidential: ["confidential", "sensitive", "privileged", "restricted", "private work"],
+    personal: ["personal", "private", "non-work", "non work"],
+  },
+  businessAcronyms: {
+    EOD: "end of day",
+    EOB: "end of business day",
+    COB: "close of business",
+    EOW: "end of week",
+    EOM: "end of month",
+    EOQ: "end of quarter",
+    EOY: "end of year",
+    OOO: "out of office",
+    PTO: "paid time off",
+    RIF: "reduction in force",
+    SOW: "statement of work",
+    MSA: "master services agreement",
+    NDA: "non-disclosure agreement",
+    QBR: "quarterly business review",
+    OKR: "objectives and key results",
+    KPI: "key performance indicator",
+    SLA: "service level agreement",
+    RFP: "request for proposal",
+    ROI: "return on investment",
+    ARR: "annual recurring revenue",
+    MRR: "monthly recurring revenue",
+    CRM: "customer relationship management",
+    ATS: "applicant tracking system",
+  },
+};
+
 function toIsoDate(year: number, month: number, day: number) {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -537,7 +601,7 @@ function parseDueDate(message: string) {
   }
   const natural = parseNaturalDate(text);
   if (natural) return natural;
-  if (/\b(?:eod|cob|close of business|end of day)\b/.test(text)) return todayIso();
+  if (/\b(?:eod|eob|cob|close of business|end of business|end of day)\b/.test(text)) return todayIso();
   if (/\b(?:next\s+eow|next\s+end of week|end of next week)\b/.test(text)) return nextWeekdayIso(5, true);
   if (/\b(?:eow|end of week)\b/.test(text)) return nextWeekdayIso(5);
   if (/\b(?:next\s+eom|next\s+end of month|end of next month)\b/.test(text)) return endOfMonthIso(1);
@@ -657,20 +721,20 @@ function dueDateAssistantText(dueDate: string | null) {
 
 function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
   const text = message.toLowerCase();
-  if (/\b(?:not urgent|not high priority|no rush|not a rush)\b/.test(text)) return "normal";
-  if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
-  if (/(urgent|asap|high priority|important)/.test(text)) return "high";
-  if (/(low priority|whenever|someday)/.test(text)) return "low";
+  if (/\b(?:not urgent|not high priority|no rush|not a rush|when you can|regular priority|standard priority)\b/.test(text)) return "normal";
+  if (/\b(?:critical|emergency|blocker|fire drill|drop everything|immediately|sev\s*1|p0)\b/.test(text)) return "critical";
+  if (/\b(?:urgent|asap|high priority|important|time sensitive|before close|p1|eod|cob|eob)\b/.test(text)) return "high";
+  if (/\b(?:low priority|whenever|someday|backlog|nice to have|p3)\b/.test(text)) return "low";
   return "normal";
 }
 
 function parseExplicitUrgency(message: string): "low" | "normal" | "high" | "critical" | null {
   const text = message.toLowerCase();
-  if (/\b(?:not urgent|not high priority|no rush|not a rush)\b/.test(text)) return "normal";
-  if (/(critical|emergency|blocker|immediately)/.test(text)) return "critical";
-  if (/(urgent|asap|high priority|high urgency|highly urgent|\bhigh\b|important)/.test(text)) return "high";
-  if (/(low priority|whenever|someday)/.test(text)) return "low";
-  if (/\b(normal|medium|standard|regular priority)\b/.test(text)) return "normal";
+  if (/\b(?:not urgent|not high priority|no rush|not a rush|when you can|regular priority|standard priority)\b/.test(text)) return "normal";
+  if (/\b(?:critical|emergency|blocker|fire drill|drop everything|immediately|sev\s*1|p0)\b/.test(text)) return "critical";
+  if (/\b(?:urgent|asap|high priority|high urgency|highly urgent|\bhigh\b|important|time sensitive|p1)\b/.test(text)) return "high";
+  if (/\b(?:low priority|whenever|someday|backlog|nice to have|p3)\b/.test(text)) return "low";
+  if (/\b(normal|medium|standard|regular priority|p2)\b/.test(text)) return "normal";
   return null;
 }
 
@@ -679,15 +743,15 @@ function parseEstimate(message: string) {
   if (minutes) return Math.max(5, Math.round(Number(minutes[1])));
   const hours = message.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:hr|hrs|hour|hours)\b/i);
   if (hours) return Math.max(15, Math.round(Number(hours[1]) * 60));
-  if (/\bquick|small|simple|brief\b/i.test(message)) return 15;
-  if (/\breview|audit|analyze|draft|prepare|proposal|contract\b/i.test(message)) return 45;
-  if (/\bplan|strategy|report|presentation|deck|onboarding\b/i.test(message)) return 60;
+  if (/\bquick|small|simple|brief|ping|reply|respond|check in|sync\b/i.test(message)) return 15;
+  if (/\breview|audit|analyze|draft|prepare|proposal|contract|sow|msa|nda|invoice|reconcile\b/i.test(message)) return 45;
+  if (/\bplan|strategy|roadmap|report|presentation|deck|onboarding|qbr|okr|budget|forecast\b/i.test(message)) return 60;
   return 30;
 }
 
 function parseTaskVisibility(message: string): "work" | "personal" | "confidential" {
   const text = message.toLowerCase();
-  if (/\b(confidential|sensitive|privileged|private work|restricted)\b/.test(text)) return "confidential";
+  if (/\b(confidential|sensitive|privileged|private work|restricted|need to know|attorney client)\b/.test(text)) return "confidential";
   if (/\b(personal|private|non-work|non work)\b/.test(text)) return "personal";
   return "work";
 }
@@ -744,6 +808,10 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
       .replace(new RegExp(`\\bdelegate\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\breassign(?: this)?(?: a)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\breassign\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\b(?:route|transfer|hand\\s*off|handoff)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\b(?:give|send)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bput\\s+(?:this|it)?\\s*(?:on\\s+)?${safe}(?:'s)?\\s+plate\\b`, "gi"), "")
+      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+to\\b`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
   }
@@ -800,21 +868,23 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(/^(?:for me|me)\b[,\s:]*/gi, "")
     .replace(/\bfor me to\s+/gi, "")
     .replace(/\bfor me\b/gi, "")
-    .replace(/\b(?:please\s+)?(?:add|create|make|log)\s+(?:a\s+)?(?:task|todo|to-do)\s+(?:to\s+)?/gi, "")
+    .replace(/\b(?:please\s+)?(?:add|create|make|log|capture|track)\s+(?:a\s+)?(?:task|todo|to-do|reminder)?\s*(?:to\s+)?/gi, "")
     .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
-    .replace(/\b(?:i need|need|needs|need to)\s+/gi, "")
+    .replace(/\b(?:remember|don't forget)\s+to\s+/gi, "")
+    .replace(/\b(?:i need|we need|need|needs|need to|have to|should|must)\s+/gi, "")
+    .replace(/\b(?:please\s+)?(?:handle|take care of|look into|check on|close the loop on|circle back on|knock out)\s+/gi, "")
     .replace(/\b(?:this\s+is\s+)?(?:not urgent|not high priority|no rush|not a rush)\b/gi, "")
     .replace(/\b(?:due|by|before|on)\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/gi, "")
-    .replace(/\b(?:due|by|before|on)\s+(?:eod|cob|close of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year)\b/gi, "")
+    .replace(/\b(?:due|by|before|on)\s+(?:eod|eob|cob|close of business|end of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year)\b/gi, "")
     .replace(naturalDate, "")
     .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
     .replace(/\b(?:due|by|before|on)?\s*(?:(?:next|this)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
-    .replace(/\b(today|tomorrow|next week|this week|eod|cob|close of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year|urgent|asap|critical|high priority|low priority)\b/gi, "")
+    .replace(/\b(today|tomorrow|next week|this week|eod|eob|cob|close of business|end of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year|urgent|asap|critical|high priority|low priority|time sensitive|fire drill)\b/gi, "")
     .replace(/\bby\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
     .replace(/\b\d+(?:\.\d+)?\s*(?:min|mins|minutes|hr|hrs|hour|hours)\b/gi, "")
     .replace(/\b\d+\s*days?\s*before\b/gi, "")
-    .replace(/\b(?:normal|medium|high|low)\s+urgency\b/gi, "")
+    .replace(/\b(?:normal|medium|high|low)\s+(?:urgency|priority)\b/gi, "")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^(add|create|make|log|please|task to|todo to|to-do to)\s+/i, "")
@@ -2173,7 +2243,12 @@ function isGenericAssignmentTitle(title: string) {
 }
 
 function hasExplicitAssignmentIntent(message: string) {
-  return /\b(?:assign|delegate|reassign)\b/i.test(message);
+  return (
+    /\b(?:assign|delegate|reassign|route|transfer|handoff|hand\s*off)\b/i.test(message) ||
+    /\b(?:give|send)\s+(?:this|it|the task|that)?\s*(?:to\s+)?[a-z][a-z' -]{1,80}\s+(?:to\s+)?(?:handle|own|complete|review|finish|do)\b/i.test(message) ||
+    /\bput\s+(?:this|it|the task)?\s*(?:on\s+)?[a-z][a-z' -]{1,80}(?:'s)?\s+plate\b/i.test(message) ||
+    /\b(?:have|get|ask)\s+[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)\b/i.test(message)
+  );
 }
 
 function findMentionedMember(
@@ -2527,17 +2602,18 @@ function looksLikeNewTaskIntent(message: string) {
 function hasStandaloneTaskIntent(message: string) {
   const text = message.toLowerCase().trim();
   if (
-    /\b(assign|delegate|reassign|add|create|make|log|remind me|reminder|schedule|ask)\b/i.test(message)
+    /\b(assign|delegate|reassign|route|transfer|handoff|hand\s*off|add|create|make|log|capture|track|remind me|reminder|remember to|schedule|ask)\b/i.test(message)
   ) {
     return true;
   }
   if (/\b(?:i|we)\s+(?:need|have|want|plan|should|must)\s+to\b/.test(text)) return true;
   if (/^(?:need|have|want|plan|should|must)\s+to\b/.test(text)) return true;
+  if (/\b(?:make sure|don't forget|take care of|look into|check on|close the loop|circle back|knock out)\b/.test(text)) return true;
   if (/\b(?:meeting|meet|appointment|call|interview|event)\b/.test(text) && Boolean(parseDueDate(message))) return true;
   if (/\b(?:take|catch|ride|travel|go|drive|walk)\b.+\b(?:meeting|appointment|call|event)\b/.test(text)) {
     return true;
   }
-  return /\b(review|send|call|email|prepare|draft|complete|follow up|follow-up|reconcile|update|confirm|analyze|audit|submit|finish|meet)\b/i.test(message);
+  return /\b(review|send|call|email|prepare|draft|complete|follow up|follow-up|reconcile|update|confirm|analyze|audit|submit|finish|meet|approve|approve|file|pay|renew|schedule|reschedule|book)\b/i.test(message);
 }
 
 async function getPendingChatTaskFromMessages(store: DonnitStore, orgId: string) {
@@ -3061,6 +3137,7 @@ async function extractTaskWithAi(input: {
   };
   const workplaceAbbreviations = {
     EOD: "end of day, due today",
+    EOB: "end of business day, due today",
     COB: "close of business, due today",
     EOW: "end of week, due Friday of the current week unless the user says next EOW",
     EOM: "end of month",
@@ -3071,7 +3148,12 @@ async function extractTaskWithAi(input: {
     RIF: "reduction in force",
     SOW: "statement of work",
     MSA: "master services agreement",
+    NDA: "non-disclosure agreement",
     QBR: "quarterly business review",
+    OKR: "objectives and key results",
+    KPI: "key performance indicator",
+    SLA: "service level agreement",
+    RFP: "request for proposal",
   };
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
@@ -3091,7 +3173,8 @@ async function extractTaskWithAi(input: {
                 "Extract one actionable Donnit task for a professional workplace continuity tool.",
                 "Return only schema fields. Use null dueDate when no date is clear.",
                 "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
-                "If the text says to assign someone, put that person in assigneeHint and make the title the work itself.",
+                "Ownership rule: only set assigneeHint when the user clearly assigns ownership using language like assign, delegate, reassign, route to, hand off, put on someone's plate, have/get/ask someone to do the work. If the user says call Maya, email Maya, ping Maya, meet with Maya, ask Maya about something, or follow up with Maya, Maya is the object/contact, not the task owner.",
+                "If the text clearly assigns someone, put that person in assigneeHint and make the title the work itself.",
                 "If the user marks the task confidential, sensitive, privileged, or restricted, set visibility=confidential. If they mark it personal or private/non-work, set visibility=personal. Otherwise set visibility=work.",
                 "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
                 "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
@@ -3099,6 +3182,7 @@ async function extractTaskWithAi(input: {
                 "Extract structured timing. Use dueTime for a clear time like noon, 3pm, or 14:30. For meetings, calls, appointments, interviews, travel, or other fixed-time events, also set startTime and endTime. Use null time fields when the user only gives a date. Use isAllDay=true only when the user explicitly says all day.",
                 "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
                 "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
+                "Business phrases like close the loop, circle back, take care of, look into, check on, put on someone's plate, fire drill, blocker, QBR, OKR, KPI, SLA, RFP, SOW, MSA, NDA, ARR, MRR, CRM, and ATS should be interpreted as normal workplace language, not copied blindly into awkward task titles.",
                 "When the user says 'not urgent' or 'no rush', set urgency=normal and do not include that phrase in the title.",
                 "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
                 "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
@@ -3119,6 +3203,7 @@ async function extractTaskWithAi(input: {
               today: todayIso(),
               currentYear: new Date().getFullYear(),
               workplaceAbbreviations,
+              interpretationLexicon: donnitLanguageLexicon,
             }),
           },
         ],
