@@ -434,6 +434,52 @@ function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
   return addDaysIso(localToday, delta);
 }
 
+const weekdayIndexes: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+const ordinalNumbers: Record<string, number> = {
+  first: 1,
+  second: 2,
+  third: 3,
+  fourth: 4,
+};
+
+function nthWeekdayOfMonthIso(year: number, month: number, weekday: number, ordinal: string) {
+  if (ordinal === "last") {
+    const lastDay = new Date(Date.UTC(year, month, 0));
+    const delta = (lastDay.getUTCDay() - weekday + 7) % 7;
+    return toIsoDate(year, month, lastDay.getUTCDate() - delta);
+  }
+  const occurrence = ordinalNumbers[ordinal];
+  if (!occurrence) return null;
+  const firstDay = new Date(Date.UTC(year, month - 1, 1));
+  const delta = (weekday - firstDay.getUTCDay() + 7) % 7;
+  return toIsoDate(year, month, 1 + delta + (occurrence - 1) * 7);
+}
+
+function parseMonthlyOrdinalWeekdayDueDate(message: string) {
+  const text = message.toLowerCase();
+  const ordinalWeekday = text.match(
+    /\b(first|second|third|fourth|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:of\s+)?(?:every|each|the)?\s*month\b/i,
+  );
+  if (!ordinalWeekday) return null;
+  const weekday = weekdayIndexes[ordinalWeekday[2]];
+  const [yearText, monthText] = todayIso().split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const thisMonth = nthWeekdayOfMonthIso(year, month, weekday, ordinalWeekday[1]);
+  if (thisMonth && thisMonth >= todayIso()) return thisMonth;
+  const nextMonthDate = new Date(Date.UTC(year, month, 1));
+  return nthWeekdayOfMonthIso(nextMonthDate.getUTCFullYear(), nextMonthDate.getUTCMonth() + 1, weekday, ordinalWeekday[1]);
+}
+
 function endOfMonthIso(monthOffset = 0) {
   const [yearText, monthText] = todayIso().split("-");
   const date = new Date(Date.UTC(Number(yearText), Number(monthText) + monthOffset, 0));
@@ -601,6 +647,8 @@ function parseDueDate(message: string) {
   }
   const natural = parseNaturalDate(text);
   if (natural) return natural;
+  const monthlyOrdinal = parseMonthlyOrdinalWeekdayDueDate(message);
+  if (monthlyOrdinal) return monthlyOrdinal;
   if (/\b(?:eod|eob|cob|close of business|end of business|end of day)\b/.test(text)) return todayIso();
   if (/\b(?:next\s+eow|next\s+end of week|end of next week)\b/.test(text)) return nextWeekdayIso(5, true);
   if (/\b(?:eow|end of week)\b/.test(text)) return nextWeekdayIso(5);
@@ -615,16 +663,7 @@ function parseDueDate(message: string) {
   if (text.includes("next week")) return addDays(7);
   const weekdayMatch = text.match(/\b(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
   if (weekdayMatch) {
-    const dayIndex: Record<string, number> = {
-      sunday: 0,
-      monday: 1,
-      tuesday: 2,
-      wednesday: 3,
-      thursday: 4,
-      friday: 5,
-      saturday: 6,
-    };
-    return nextWeekdayIso(dayIndex[weekdayMatch[2]], weekdayMatch[1] === "next");
+    return nextWeekdayIso(weekdayIndexes[weekdayMatch[2]], weekdayMatch[1] === "next");
   }
   if (text.includes("this week")) return addDays(3);
   return null;
@@ -783,12 +822,42 @@ function textMentionsAssignee(text: string, name?: string | null, email?: string
   });
 }
 
+function assigneeMentionScore(text: string, name?: string | null, email?: string | null) {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const tokens = new Set(normalized.match(/[a-z0-9._%+-]+/g) ?? []);
+  const normalizedName = (name ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedEmail = (email ?? "").toLowerCase().trim();
+  let score = 0;
+  if (normalizedEmail && (normalized.includes(normalizedEmail) || tokens.has(normalizedEmail))) score += 8;
+  if (normalizedName && normalized.includes(normalizedName)) score += 6;
+  const nameParts = normalizedName.split(" ").filter((part) => part.length > 1);
+  if (nameParts[0] && tokens.has(nameParts[0])) score += 1;
+  if (nameParts.length > 1 && tokens.has(nameParts[nameParts.length - 1])) score += 3;
+  return score;
+}
+
+function findBestMentionedCandidates<T>(
+  message: string,
+  candidates: T[],
+  getName: (candidate: T) => string | null | undefined,
+  getEmail: (candidate: T) => string | null | undefined,
+) {
+  const scored = candidates
+    .map((candidate) => ({
+      candidate,
+      score: assigneeMentionScore(message, getName(candidate), getEmail(candidate)),
+    }))
+    .filter((item) => item.score > 0);
+  const topScore = Math.max(0, ...scored.map((item) => item.score));
+  return scored.filter((item) => item.score === topScore).map((item) => item.candidate);
+}
+
 function findAssignee(message: string, users: User[]) {
   if (!hasExplicitAssignmentIntent(message)) return users.find((user) => user.id === DEMO_USER_ID) ?? users[0];
-  const text = message.toLowerCase();
-  const explicit = users.find((user) => textMentionsAssignee(text, user.name, user.email));
+  const explicitCandidates = findBestMentionedCandidates(message, users, (user) => user.name, (user) => user.email);
+  const explicit = explicitCandidates.length === 1 ? explicitCandidates[0] : null;
   if (explicit) return explicit;
-  const named = users.find((user) => user.id !== DEMO_USER_ID && textMentionsAssignee(text, user.name, user.email));
+  const named = users.find((user) => user.id !== DEMO_USER_ID && textMentionsAssignee(message.toLowerCase(), user.name, user.email));
   return named ?? users.find((user) => user.id === DEMO_USER_ID) ?? users[0];
 }
 
@@ -868,6 +937,8 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(/^(?:for me|me)\b[,\s:]*/gi, "")
     .replace(/\bfor me to\s+/gi, "")
     .replace(/\bfor me\b/gi, "")
+    .replace(/\b(?:has|have|had)\s+(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+(?:task|todo|to-do|responsibility)\s+(?:to\s+)?/gi, "")
+    .replace(/\b(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+(?:task|todo|to-do|responsibility)\s+(?:to\s+)?/gi, "")
     .replace(/\b(?:please\s+)?(?:add|create|make|log|capture|track)\s+(?:a\s+)?(?:task|todo|to-do|reminder)?\s*(?:to\s+)?/gi, "")
     .replace(/\b(?:remind me|reminder)\s+to\s+/gi, "")
     .replace(/\b(?:remember|don't forget)\s+to\s+/gi, "")
@@ -879,6 +950,9 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(naturalDate, "")
     .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
+    .replace(/\b(?:the\s+)?(?:first|second|third|fourth|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:of\s+)?(?:every|each|the)?\s*month\b/gi, "")
+    .replace(/\b(?:every|each)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
+    .replace(/\b(?:every|each)\s+(?:month|quarter|year)\b/gi, "")
     .replace(/\b(?:due|by|before|on)?\s*(?:(?:next|this)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\b(today|tomorrow|next week|this week|eod|eob|cob|close of business|end of business|end of day|eow|end of week|end of next week|eom|end of month|end of next month|eoq|end of quarter|end of next quarter|eoy|end of year|end of next year|urgent|asap|critical|high priority|low priority|time sensitive|fire drill)\b/gi, "")
     .replace(/\bby\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
@@ -911,14 +985,14 @@ function parseAnnualReminderDays(message: string) {
 function parseTaskRecurrence(message: string): DonnitTask["recurrence"] {
   const text = message.toLowerCase();
   if (/\b(?:every day|each day|daily|weekday|weekdays)\b/.test(text)) return "daily";
+  if (/\b(?:every year|each year|yearly|annually|annual|birthday|anniversary)\b/.test(text)) return "annual";
+  if (/\b(?:every quarter|each quarter|quarterly|quarter end|eoq|qbr|q[1-4])\b/.test(text)) return "quarterly";
+  if (/\b(?:every month|each month|monthly|month end|eom|(?:first|second|third|fourth|last)\s+\w+\s+(?:of\s+)?(?:every|each|the)?\s*month)\b/.test(text)) {
+    return "monthly";
+  }
   if (/\b(?:every week|each week|weekly|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/.test(text)) {
     return "weekly";
   }
-  if (/\b(?:every month|each month|monthly|month end|eom|first\s+\w+\s+of\s+(?:the\s+)?month|last\s+\w+\s+of\s+(?:the\s+)?month)\b/.test(text)) {
-    return "monthly";
-  }
-  if (/\b(?:every quarter|each quarter|quarterly|quarter end|eoq|qbr|q[1-4])\b/.test(text)) return "quarterly";
-  if (/\b(?:every year|each year|yearly|annually|annual|birthday|anniversary)\b/.test(text)) return "annual";
   return "none";
 }
 
@@ -927,6 +1001,7 @@ function recurrenceDetailsFromMessage(message: string, recurrence: DonnitTask["r
   const text = message.toLowerCase();
   const weekday = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b/i)?.[1];
   const ordinalWeekday = text.match(/\b(first|second|third|fourth|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (ordinalWeekday && recurrence === "monthly") return `${titleCase(ordinalWeekday[1])} ${titleCase(ordinalWeekday[2])} of every month`;
   if (ordinalWeekday) return `${titleCase(ordinalWeekday[1])} ${titleCase(ordinalWeekday[2])}`;
   if (weekday && recurrence === "weekly") return `Every ${titleCase(weekday)}`;
   if (/\b(?:weekday|weekdays)\b/i.test(message)) return "Every weekday";
@@ -2617,12 +2692,8 @@ function parseChatTaskAuthenticated(
   members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
   selfId: string,
 ) {
-  const text = message.toLowerCase();
-  const explicit = hasExplicitAssignmentIntent(message)
-    ? members.find((m) => {
-        return textMentionsAssignee(text, m.profile?.full_name, m.profile?.email);
-      })
-    : null;
+  const explicitCandidates = hasExplicitAssignmentIntent(message) ? findMentionedMemberCandidates(message, members) : [];
+  const explicit = explicitCandidates.length === 1 ? explicitCandidates[0] : null;
   const assignee = explicit ?? members.find((m) => m.user_id === selfId) ?? members[0];
   const reminderDaysBefore = parseAnnualReminderDays(message);
   const recurrence = parseTaskRecurrence(message);
@@ -2694,8 +2765,20 @@ function findMentionedMember(
   message: string,
   members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
 ) {
-  const text = message.toLowerCase();
-  return members.find((member) => textMentionsAssignee(text, member.profile?.full_name, member.profile?.email)) ?? null;
+  const candidates = findMentionedMemberCandidates(message, members);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function findMentionedMemberCandidates(
+  message: string,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+) {
+  return findBestMentionedCandidates(
+    message,
+    members,
+    (member) => member.profile?.full_name,
+    (member) => member.profile?.email,
+  );
 }
 
 function normalizedProfileSearchText(value: string) {
@@ -4316,6 +4399,13 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
 
+export const __chatParserTest = {
+  findBestMentionedCandidates,
+  parseDueDate,
+  parseTaskRecurrence,
+  titleFromMessage,
+};
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use("/api", attachSupabaseAuth);
   const detailedHealthAllowed = (req: Request) => {
@@ -5416,12 +5506,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         );
         const fallbackInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
         const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
-        const explicitMentionedMember = explicitAssignment
-          ? members.find((member) =>
-              textMentionsAssignee(parsed.data.message.toLowerCase(), member.profile?.full_name, member.profile?.email),
-            )
-          : null;
-        const aiAssignee = ai && explicitAssignment
+        const explicitMentionedMembers = explicitAssignment ? findMentionedMemberCandidates(parsed.data.message, members) : [];
+        const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
+        const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
+        const aiAssignee = ai && explicitAssignment && !ambiguousMentionedAssignee
           ? members.find((member) => {
               const candidate = matchAiAssignee(ai.assigneeHint, [
                 {
@@ -5434,7 +5522,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             })
           : null;
         const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? fallbackInput.assignedToId;
-        const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate ?? null;
+        const resolvedDueDate = fallbackInput.dueDate ?? ai?.dueDate ?? null;
         const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
         const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
         const resolvedEndTime =
@@ -5444,7 +5532,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const resolvedUrgency =
           resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
         const resolvedRecurrence: DonnitTask["recurrence"] =
-          (ai?.recurrence && ai.recurrence !== "none" ? ai.recurrence : fallbackInput.recurrence ?? "none") as DonnitTask["recurrence"];
+          (fallbackInput.recurrence && fallbackInput.recurrence !== "none"
+            ? fallbackInput.recurrence
+            : ai?.recurrence && ai.recurrence !== "none"
+              ? ai.recurrence
+              : "none") as DonnitTask["recurrence"];
         const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
         const resolvedTitle = ai
           ? normalizeAiTitle(ai.title, fallbackInput.title, [
@@ -5497,7 +5589,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const missing: PendingChatMissingField[] = [];
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
-        if (explicitAssignment && !explicitMentionedMember && !aiAssignee) missing.push("assignee");
+        if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee))) missing.push("assignee");
         if (!taskInput.dueDate) missing.push("dueDate");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
@@ -5565,12 +5657,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     );
     const fallbackInput = parseChatTask(parsed.data.message, users);
     const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
-    const explicitMentionedUser = explicitAssignment
-      ? users.find((user) => textMentionsAssignee(parsed.data.message.toLowerCase(), user.name, user.email))
-      : null;
-    const aiAssignee = explicitAssignment ? matchAiAssignee(ai?.assigneeHint ?? null, users) : null;
+    const explicitMentionedUsers = explicitAssignment
+      ? findBestMentionedCandidates(parsed.data.message, users, (user) => user.name, (user) => user.email)
+      : [];
+    const ambiguousMentionedAssignee = explicitMentionedUsers.length > 1;
+    const explicitMentionedUser = explicitMentionedUsers.length === 1 ? explicitMentionedUsers[0] : null;
+    const aiAssignee = explicitAssignment && !ambiguousMentionedAssignee ? matchAiAssignee(ai?.assigneeHint ?? null, users) : null;
     const assignedToId = aiAssignee?.id ?? fallbackInput.assignedToId ?? DEMO_USER_ID;
-    const resolvedDueDate = ai?.dueDate ?? fallbackInput.dueDate ?? null;
+    const resolvedDueDate = fallbackInput.dueDate ?? ai?.dueDate ?? null;
     const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
     const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
     const resolvedEndTime =
@@ -5580,7 +5674,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const resolvedUrgency =
       resolvedDueDate && isPastDue(resolvedDueDate) ? "critical" : (ai?.urgency ?? fallbackInput.urgency);
     const resolvedRecurrence: DonnitTask["recurrence"] =
-      (ai?.recurrence && ai.recurrence !== "none" ? ai.recurrence : fallbackInput.recurrence ?? "none") as DonnitTask["recurrence"];
+      (fallbackInput.recurrence && fallbackInput.recurrence !== "none"
+        ? fallbackInput.recurrence
+        : ai?.recurrence && ai.recurrence !== "none"
+          ? ai.recurrence
+          : "none") as DonnitTask["recurrence"];
     const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
     const resolvedTitle = ai
       ? normalizeAiTitle(ai.title, fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
@@ -5621,11 +5719,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           recurrence: resolvedRecurrence,
           reminderDaysBefore: resolvedReminderDaysBefore,
         };
-    if (explicitAssignment && !explicitMentionedUser && !aiAssignee) {
+    if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedUser && !aiAssignee))) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assistant = await storage.createChatMessage({
         role: "assistant",
-        content: `Who should own "${taskInput.title}"? I could not match the person you named to a workspace user.`,
+        content: ambiguousMentionedAssignee
+          ? `Which person should own "${taskInput.title}"? I found more than one matching teammate.`
+          : `Who should own "${taskInput.title}"? I could not match the person you named to a workspace user.`,
         taskId: null,
       });
       res.json({ assistant, pending: true });
