@@ -103,6 +103,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [agendaWorkOpen, setAgendaWorkOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
+  const [focusedTeamUserId, setFocusedTeamUserId] = useState<string | null>(null);
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     try {
@@ -1351,6 +1353,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     detail: string;
     view?: AppView;
     taskId?: string;
+    profileId?: string;
+    userId?: string;
   };
   const globalSearchResults: GlobalSearchResult[] = (() => {
     const query = globalSearchQuery.trim().toLowerCase();
@@ -1411,6 +1415,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           title: profile.title,
           detail: `${profile.owner.name} - ${profile.status} - ${profile.currentIncompleteTasks.length} open`,
           view: "profiles",
+          profileId: String(profile.id),
         });
       }
     });
@@ -1443,6 +1448,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           title: user.name,
           detail: `${user.role}${user.email ? ` - ${user.email}` : ""}`,
           view: canOpenManagerReports ? "team" : "settings",
+          userId: String(user.id),
         });
       }
     });
@@ -1453,8 +1459,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const openGlobalSearchResult = (result: GlobalSearchResult) => {
     setGlobalSearchOpen(false);
     setGlobalSearchQuery("");
+    setFocusedProfileId(null);
+    setFocusedTeamUserId(null);
     if (result.view) openAppView(result.view);
     if (result.kind === "Inbox") setApprovalInboxOpen(true);
+    if (result.profileId) setFocusedProfileId(result.profileId);
+    if (result.userId) setFocusedTeamUserId(result.userId);
     if (result.taskId) {
       setNotificationTaskId(result.taskId);
     }
@@ -1504,6 +1514,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     ? "build preview"
                     : "demo (Supabase not configured)"}
                 </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setGlobalSearchOpen(true)}
+                  className="lg:hidden"
+                  aria-label="Search Donnit"
+                  data-testid="button-global-search-mobile"
+                >
+                  <Search className="size-4" />
+                </Button>
                 <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
                 <NotificationCenter
                   notifications={notifications}
@@ -1796,6 +1817,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   subtasks={data.subtasks ?? []}
                   authenticated={Boolean(data.authenticated)}
                   currentUserId={data.currentUserId}
+                  focusUserId={focusedTeamUserId}
                 />
               ) : (
                 <RestrictedView title="Team is for managers" detail="Managers and admins can review team status, overdue work, and update requests here." />
@@ -1813,6 +1835,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   authenticated={Boolean(data.authenticated)}
                   subtasks={data.subtasks ?? []}
                   events={data.events}
+                  focusProfileId={focusedProfileId}
                 />
               ) : (
                 <RestrictedView title="Position Profiles are admin-only" detail="Admins can assign, transfer, and inspect role memory from this workspace area." />

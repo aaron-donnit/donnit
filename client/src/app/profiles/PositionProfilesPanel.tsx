@@ -27,6 +27,7 @@ export default function PositionProfilesPanel({
   authenticated,
   subtasks = [],
   events = [],
+  focusProfileId = null,
 }: {
   profiles: PositionProfile[];
   users: User[];
@@ -34,6 +35,7 @@ export default function PositionProfilesPanel({
   authenticated: boolean;
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
+  focusProfileId?: string | null;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canManageProfiles = canAdministerProfiles(currentUser);
@@ -184,6 +186,18 @@ export default function PositionProfilesPanel({
       setSelectedProfileId(repositoryProfiles[0].id);
     }
   }, [repositoryProfiles, selectedProfileId]);
+
+  useEffect(() => {
+    if (!focusProfileId) return;
+    const profile = repositoryProfiles.find((item) => String(item.id) === String(focusProfileId));
+    if (!profile) return;
+    setSelectedProfileId(profile.id);
+    setShowProfileHistory(false);
+    setProfileTaskSearch("");
+    setSelectedProfileTaskId(null);
+    setCreateOpen(false);
+    setViewMode("detail");
+  }, [focusProfileId, repositoryProfiles]);
 
   useEffect(() => {
     if (!selectedProfile) {

@@ -21,6 +21,7 @@ export default function TeamViewPanel({
   subtasks = [],
   authenticated = false,
   currentUserId,
+  focusUserId = null,
 }: {
   tasks: Task[];
   suggestions: EmailSuggestion[];
@@ -29,6 +30,7 @@ export default function TeamViewPanel({
   subtasks?: TaskSubtask[];
   authenticated?: boolean;
   currentUserId: Id;
+  focusUserId?: string | null;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canViewTeam = Boolean(currentUser && ["owner", "admin", "manager"].includes(currentUser.role));
@@ -44,6 +46,11 @@ export default function TeamViewPanel({
       setSelectedUserId(String(teamMembers[0]?.id ?? ""));
     }
   }, [selectedUserId, teamMembers]);
+  useEffect(() => {
+    if (!focusUserId) return;
+    if (!teamMembers.some((member) => String(member.id) === String(focusUserId))) return;
+    setSelectedUserId(String(focusUserId));
+  }, [focusUserId, teamMembers]);
 
   if (!canViewTeam) return null;
   const member = teamMembers.find((user) => String(user.id) === selectedUserId) ?? teamMembers[0];
