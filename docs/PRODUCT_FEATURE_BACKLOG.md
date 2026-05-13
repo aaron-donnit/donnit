@@ -15,7 +15,7 @@ Status key:
 
 ### Agentic AI Assistant
 
-Status: Open
+Status: In progress
 
 Goal: Add a Donnit AI assistant that can be assigned work by a user, complete bounded tasks through approved tools, report back, and update the related task profile with what it did, what it found, and what still needs human action.
 
@@ -33,7 +33,7 @@ Core workflow:
 
 MVP scope:
 
-- Start with one bounded assistant skill: "Research and draft a task update."
+- Start with one bounded assistant skill: "Research and draft a task update." Backend foundation is implemented behind `POST /api/tasks/:id/assistant-runs`; UI entry point is still pending.
 - The assistant may read the task, subtasks, notes, completion history, Position Profile memory, relevant email suggestion text, and existing attachments if available.
 - The assistant may produce a draft response, task summary, checklist, or recommended subtasks.
 - The assistant may not send external messages or mutate workspace state without confirmation.

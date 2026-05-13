@@ -307,6 +307,43 @@ export type DonnitAiToolCallInput = {
   error_message?: string | null;
 };
 
+export type DonnitAssistantRun = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  task_id: string;
+  position_profile_id: string | null;
+  provider: "openai" | "hermes";
+  skill_id: string;
+  status: "queued" | "running" | "needs_approval" | "completed" | "failed" | "cancelled";
+  instruction: string;
+  output: Record<string, unknown>;
+  approval_required: boolean;
+  approved_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  correlation_id: string;
+  estimated_cost_usd: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DonnitAssistantRunInput = Pick<
+  DonnitAssistantRun,
+  "task_id" | "provider" | "skill_id" | "instruction" | "correlation_id"
+> & Partial<Pick<DonnitAssistantRun, "position_profile_id" | "status" | "approval_required">>;
+
+export type DonnitAssistantRunEvent = {
+  id: string;
+  org_id: string;
+  assistant_run_id: string;
+  task_id: string | null;
+  user_id: string | null;
+  type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export class DonnitStore {
   constructor(private readonly client: SupabaseClient, public readonly userId: string) {}
 
@@ -854,6 +891,55 @@ export class DonnitStore {
       .from(DONNIT_TABLES.aiToolCalls)
       .insert(input);
     if (error) throw wrapSupabaseError("create ai_tool_call failed", error);
+  }
+
+  // ---- assistant_runs (agent task execution audit) ----------------------
+
+  async createAssistantRun(orgId: string, input: DonnitAssistantRunInput): Promise<DonnitAssistantRun> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.assistantRuns)
+      .insert({
+        ...input,
+        org_id: orgId,
+        user_id: this.userId,
+        status: input.status ?? "queued",
+        position_profile_id: input.position_profile_id ?? null,
+        approval_required: input.approval_required ?? false,
+      })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create assistant_run failed", error);
+    return data as DonnitAssistantRun;
+  }
+
+  async updateAssistantRun(
+    runId: string,
+    patch: Partial<Pick<
+      DonnitAssistantRun,
+      "status" | "output" | "approval_required" | "approved_at" | "completed_at" | "error_message" | "estimated_cost_usd"
+    >>,
+  ): Promise<DonnitAssistantRun | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.assistantRuns)
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", runId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw wrapSupabaseError("update assistant_run failed", error);
+    return (data as DonnitAssistantRun | null) ?? null;
+  }
+
+  async createAssistantRunEvent(
+    orgId: string,
+    input: Omit<DonnitAssistantRunEvent, "id" | "org_id" | "user_id" | "created_at">,
+  ): Promise<DonnitAssistantRunEvent> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.assistantRunEvents)
+      .insert({ ...input, org_id: orgId, user_id: this.userId })
+      .select("*")
+      .single();
+    if (error) throw wrapSupabaseError("create assistant_run_event failed", error);
+    return data as DonnitAssistantRunEvent;
   }
 
   // ---- position_profiles (admin continuity repository) ------------------

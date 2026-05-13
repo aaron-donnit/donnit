@@ -45,6 +45,7 @@ import {
 } from "./donnit-store";
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
+import { draftTaskUpdateWithAgent } from "./intelligence/skills/task-update-assistant";
 import { executeDonnitComposioReadTool, isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
 
 const DEMO_USER_ID = 1;
@@ -3233,6 +3234,11 @@ const taskSubtaskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(160).optional(),
   done: z.boolean().optional(),
   position: z.number().int().min(0).max(1000).optional(),
+});
+
+const assistantRunRequestSchema = z.object({
+  instruction: z.string().trim().min(2).max(1200),
+  skill: z.literal("task_update").default("task_update"),
 });
 
 const pendingChatTaskSchema = z.object({
@@ -6778,6 +6784,112 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/postpone-week", (req, res) => handleTaskAction(req, res, "postpone_week"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
+
+  app.post("/api/tasks/:id/assistant-runs", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = assistantRunRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Assistant instruction is required." });
+      return;
+    }
+    const auth = req.donnitAuth!;
+    const store = new DonnitStore(auth.client, auth.userId);
+    let assistantRunId: string | null = null;
+    try {
+      const context = await requireWorkspaceMemberContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const taskId = String(req.params.id);
+      const task = await store.getTask(taskId);
+      if (!task || task.org_id !== context.orgId || !canViewSensitiveTask(task, auth.userId, context.actor)) {
+        res.status(404).json({ message: "Task not found." });
+        return;
+      }
+      const correlationId = `assistant_${crypto.randomUUID()}`;
+      const provider = process.env.DONNIT_REASONING_PROVIDER === "hermes" ? ("hermes" as const) : ("openai" as const);
+      const assistantRun = await store.createAssistantRun(context.orgId, {
+        task_id: task.id,
+        position_profile_id: task.position_profile_id,
+        provider,
+        skill_id: "task_update_assistant.v1",
+        status: "running",
+        instruction: parsed.data.instruction,
+        correlation_id: correlationId,
+      });
+      assistantRunId = assistantRun.id;
+      await store.createAssistantRunEvent(context.orgId, {
+        assistant_run_id: assistantRun.id,
+        task_id: task.id,
+        type: "started",
+        payload: {
+          skill: parsed.data.skill,
+          instruction: parsed.data.instruction,
+        },
+      });
+      const result = await draftTaskUpdateWithAgent({
+        store,
+        orgId: context.orgId,
+        userId: auth.userId,
+        taskId: task.id,
+        instruction: parsed.data.instruction,
+        correlationId,
+      });
+      const output = {
+        summary: result.summary,
+        suggestedUpdate: result.suggested_update,
+        blockers: result.blockers,
+        suggestedNextSteps: result.suggested_next_steps,
+        profileMemoryCandidate: result.profile_memory_candidate,
+        confidence: result.confidence,
+      };
+      const updatedRun = await store.updateAssistantRun(assistantRun.id, {
+        status: "completed",
+        output,
+        completed_at: new Date().toISOString(),
+        estimated_cost_usd: result.estimatedCostUsd,
+      });
+      await store.createAssistantRunEvent(context.orgId, {
+        assistant_run_id: assistantRun.id,
+        task_id: task.id,
+        type: "completed",
+        payload: {
+          output,
+          estimatedCostUsd: result.estimatedCostUsd,
+          correlationId: result.correlationId,
+        },
+      });
+      res.status(201).json({
+        id: updatedRun?.id ?? assistantRun.id,
+        taskId: task.id,
+        status: "completed",
+        correlationId: result.correlationId,
+        estimatedCostUsd: result.estimatedCostUsd,
+        output,
+      });
+    } catch (error) {
+      if (assistantRunId) {
+        await store.updateAssistantRun(assistantRunId, {
+          status: "failed",
+          completed_at: new Date().toISOString(),
+          error_message: error instanceof Error ? error.message : String(error),
+        }).catch(() => null);
+      }
+      const described = describeSupabaseError(error);
+      const reason = classifySupabaseError(described, { schema: DONNIT_SCHEMA, table: "assistant_runs" });
+      if (reason === "missing_table" || reason === "invalid_column" || reason === "schema_not_exposed") {
+        res.status(409).json({
+          message: "Assistant runs are not available yet. Apply Supabase migration 20260513170743_assistant_runs_foundation.sql, then redeploy.",
+          reason: `assistant_runs_${reason}`,
+        });
+        return;
+      }
+      res.status(502).json({
+        message: error instanceof Error ? error.message : "Could not run Donnit assistant.",
+        reason: reason === "postgrest_error" ? "assistant_run_failed" : reason,
+      });
+    }
+  });
 
   // ------------------------------------------------------------------
   // Position profiles
