@@ -1487,7 +1487,7 @@ export default function PositionProfilesPanel({
                 </div>
                 <div className="rounded-md bg-muted px-2 py-2">
                   <p className="font-semibold tabular-nums text-foreground">{learnedHowToNotes.length}</p>
-                  <p className="text-muted-foreground">how-to</p>
+                  <p className="text-muted-foreground">instructions</p>
                 </div>
               </div>
               <div className="mt-3 grid gap-3 lg:grid-cols-2">
@@ -1561,7 +1561,7 @@ export default function PositionProfilesPanel({
               )}
               <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_.8fr]">
                 <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
-                  <p className="mb-2 text-xs font-medium text-foreground">How-to notes Donnit captured</p>
+                  <p className="mb-2 text-xs font-medium text-foreground">Instructions Donnit captured</p>
                   {learnedHowToNotes.length > 0 ? (
                     <ul className="space-y-1.5 text-xs text-muted-foreground">
                       {learnedHowToNotes.slice(0, 4).map((item) => (
@@ -1733,53 +1733,66 @@ export default function PositionProfilesPanel({
               </div>,
             )}
 
-            {selectedProfile.currentIncompleteTasks.length > 0 && (
-              renderProfileSection(
-                "Current work",
-                "Incomplete tasks currently tied to this role.",
-                <ListChecks className="size-4 text-muted-foreground" />,
-                selectedProfile.currentIncompleteTasks.length,
+            {renderProfileSection(
+              "Tasks",
+              "Current and recurring work tied to this position.",
+              <ListChecks className="size-4 text-muted-foreground" />,
+              selectedProfile.currentIncompleteTasks.length + selectedProfile.recurringTasks.length,
+              <div className="grid gap-3" data-testid="panel-position-profile-tasks">
                 <div className="rounded-md border border-border bg-background px-3 py-2">
-                <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
-                <div className="space-y-1">
-                  {visibleProfileCurrentTasks.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
-                      No current work matches this search.
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                      <ListChecks className="size-4 text-muted-foreground" />
+                      Current work
                     </p>
-                  ) : (
-                    visibleProfileCurrentTasks
-                      .slice(0, 6)
-                      .map((task) => renderProfileTaskButton(task, `${task.dueDate ?? "No date"} / ${urgencyLabel(task.urgency)} / ${task.estimatedMinutes} min`))
-                  )}
+                    <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
+                      {selectedProfile.currentIncompleteTasks.length}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {selectedProfile.currentIncompleteTasks.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                        No current work is tied to this profile.
+                      </p>
+                    ) : visibleProfileCurrentTasks.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                        No current work matches this search.
+                      </p>
+                    ) : (
+                      visibleProfileCurrentTasks
+                        .slice(0, 6)
+                        .map((task) => renderProfileTaskButton(task, `${task.dueDate ?? "No date"} / ${urgencyLabel(task.urgency)} / ${task.estimatedMinutes} min`))
+                    )}
+                  </div>
                 </div>
-                </div>,
-              )
-            )}
-
-            {selectedProfile.recurringTasks.length > 0 && (
-              renderProfileSection(
-                "Recurring responsibilities",
-                "Work that should come forward for the next profile owner when it is due.",
-                <Repeat2 className="size-4 text-muted-foreground" />,
-                selectedProfile.recurringTasks.length,
                 <div className="rounded-md border border-border bg-background px-3 py-2">
-                <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-                  <Repeat2 className="size-4 text-muted-foreground" />
-                  Recurring responsibilities
-                </p>
-                <div className="space-y-1">
-                  {visibleProfileRecurringTasks.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
-                      No recurring responsibility matches this search.
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                      <Repeat2 className="size-4 text-muted-foreground" />
+                      Recurring tasks
                     </p>
-                  ) : (
-                    visibleProfileRecurringTasks
-                      .slice(0, 6)
-                      .map((task) => renderProfileTaskButton(task, `${inferTaskCadence(task)} / due ${task.dueDate ?? "not set"} / visible ${task.visibleFrom ?? "now"}`))
-                  )}
+                    <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
+                      {selectedProfile.recurringTasks.length}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {selectedProfile.recurringTasks.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                        No recurring tasks are tied to this profile yet.
+                      </p>
+                    ) : visibleProfileRecurringTasks.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+                        No recurring task matches this search.
+                      </p>
+                    ) : (
+                      visibleProfileRecurringTasks
+                        .slice(0, 6)
+                        .map((task) => renderProfileTaskButton(task, `${inferTaskCadence(task)} / due ${task.dueDate ?? "not set"} / visible ${task.visibleFrom ?? "now"}`))
+                    )}
+                  </div>
                 </div>
-                </div>,
-              )
+              </div>,
+              true,
             )}
 
             {renderProfileSection(
@@ -1844,14 +1857,14 @@ export default function PositionProfilesPanel({
             )}
 
             {renderProfileSection(
-              "How-to memory",
-              "Instructions Donnit has learned from notes and completions.",
+              "Instructions",
+              "Steps, notes, and context Donnit has learned from completed work.",
               <HelpCircle className="size-4 text-muted-foreground" />,
               selectedProfile.howTo.length,
               <div className="rounded-md border border-border bg-background px-3 py-2">
               <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
                 <HelpCircle className="size-4 text-muted-foreground" />
-                How-to memory
+                Instructions
               </p>
               {selectedProfile.howTo.length > 0 ? (
                 <ul className="space-y-1 text-xs text-muted-foreground">
@@ -1861,7 +1874,7 @@ export default function PositionProfilesPanel({
                 </ul>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Donnit needs richer notes on recurring tasks for this profile.
+                  Completion notes and task updates will appear here as practical instructions for the next person in this role.
                 </p>
               )}
               </div>,
