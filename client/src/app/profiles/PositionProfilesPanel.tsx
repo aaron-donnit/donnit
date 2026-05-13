@@ -365,16 +365,28 @@ export default function PositionProfilesPanel({
     setCreateOpen(false);
     setViewMode("detail");
   };
+  const assignableUsersForProfile = (profile: PositionProfile | null | undefined) =>
+    users.filter(
+      (user) =>
+        profile &&
+        isActiveUser(user) &&
+        (!profile.currentOwnerId || String(user.id) !== String(profile.currentOwnerId)),
+    );
+  const defaultTargetUserIdForProfile = (profile: PositionProfile | null | undefined) => {
+    const candidates = assignableUsersForProfile(profile);
+    const currentUserCandidate = candidates.find((user) => String(user.id) === String(currentUserId));
+    return String((currentUserCandidate ?? candidates[0])?.id ?? "");
+  };
   const openAssignment = (nextMode: "delegate" | "transfer") => {
+    const profileToAssign = selectedProfile ?? repositoryProfiles[0] ?? null;
+    if (!profileToAssign) return;
     setMode(nextMode);
     setAssignmentFocus(nextMode);
     setCreateOpen(false);
-    if (!selectedProfile && repositoryProfiles[0]) {
-      setSelectedProfileId(repositoryProfiles[0].id);
-    }
-    if (repositoryProfiles.length > 0) {
-      setViewMode("detail");
-    }
+    setSelectedProfileId(profileToAssign.id);
+    setTargetUserId(defaultTargetUserIdForProfile(profileToAssign));
+    setSelectedProfileTaskId(null);
+    setViewMode("detail");
     setAssignmentDialogOpen(true);
   };
 
@@ -1673,7 +1685,10 @@ export default function PositionProfilesPanel({
                 <select
                   value={selectedProfile?.id ?? ""}
                   onChange={(event) => {
-                    setSelectedProfileId(event.target.value);
+                    const nextProfileId = event.target.value;
+                    const nextProfile = repositoryProfiles.find((profile) => profile.id === nextProfileId) ?? null;
+                    setSelectedProfileId(nextProfileId);
+                    setTargetUserId(defaultTargetUserIdForProfile(nextProfile));
                     setSelectedProfileTaskId(null);
                   }}
                   className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-medium text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -1689,7 +1704,8 @@ export default function PositionProfilesPanel({
                   Current owner: {selectedProfile ? profileAssignmentLabel(selectedProfile, users) : "Not selected"}
                 </p>
               </div>
-              <div className="grid gap-2">
+              <div>
+                <p className="ui-label">Transition type</p>
                 <select
                   value={mode}
                   onChange={(event) => {
@@ -1697,7 +1713,7 @@ export default function PositionProfilesPanel({
                     setMode(nextMode);
                     setAssignmentFocus(nextMode);
                   }}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   data-testid="select-profile-transfer-mode"
                 >
                   <option value="transfer">Transfer ownership</option>
@@ -1708,7 +1724,7 @@ export default function PositionProfilesPanel({
                     type="date"
                     value={delegateUntil}
                     onChange={(event) => setDelegateUntil(event.target.value)}
-                    className="h-9 text-xs"
+                    className="mt-2 h-9 text-xs"
                     data-testid="input-profile-transfer-delegate-until"
                   />
                 )}
