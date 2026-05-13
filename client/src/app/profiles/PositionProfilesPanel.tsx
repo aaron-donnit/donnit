@@ -714,6 +714,97 @@ export default function PositionProfilesPanel({
         },
       ]
     : [];
+  const profileSearchResults = selectedProfile && normalizedProfileTaskSearch
+    ? (() => {
+        const query = normalizedProfileTaskSearch;
+        const results: Array<{ id: string; label: string; detail: string; type: string; taskId?: Id }> = [];
+        const matches = (parts: Array<string | number | null | undefined>) =>
+          parts.filter((part) => part !== null && part !== undefined).join(" ").toLowerCase().includes(query);
+        const add = (item: { id: string; label: string; detail: string; type: string; taskId?: Id }) => {
+          if (!results.some((result) => result.id === item.id)) results.push(item);
+        };
+
+        if (matches([selectedProfile.title, selectedProfile.status, selectedProfile.riskLevel, profileAssignmentLabel(selectedProfile, users)])) {
+          add({
+            id: "profile-summary",
+            type: "Profile",
+            label: selectedProfile.title,
+            detail: `${profileAssignmentLabel(selectedProfile, users)} / ${selectedProfile.status} / Risk ${selectedProfile.riskScore}`,
+          });
+        }
+
+        allSelectedProfileTasks.forEach((task) => {
+          if (!matches([task.title, task.description, task.completionNotes, task.source, task.status, task.urgency, task.dueDate, taskRepeatLabel(task)])) return;
+          add({
+            id: `task-${task.id}`,
+            type: task.status === "completed" ? "History" : task.recurrence !== "none" ? "Recurring task" : "Task",
+            label: task.title,
+            detail: `${task.dueDate ?? "No date"} / ${urgencyLabel(task.urgency)} / ${task.source}`,
+            taskId: task.id,
+          });
+        });
+
+        selectedProfile.howTo.forEach((item, index) => {
+          if (matches([item])) add({ id: `how-to-${index}`, type: "How-to", label: item, detail: "Saved instruction" });
+        });
+        selectedProfile.tools.forEach((item, index) => {
+          if (matches([item])) add({ id: `tool-${index}`, type: "Tool", label: item, detail: "Tool access summary" });
+        });
+        selectedProfile.stakeholders.forEach((item, index) => {
+          if (matches([item])) add({ id: `stakeholder-${index}`, type: "Contact", label: item, detail: "Role relationship" });
+        });
+        selectedProfile.accessItems.forEach((item) => {
+          if (!matches([item.toolName, item.loginUrl, item.accountOwner, item.billingNotes, item.status])) return;
+          add({
+            id: `access-${item.id}`,
+            type: "Access",
+            label: item.toolName,
+            detail: `${item.accountOwner || "No owner noted"} / ${accessStatusLabels[item.status]}`,
+          });
+        });
+        selectedProfile.riskReasons.forEach((item, index) => {
+          if (matches([item])) add({ id: `risk-${index}`, type: "Risk", label: item, detail: "Continuity risk" });
+        });
+        selectedProfile.transitionChecklist.forEach((item, index) => {
+          if (matches([item])) add({ id: `checklist-${index}`, type: "Checklist", label: item, detail: "Transition step" });
+        });
+        learnedRecurringResponsibilities.forEach((item) => {
+          if (!matches([item.title, item.cadence, item.repeatDetails, item.dueDate])) return;
+          add({
+            id: `learned-recurring-${item.taskId}-${item.title}`,
+            type: "Learned recurring",
+            label: item.title,
+            detail: item.repeatDetails || item.cadence || "Recurring responsibility",
+            taskId: item.taskId,
+          });
+        });
+        learnedHowToNotes.forEach((item) => {
+          if (!matches([item.title, item.note])) return;
+          add({
+            id: `learned-how-to-${item.taskId}-${item.note}`,
+            type: "Learned note",
+            label: item.title,
+            detail: item.note,
+            taskId: item.taskId,
+          });
+        });
+        learnedTaskSignals.forEach((item) => {
+          if (!matches([item.title, item.eventType, item.source, item.urgency])) return;
+          add({
+            id: `signal-${item.taskId}-${item.eventType}`,
+            type: "Signal",
+            label: item.title,
+            detail: `${titleCase(item.eventType)} / ${titleCase(item.source)} / ${urgencyLabel(item.urgency)}`,
+            taskId: item.taskId,
+          });
+        });
+        learnedSourceMix.forEach((item) => {
+          if (matches([item.source, item.count])) add({ id: `source-${item.source}`, type: "Source", label: titleCase(item.source), detail: `${item.count} captured item${item.count === 1 ? "" : "s"}` });
+        });
+
+        return results.slice(0, 12);
+      })()
+    : [];
   const lastLearnedAt = typeof selectedMemory.lastAutoUpdatedAt === "string" ? selectedMemory.lastAutoUpdatedAt : null;
   const renderProfileTaskButton = (task: Task, meta: string) => (
     <button
@@ -987,6 +1078,63 @@ export default function PositionProfilesPanel({
                 )}
                 {isProfileArchived(selectedProfile) ? "Restore" : "Archive"}
               </Button>
+            </div>
+
+            <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-position-profile-search">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium text-foreground">Search</p>
+                  <p className="text-xs text-muted-foreground">
+                    Search tasks, history, recurring work, notes, tools, access, contacts, and transition items.
+                  </p>
+                </div>
+                <Search className="size-4 text-muted-foreground" />
+              </div>
+              <Input
+                value={profileTaskSearch}
+                onChange={(event) => setProfileTaskSearch(event.target.value)}
+                placeholder="Search this profile"
+                className="h-9 text-xs"
+                data-testid="input-position-profile-task-search"
+              />
+              {normalizedProfileTaskSearch && (
+                <div className="mt-3 rounded-md border border-border bg-muted/25 p-2" data-testid="position-profile-search-results">
+                  {profileSearchResults.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">No profile results found.</p>
+                  ) : (
+                    <div className="grid gap-1.5">
+                      {profileSearchResults.map((result) => {
+                        const content = (
+                          <>
+                            <span className="min-w-0">
+                              <span className="block truncate text-xs font-medium text-foreground">{result.label}</span>
+                              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{result.detail}</span>
+                            </span>
+                            <span className="shrink-0 rounded-md bg-background px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                              {result.type}
+                            </span>
+                          </>
+                        );
+                        return result.taskId ? (
+                          <button
+                            key={result.id}
+                            type="button"
+                            onClick={() => setSelectedProfileTaskId(String(result.taskId))}
+                            className="flex items-start justify-between gap-3 rounded-md px-2 py-2 text-left transition hover:bg-background"
+                            data-testid={`button-position-profile-search-result-${result.id}`}
+                          >
+                            {content}
+                          </button>
+                        ) : (
+                          <div key={result.id} className="flex items-start justify-between gap-3 rounded-md px-2 py-2">
+                            {content}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div
@@ -1452,32 +1600,6 @@ export default function PositionProfilesPanel({
                 </div>
               </div>
               </div>,
-            )}
-
-            {renderProfileSection(
-              "Search profile memory",
-              "Find current work, recurring responsibilities, history, owners, sources, and notes.",
-              <Search className="size-4 text-muted-foreground" />,
-              null,
-              <div className="rounded-md border border-border bg-background px-3 py-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-xs font-medium text-foreground">Profile memory search</p>
-                  <p className="text-xs text-muted-foreground">
-                    Search current work, recurring responsibilities, history, owners, sources, and notes.
-                  </p>
-                </div>
-                <Search className="size-4 text-muted-foreground" />
-              </div>
-              <Input
-                value={profileTaskSearch}
-                onChange={(event) => setProfileTaskSearch(event.target.value)}
-                placeholder="Search this Position Profile"
-                className="h-9 text-xs"
-                data-testid="input-position-profile-task-search"
-              />
-              </div>,
-              true,
             )}
 
             {selectedProfile.riskReasons.length > 0 && (
