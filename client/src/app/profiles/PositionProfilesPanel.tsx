@@ -134,6 +134,7 @@ export default function PositionProfilesPanel({
   const [mode, setMode] = useState<"delegate" | "transfer">("delegate");
   const [delegateUntil, setDelegateUntil] = useState("");
   const [showProfileHistory, setShowProfileHistory] = useState(false);
+  const [profileListSearch, setProfileListSearch] = useState("");
   const [profileTaskSearch, setProfileTaskSearch] = useState("");
   const [selectedProfileTaskId, setSelectedProfileTaskId] = useState<string | null>(null);
   const [accessDraft, setAccessDraft] = useState<{
@@ -457,6 +458,21 @@ export default function PositionProfilesPanel({
     },
   });
   const normalizedProfileTaskSearch = profileTaskSearch.trim().toLowerCase();
+  const normalizedProfileListSearch = profileListSearch.trim().toLowerCase();
+  const visibleRepositoryProfiles = normalizedProfileListSearch
+    ? repositoryProfiles.filter((profile) => {
+        const ownerLabel = profileAssignmentLabel(profile, users);
+        const haystack = [
+          profile.title,
+          profile.status,
+          ownerLabel,
+          profile.riskLevel,
+          ...profile.tools,
+          ...profile.stakeholders,
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedProfileListSearch);
+      })
+    : repositoryProfiles;
   const allSelectedProfileTasks = selectedProfile
     ? [
         ...selectedProfile.currentIncompleteTasks,
@@ -726,13 +742,27 @@ export default function PositionProfilesPanel({
                 Click a job title to view institutional memory, current work, and transition controls.
               </p>
             </div>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={profileListSearch}
+                onChange={(event) => setProfileListSearch(event.target.value)}
+                placeholder="Search profiles by job, owner, tools, or status"
+                className="h-9 pl-9 text-xs"
+                data-testid="input-position-profile-list-search"
+              />
+            </div>
             {repositoryProfiles.length === 0 ? (
               <div className="rounded-md border border-dashed border-border bg-background px-3 py-6 text-center text-sm text-muted-foreground">
                 No role memory yet. Create a profile or let Donnit build one as tasks are assigned and completed.
               </div>
+            ) : visibleRepositoryProfiles.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border bg-background px-3 py-6 text-center text-sm text-muted-foreground">
+                No Position Profiles match that search.
+              </div>
             ) : (
               <div className="profile-list-grid" data-testid="position-profile-list">
-                {repositoryProfiles.map((profile) => (
+                {visibleRepositoryProfiles.map((profile) => (
                   <button
                     key={profile.id}
                     type="button"
@@ -1618,8 +1648,22 @@ export default function PositionProfilesPanel({
             <div className="grid gap-3 rounded-md border border-border bg-muted/25 p-3 sm:grid-cols-[1fr_1fr]">
               <div>
                 <p className="ui-label">Selected profile</p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{selectedProfile?.title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <select
+                  value={selectedProfile?.id ?? ""}
+                  onChange={(event) => {
+                    setSelectedProfileId(event.target.value);
+                    setSelectedProfileTaskId(null);
+                  }}
+                  className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-medium text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid="select-profile-transfer-profile"
+                >
+                  {repositoryProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.title} - {profileAssignmentLabel(profile, users)}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
                   Current owner: {selectedProfile ? profileAssignmentLabel(selectedProfile, users) : "Not selected"}
                 </p>
               </div>
