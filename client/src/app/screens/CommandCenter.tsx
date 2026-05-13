@@ -108,6 +108,17 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [focusedTeamUserId, setFocusedTeamUserId] = useState<string | null>(null);
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatusFilter | null>(null);
+  const [viewResetKeys, setViewResetKeys] = useState<Record<AppView, number>>({
+    home: 0,
+    tasks: 0,
+    agenda: 0,
+    inbox: 0,
+    team: 0,
+    profiles: 0,
+    reports: 0,
+    admin: 0,
+    settings: 0,
+  });
   const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     try {
       if (typeof window === "undefined") return null;
@@ -1107,6 +1118,14 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   };
   const openAppView = (view: AppView) => {
     setAppView(view);
+    setViewResetKeys((current) => ({ ...current, [view]: current[view] + 1 }));
+    setFocusedProfileId(null);
+    setFocusedTeamUserId(null);
+    setNotificationTaskId(null);
+    setTaskStatusFilter(null);
+    if (view === "tasks" || view === "home") {
+      setWorkspaceTaskScope("mine");
+    }
     if (view === "agenda") setSupportView("agenda");
     if (view === "team") setSupportView("team");
     if (view === "home") setSupportView("today");
@@ -1596,7 +1615,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
           {/* Workspace: each major workflow gets its own view. */}
           {appView === "home" && (
-            <section className="command-page mx-auto w-full max-w-[1600px] px-4 py-4 lg:px-6">
+            <section key={`home-${viewResetKeys.home}`} className="command-page mx-auto w-full max-w-[1600px] px-4 py-4 lg:px-6">
               <div className="home-hero mb-4">
                 <div className="min-w-0">
                   <h2 className="greet">
@@ -1668,6 +1687,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               </div>
               <ChatPanel messages={data.messages} />
               <TaskList
+                key={`home-tasks-${viewResetKeys.home}`}
                 tasks={scopedDisplayTasks}
                 users={data.users}
                 subtasks={data.subtasks ?? []}
@@ -1686,7 +1706,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "tasks" && (
-            <section className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-4 lg:px-6">
+            <section key={`tasks-${viewResetKeys.tasks}`} className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-4 lg:px-6">
               {canUseTeamWorkspaceView && (
                 <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3 md:flex-row md:items-center md:justify-between">
                   <div>
@@ -1744,6 +1764,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               )}
               <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               <TaskList
+                key={`tasks-${viewResetKeys.tasks}`}
                 tasks={scopedDisplayTasks}
                 users={data.users}
                 subtasks={data.subtasks ?? []}
@@ -1760,7 +1781,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "agenda" && (
-            <section className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-6">
+            <section key={`agenda-${viewResetKeys.agenda}`} className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-6">
               <AgendaPanel
                 agenda={orderedAgenda}
                 excludedTaskIds={agendaExcludedTaskIds}
@@ -1826,7 +1847,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "inbox" && (
-            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+            <section key={`inbox-${viewResetKeys.inbox}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
                 <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
                 <div className="rounded-md border border-border bg-card p-4">
@@ -1854,9 +1875,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "team" && (
-            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+            <section key={`team-${viewResetKeys.team}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               {canOpenManagerReports ? (
                 <TeamViewPanel
+                  key={`team-${viewResetKeys.team}`}
                   tasks={displayTasks}
                   suggestions={data.suggestions}
                   events={data.events}
@@ -1873,9 +1895,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "profiles" && (
-            <section className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
+            <section key={`profiles-${viewResetKeys.profiles}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               {canManagePositionProfiles ? (
                 <PositionProfilesPanel
+                  key={`profiles-${viewResetKeys.profiles}`}
                   profiles={positionProfiles}
                   users={data.users}
                   currentUserId={data.currentUserId}
@@ -1891,10 +1914,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "reports" && (
-            <section className="mx-auto w-full max-w-[1400px] px-4 py-4 lg:px-6">
+            <section key={`reports-${viewResetKeys.reports}`} className="mx-auto w-full max-w-[1400px] px-4 py-4 lg:px-6">
               {canOpenManagerReports ? (
                 <div className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
                   <ReportingPanel
+                    key={`reports-${viewResetKeys.reports}`}
                     tasks={displayTasks}
                     suggestions={data.suggestions}
                     agenda={orderedAgenda}
@@ -1917,7 +1941,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "admin" && (
-            <section className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 lg:px-6">
+            <section key={`admin-${viewResetKeys.admin}`} className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 lg:px-6">
               {canOpenManagerReports ? (
                 <>
                   {showMvpReadiness && (
@@ -1972,7 +1996,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "settings" && (
-            <section className="mx-auto w-full max-w-3xl px-4 py-4 lg:px-6">
+            <section key={`settings-${viewResetKeys.settings}`} className="mx-auto w-full max-w-3xl px-4 py-4 lg:px-6">
               <div className="rounded-md border border-border bg-card p-5">
                 <p className="text-sm font-medium text-foreground">Settings</p>
                 <p className="mt-1 text-xs text-muted-foreground">
