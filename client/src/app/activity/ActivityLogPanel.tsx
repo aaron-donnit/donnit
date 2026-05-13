@@ -95,7 +95,7 @@ export default function ActivityLogPanel({
                             {task?.title ?? `Task ${event.taskId}`}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {activityEventLabel(event.type)} by {user?.name ?? "Unknown"} · {new Date(event.createdAt).toLocaleString()}
+                            {activityEventLabel(event.type)} by {user?.name ?? "Unknown"} - {new Date(event.createdAt).toLocaleString()}
                           </p>
                         </div>
                         {task && (
