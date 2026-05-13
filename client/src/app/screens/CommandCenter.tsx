@@ -782,6 +782,18 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         (task.collaboratorIds ?? []).some((id) => String(id) === ownerId),
     );
   }, [activeTaskListUserId, displayTasks]);
+  const currentUserActionTasks = useMemo(() => {
+    const userId = String(data?.currentUserId ?? "");
+    if (!userId) return [];
+    return displayTasks.filter(
+      (task) =>
+        String(task.assignedToId) === userId ||
+        String(task.delegatedToId ?? "") === userId ||
+        String(task.assignedById) === userId ||
+        (task.collaboratorIds ?? []).some((id) => String(id) === userId),
+    );
+  }, [data?.currentUserId, displayTasks]);
+  const notificationTasks = canViewManagerReports(currentWorkspaceUser) ? displayTasks : currentUserActionTasks;
 
   useEffect(() => {
     if (!canUseTeamWorkspaceView) {
@@ -816,8 +828,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     [],
   );
   const rawNotifications = useMemo(
-    () => buildNotifications(displayTasks, data?.suggestions ?? [], data?.events ?? [], data?.currentUserId),
-    [displayTasks, data?.suggestions, data?.events, data?.currentUserId],
+    () => buildNotifications(notificationTasks, data?.suggestions ?? [], data?.events ?? [], data?.currentUserId),
+    [notificationTasks, data?.suggestions, data?.events, data?.currentUserId],
   );
   const notifications = useMemo(
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
@@ -1849,7 +1861,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           {appView === "inbox" && (
             <section key={`inbox-${viewResetKeys.inbox}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-                <AcceptancePanel tasks={data.tasks} suggestions={data.suggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
+                <AcceptancePanel tasks={currentUserActionTasks} suggestions={data.suggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
                 <div className="rounded-md border border-border bg-card p-4">
                   <p className="text-sm font-medium text-foreground">Capture sources</p>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -2019,7 +2031,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       <ApprovalInboxDialog
         open={approvalInboxOpen}
         onOpenChange={setApprovalInboxOpen}
-        tasks={data.tasks}
+        tasks={currentUserActionTasks}
         suggestions={data.suggestions}
         onScanEmail={() => scan.mutate()}
         scanningEmail={scan.isPending}
