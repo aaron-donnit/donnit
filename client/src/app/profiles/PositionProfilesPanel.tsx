@@ -128,7 +128,13 @@ export default function PositionProfilesPanel({
   const [selectedProfileId, setSelectedProfileId] = useState(repositoryProfiles[0]?.id ?? "");
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId);
   const targetUsers = useMemo(
-    () => users.filter((user) => selectedProfile && isActiveUser(user) && String(user.id) !== String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id)),
+    () =>
+      users.filter(
+        (user) =>
+          selectedProfile &&
+          isActiveUser(user) &&
+          (!selectedProfile.currentOwnerId || String(user.id) !== String(selectedProfile.currentOwnerId)),
+      ),
     [selectedProfile, users],
   );
   const assignmentUsers = useMemo(() => users.filter(isActiveUser), [users]);
@@ -152,7 +158,7 @@ export default function PositionProfilesPanel({
       "position-profile-assignment-preview",
       selectedProfile?.id ?? "",
       selectedProfile?.persisted ? selectedProfile.id : "",
-      selectedProfile ? String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id) : "",
+      selectedProfile?.currentOwnerId ? String(selectedProfile.currentOwnerId) : "__vacant__",
       targetUserId,
       mode,
       delegateUntil,
@@ -163,7 +169,7 @@ export default function PositionProfilesPanel({
       if (!selectedProfile || !targetUserId) throw new Error("Choose a profile and target user.");
       const res = await apiRequest("POST", "/api/position-profiles/assign/preview", {
         profileId: selectedProfile.persisted ? selectedProfile.id : undefined,
-        fromUserId: String(selectedProfile.currentOwnerId ?? selectedProfile.owner.id),
+        fromUserId: selectedProfile.currentOwnerId ? String(selectedProfile.currentOwnerId) : targetUserId,
         toUserId: targetUserId,
         mode,
         delegateUntil: delegateUntil || null,
@@ -437,7 +443,7 @@ export default function PositionProfilesPanel({
       }
       const res = await apiRequest("POST", "/api/position-profiles/assign", {
         profileId,
-        fromUserId: selectedProfile.currentOwnerId ?? selectedProfile.owner.id,
+        fromUserId: selectedProfile.currentOwnerId ?? targetUserId,
         toUserId: targetUserId,
         mode,
         delegateUntil: delegateUntil || null,

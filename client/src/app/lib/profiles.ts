@@ -213,7 +213,7 @@ export function buildPositionProfiles(
 }
 
 export function profilePrimaryOwnerId(profile: PositionProfile) {
-  return profile.currentOwnerId ?? profile.owner.id;
+  return profile.currentOwnerId ?? (profile.persisted ? null : profile.owner.id);
 }
 
 export function profilesForUser(positionProfiles: PositionProfile[], userId: Id) {
@@ -227,10 +227,11 @@ export function profilesForUser(positionProfiles: PositionProfile[], userId: Id)
 }
 
 export function profileAssignmentLabel(profile: PositionProfile, users: User[]) {
-  const owner = users.find((user) => String(user.id) === String(profilePrimaryOwnerId(profile)));
+  const ownerId = profilePrimaryOwnerId(profile);
+  const owner = ownerId ? users.find((user) => String(user.id) === String(ownerId)) : null;
   const temporary = users.find((user) => String(user.id) === String(profile.temporaryOwnerId));
   const delegate = users.find((user) => String(user.id) === String(profile.delegateUserId));
-  const ownerLabel = owner?.name ?? "Vacant";
+  const ownerLabel = ownerId ? owner?.name ?? "Unknown owner" : "Vacant";
   const coverage = [
     temporary ? `covered by ${temporary.name}` : "",
     delegate ? `delegated to ${delegate.name}` : "",
