@@ -129,10 +129,11 @@ export default function TaskList({
 
   const normalizedTaskSearch = taskSearch.trim().toLowerCase();
   const userNameForTask = (task: Task) => users.find((user) => String(user.id) === String(task.assignedToId))?.name ?? "";
-  const filteredTasks = visibleTasks.filter((task) => {
-    if (taskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
-    if (taskView === "done" && task.status !== "completed") return false;
-    if (taskView === "mine" && currentUserId && String(task.assignedToId) !== String(currentUserId) && String(task.delegatedToId ?? "") !== String(currentUserId)) return false;
+  const isMineTask = (task: Task) =>
+    currentUserId
+      ? String(task.assignedToId) === String(currentUserId) || String(task.delegatedToId ?? "") === String(currentUserId)
+      : true;
+  const matchesTaskSearch = (task: Task) => {
     if (!normalizedTaskSearch) return true;
     const haystack = [
       task.title,
@@ -147,6 +148,15 @@ export default function TaskList({
       .join(" ")
       .toLowerCase();
     return haystack.includes(normalizedTaskSearch);
+  };
+  const scopedTasks = visibleTasks.filter((task) => {
+    if (taskView === "mine" && !isMineTask(task)) return false;
+    return matchesTaskSearch(task);
+  });
+  const filteredTasks = scopedTasks.filter((task) => {
+    if (taskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
+    if (taskView === "done" && task.status !== "completed") return false;
+    return true;
   });
 
   const sorted = [...filteredTasks].sort((a, b) => {
@@ -176,7 +186,7 @@ export default function TaskList({
     .slice(0, 2);
   const newTaskIds = new Set(newTasks.map((task) => String(task.id)));
   const prioritizedOpen = open.filter((task) => !newTaskIds.has(String(task.id)));
-  const done = filteredTasks
+  const done = (taskView === "active" ? scopedTasks : filteredTasks)
     .filter((t) => t.status === "completed")
     .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
   const grouped = prioritizedOpen.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
@@ -207,9 +217,9 @@ export default function TaskList({
 
       <div className="work-toolbar border-b border-border px-2">
         {([
-          ["active", "Active", open.length + done.length],
+          ["active", "Active", visibleTasks.filter((task) => task.status !== "completed" && task.status !== "denied").length],
           ["mine", "Mine", null],
-          ["done", "Done", done.length],
+          ["done", "Done", visibleTasks.filter((task) => task.status === "completed").length],
           ["all", "All", null],
         ] as Array<[string, string, number | null]>).map(([id, label, count]) => (
           <button
