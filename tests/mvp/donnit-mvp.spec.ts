@@ -138,7 +138,7 @@ test("Needs Review, agenda, and Position Profiles expose the MVP continuity cont
       await expect(page.getByTestId("panel-position-profile-search")).toBeVisible();
       await page.getByTestId("input-position-profile-task-search").fill("report");
       await expect(page.getByTestId("position-profile-search-results")).toBeVisible();
-      await expect(page.getByTestId("button-position-profile-archive-top").or(page.getByTestId("button-position-profile-restore-top"))).toBeVisible();
+      await expect(page.getByTestId("button-position-profile-actions")).toBeVisible();
     }
   }
 

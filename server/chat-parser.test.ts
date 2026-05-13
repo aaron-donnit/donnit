@@ -81,6 +81,13 @@ describe("chat task parser", () => {
     });
   });
 
+  it("detects compact clock times that need AM or PM clarification", () => {
+    expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
+      display: "2:30",
+    });
+    expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 2:30pm")).toBeNull();
+  });
+
   it("does not ask for availability when an email already proposed a meeting time", () => {
     const draft = __chatParserTest.fallbackReplyDraft({
       from_email: "Taylor <taylor@example.com>",
@@ -116,7 +123,7 @@ describe("chat task parser", () => {
     );
   });
 
-  it("asks for a profile only when a teammate owns more than one matching profile", () => {
+  it("defaults to the assignee primary profile unless the text names a profile", () => {
     const profiles = [
       {
         id: "profile-exec",
@@ -141,7 +148,7 @@ describe("chat task parser", () => {
         message: "Assign Nina to renew the vendor contract by Friday",
         visibility: "work",
       }),
-    ).toMatchObject({ positionProfileId: null, needsChoice: true });
+    ).toMatchObject({ positionProfileId: "profile-exec", needsChoice: false });
 
     expect(
       __chatParserTest.resolveChatPositionProfile({

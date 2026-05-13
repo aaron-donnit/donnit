@@ -773,6 +773,40 @@ function parseTaskTime(message: string, estimatedMinutes = 30) {
   };
 }
 
+function ambiguousCompactClockTime(message: string) {
+  const match = message.match(/\b(?:at|@|by|before|around)\s+(\d{3,4})(?!\s*(?:a\.?m\.?|p\.?m\.?))\b/i);
+  if (!match) return null;
+  const raw = match[1];
+  const hourRaw = raw.length === 3 ? raw.slice(0, 1) : raw.slice(0, 2);
+  const minuteRaw = raw.length === 3 ? raw.slice(1) : raw.slice(2);
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 1 || hour > 12 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return {
+    hourRaw,
+    minuteRaw,
+    display: `${hour}:${String(minute).padStart(2, "0")}`,
+  };
+}
+
+function resolveCompactClockFromReply(originalText: string, reply: string, estimatedMinutes = 30) {
+  const ambiguous = ambiguousCompactClockTime(originalText);
+  if (!ambiguous) return null;
+  const meridiem = reply.match(/\b(a\.?m\.?|p\.?m\.?)\b/i)?.[1];
+  if (!meridiem) return null;
+  const dueTime = clockTimeFromMatch(ambiguous.hourRaw, ambiguous.minuteRaw, meridiem);
+  if (!dueTime) return null;
+  const isFixedEvent = /\b(meeting|meet|appointment|interview|demo|event|call|train|flight|travel|drive|go to|attend)\b/i.test(originalText);
+  return {
+    dueTime,
+    startTime: isFixedEvent ? dueTime : null,
+    endTime: isFixedEvent ? addMinutesToTime(dueTime, estimatedMinutes) : null,
+    isAllDay: false,
+  };
+}
+
 function isPastDue(dueDate: string | null) {
   return Boolean(dueDate && dueDate < todayIso());
 }
@@ -976,6 +1010,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
     .replace(/\b(?:at|@|by|before|around)\s+(?:noon|midnight)\b/gi, "")
     .replace(/\b(?:at|@|by|before|around)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/gi, "")
+    .replace(/\b(?:at|@|by|before|around)\s+\d{3,4}\b/gi, "")
     .replace(/\b(?:the\s+)?(?:first|second|third|fourth|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:of\s+)?(?:every|each|the)?\s*month\b/gi, "")
     .replace(/\b(?:every|each)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\b(?:every|each)\s+(?:month|quarter|year)\b/gi, "")
@@ -2772,7 +2807,7 @@ function parseChatTaskAuthenticated(
   };
 }
 
-type PendingChatMissingField = "title" | "assignee" | "dueDate" | "urgency" | "positionProfile";
+type PendingChatMissingField = "title" | "assignee" | "dueDate" | "urgency" | "positionProfile" | "timeMeridiem";
 
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
@@ -2874,10 +2909,8 @@ function resolveChatPositionProfile(input: {
   if (explicit) {
     return { positionProfileId: explicit.id, needsChoice: false, candidates };
   }
-  if (candidates.length === 1) {
-    return { positionProfileId: candidates[0].id, needsChoice: false, candidates };
-  }
-  return { positionProfileId: null as string | null, needsChoice: true, candidates };
+  const primary = candidates.find((profile) => profile.current_owner_id === input.assignedToId) ?? candidates[0];
+  return { positionProfileId: primary?.id ?? null, needsChoice: false, candidates };
 }
 
 function formatProfileChoices(profiles: DonnitPositionProfile[]) {
@@ -2899,6 +2932,14 @@ function missingChatQuestion(
   const intro = `I can assign ${assigneeName} to ${lowercaseFirst(task.title)}${visibilityText}.`;
   const missing = pendingChatMissing(task);
   const needsTitle = missing.includes("title");
+  const ambiguousTime = ambiguousCompactClockTime(task.description || task.title);
+  if (missing.includes("timeMeridiem")) {
+    const timeText = ambiguousTime?.display ?? "that time";
+    if (missing.includes("dueDate")) {
+      return `${intro} Do you mean ${timeText} AM or PM, and what day should this happen?`;
+    }
+    return `${intro} Do you mean ${timeText} AM or PM?`;
+  }
   if (missing.includes("assignee") && needsTitle) {
     return "Who should own this task, and what should they do?";
   }
@@ -3129,6 +3170,9 @@ function mergePendingChatTask(
   const urgency = dueDate && isPastDue(dueDate) ? "critical" : (explicitUrgency ?? task.urgency);
   const estimatedMinutes = /\d/.test(message) ? parseEstimate(message) : task.estimatedMinutes;
   const timing = parseTaskTime(message, estimatedMinutes);
+  const resolvedCompactTime = task.missing.includes("timeMeridiem")
+    ? resolveCompactClockFromReply(task.description, message, estimatedMinutes)
+    : null;
   const profileResolution = resolveChatPositionProfile({
     profiles,
     assignedToId,
@@ -3142,6 +3186,7 @@ function mergePendingChatTask(
     if (item === "dueDate") return !dueDate;
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
+    if (item === "timeMeridiem") return !resolvedCompactTime;
     return false;
   });
   return {
@@ -3153,10 +3198,10 @@ function mergePendingChatTask(
     estimatedMinutes,
     assignedToId,
     status: assignedToId === task.assignedById ? "open" : "pending_acceptance",
-    dueTime: timing.dueTime ?? task.dueTime ?? null,
-    startTime: timing.startTime ?? task.startTime ?? null,
-    endTime: timing.endTime ?? task.endTime ?? null,
-    isAllDay: timing.isAllDay || task.isAllDay || false,
+    dueTime: resolvedCompactTime?.dueTime ?? timing.dueTime ?? task.dueTime ?? null,
+    startTime: resolvedCompactTime?.startTime ?? timing.startTime ?? task.startTime ?? null,
+    endTime: resolvedCompactTime?.endTime ?? timing.endTime ?? task.endTime ?? null,
+    isAllDay: (resolvedCompactTime?.isAllDay ?? timing.isAllDay) || task.isAllDay || false,
     positionProfileId,
     missing,
   };
@@ -3260,7 +3305,7 @@ const pendingChatTaskSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(365),
   visibility: z.enum(["work", "personal", "confidential"]),
   positionProfileId: z.string().nullable().optional(),
-  missing: z.array(z.enum(["title", "assignee", "dueDate", "urgency", "positionProfile"])).default([]),
+  missing: z.array(z.enum(["title", "assignee", "dueDate", "urgency", "positionProfile", "timeMeridiem"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -4580,6 +4625,7 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
 }
 
 export const __chatParserTest = {
+  ambiguousCompactClockTime,
   findBestMentionedCandidates,
   fallbackReplyDraft,
   hasExplicitAssignmentIntent,
@@ -5926,6 +5972,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
         if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee))) missing.push("assignee");
         if (!taskInput.dueDate) missing.push("dueDate");
+        if (ambiguousCompactClockTime(parsed.data.message)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
           const pendingTask = buildPendingFromTaskInput(

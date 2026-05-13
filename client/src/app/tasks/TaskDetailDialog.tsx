@@ -65,6 +65,7 @@ export default function TaskDetailDialog({
   const [localSubtasks, setLocalSubtasks] = useState<LocalSubtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
+  const [showPositionHistory, setShowPositionHistory] = useState(false);
 
   useEffect(() => {
     if (!task) return;
@@ -89,6 +90,7 @@ export default function TaskDetailDialog({
     setNote(task.completionNotes ?? "");
     setNewSubtaskTitle("");
     setShowInheritedHistory(false);
+    setShowPositionHistory(false);
     if (authenticated) {
       setLocalSubtasks([]);
       return;
@@ -284,6 +286,10 @@ export default function TaskDetailDialog({
   const inheritedFrom = inheritedContext ? users.find((user) => String(user.id) === String(inheritedContext.fromUserId)) : null;
   const selectedCollaborators = users.filter((user) => collaboratorIds.includes(String(user.id)));
   const savedPositionProfiles = positionProfiles.filter((profile) => profile.persisted);
+  const relatedPositionProfile = savedPositionProfiles.find((profile) => String(profile.id) === String(task.positionProfileId ?? positionProfileId));
+  const relatedHistoricalTasks = (relatedPositionProfile?.completedTasks ?? [])
+    .filter((item) => String(item.id) !== String(task.id) && item.visibility !== "personal")
+    .slice(0, 6);
   const selectedAssigneeProfiles = savedPositionProfiles.filter((profile) => String(profilePrimaryOwnerId(profile)) === assignedToId);
   const coverageProfiles = savedPositionProfiles.filter(
     (profile) =>
@@ -615,6 +621,50 @@ export default function TaskDetailDialog({
                     <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-muted-foreground">
                       No prior notes were captured with this handoff.
                     </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {!inheritedContext && relatedPositionProfile && (
+            <div className="rounded-md border border-brand-green/30 bg-brand-green/10 px-3 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Position Profile history</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This task is linked to {relatedPositionProfile.title}. Prior completed work can be used for reference without changing this task's working notes.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowPositionHistory((value) => !value)}
+                  data-testid="button-task-position-history-toggle"
+                >
+                  {showPositionHistory ? "Hide history" : "Show history"}
+                </Button>
+              </div>
+              {showPositionHistory && (
+                <div className="mt-3 grid gap-2 text-xs" data-testid="panel-task-position-history">
+                  {relatedHistoricalTasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-muted-foreground">
+                      No completed reference work has been captured for this profile yet.
+                    </p>
+                  ) : (
+                    relatedHistoricalTasks.map((item) => (
+                      <div key={String(item.id)} className="rounded-md border border-border bg-background px-3 py-2">
+                        <p className="font-medium text-foreground">{item.title}</p>
+                        <p className="mt-0.5 text-muted-foreground">
+                          {item.completedAt ? `Completed ${new Date(item.completedAt).toLocaleDateString()}` : item.dueDate ? `Due ${item.dueDate}` : "Historical task"}
+                        </p>
+                        {(item.description || item.completionNotes) && (
+                          <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-muted-foreground">
+                            {[stripRepeatDetails(item.description), item.completionNotes].filter(Boolean).join("\n\n")}
+                          </p>
+                        )}
+                      </div>
+                    ))
                   )}
                 </div>
               )}

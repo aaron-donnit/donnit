@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Archive, ArchiveRestore, BriefcaseBusiness, Check, ChevronDown, Eye, HelpCircle, History, KeyRound, ListChecks, ListPlus, Loader2, Plus, Repeat2, Search, Shield, ShieldCheck, Sparkles, UserCog, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, BriefcaseBusiness, Check, ChevronDown, Eye, HelpCircle, History, KeyRound, ListChecks, ListPlus, Loader2, MoreHorizontal, Plus, Repeat2, Search, Shield, ShieldCheck, Sparkles, UserCog, UserPlus, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiRequest } from "@/lib/queryClient";
@@ -1062,22 +1063,61 @@ export default function PositionProfilesPanel({
                 <BriefcaseBusiness className="size-4" />
                 All profiles
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={isProfileArchived(selectedProfile) ? restoreProfile : archiveProfile}
-                disabled={!canManageProfiles || updateProfile.isPending || (authenticated && !selectedProfile.persisted)}
-                data-testid={isProfileArchived(selectedProfile) ? "button-position-profile-restore-top" : "button-position-profile-archive-top"}
-              >
-                {updateProfile.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : isProfileArchived(selectedProfile) ? (
-                  <ArchiveRestore className="size-4" />
-                ) : (
-                  <Archive className="size-4" />
-                )}
-                {isProfileArchived(selectedProfile) ? "Restore" : "Archive"}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!canManageProfiles}
+                    data-testid="button-position-profile-actions"
+                  >
+                    <MoreHorizontal className="size-4" />
+                    Actions
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuLabel>Profile actions</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => openAssignment("transfer")} data-testid="menu-position-profile-transfer">
+                    <UserCog className="mr-2 size-4" />
+                    Transfer or reassign
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openAssignment("delegate")} data-testid="menu-position-profile-delegate">
+                    <UserPlus className="mr-2 size-4" />
+                    Delegate coverage
+                  </DropdownMenuItem>
+                  {selectedProfile.persisted && (
+                    <DropdownMenuItem
+                      onClick={() =>
+                        updateProfile.mutate({
+                          id: selectedProfile.id,
+                          patch: {
+                            status: "vacant",
+                            currentOwnerId: null,
+                            temporaryOwnerId: null,
+                            delegateUserId: null,
+                            delegateUntil: null,
+                            riskSummary: "Marked vacant by admin. Use delegate access or transfer when coverage is assigned.",
+                          },
+                        })
+                      }
+                      disabled={updateProfile.isPending}
+                      data-testid="menu-position-profile-vacant"
+                    >
+                      <AlertTriangle className="mr-2 size-4" />
+                      Mark vacant
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={isProfileArchived(selectedProfile) ? restoreProfile : archiveProfile}
+                    disabled={updateProfile.isPending || (authenticated && !selectedProfile.persisted)}
+                    data-testid={isProfileArchived(selectedProfile) ? "button-position-profile-restore-top" : "button-position-profile-archive-top"}
+                  >
+                    {isProfileArchived(selectedProfile) ? <ArchiveRestore className="mr-2 size-4" /> : <Archive className="mr-2 size-4" />}
+                    {isProfileArchived(selectedProfile) ? "Restore profile" : "Archive profile"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-position-profile-search">
@@ -1408,54 +1448,9 @@ export default function PositionProfilesPanel({
                   )}
                 </div>
               )}
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openAssignment("delegate")}
-                  disabled={!canManageProfiles}
-                  data-testid="button-position-profile-action-delegate"
-                >
-                  <UserPlus className="size-4" />
-                  Delegate access
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => openAssignment("transfer")}
-                  disabled={!canManageProfiles}
-                  data-testid="button-position-profile-action-transfer"
-                >
-                  <UserCog className="size-4" />
-                  Transfer profile
-                </Button>
-                {isProfileArchived(selectedProfile) ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={restoreProfile}
-                    disabled={!canManageProfiles || !selectedProfile.persisted || updateProfile.isPending}
-                    data-testid="button-position-profile-restore"
-                  >
-                    {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <ArchiveRestore className="size-4" />}
-                    Restore profile
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={archiveProfile}
-                    disabled={!canManageProfiles || updateProfile.isPending}
-                    data-testid="button-position-profile-archive"
-                  >
-                    {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
-                    Archive profile
-                  </Button>
-                )}
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Transfer, delegate, vacancy, and archive controls live in the Actions menu at the top of this profile.
+              </p>
                   </div>
                 </details>
               )}
@@ -1602,80 +1597,9 @@ export default function PositionProfilesPanel({
               </div>,
             )}
 
-            {selectedProfile.riskReasons.length > 0 && (
-              renderProfileSection(
-                "Continuity risk",
-                "Issues Donnit sees before this role can be safely covered.",
-                <AlertTriangle className="size-4 text-muted-foreground" />,
-                selectedProfile.riskReasons.length,
-                <div className="rounded-md border border-border bg-background px-3 py-2">
-                <div className="mb-1 flex items-center gap-2">
-                  <AlertTriangle className="size-4 text-muted-foreground" />
-                  <p className="text-xs font-medium text-foreground">Continuity risk</p>
-                </div>
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  {selectedProfile.riskReasons.slice(0, 3).map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-                </div>,
-              )
-            )}
-
             {renderProfileSection(
-              "Handoff readiness",
-              "Checklist of what this profile needs for a clean transition.",
-              <ListChecks className="size-4 text-muted-foreground" />,
-              `${profileReadinessDone}/${profileReadinessItems.length}`,
-              <div className="rounded-md border border-border bg-background px-3 py-2">
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <p className="flex items-center gap-2 text-xs font-medium text-foreground">
-                    <ListChecks className="size-4 text-muted-foreground" />
-                    Handoff readiness
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    What Donnit needs before this role can be safely covered or reassigned.
-                  </p>
-                </div>
-                <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
-                  {profileReadinessDone}/{profileReadinessItems.length}
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                {profileReadinessItems.map((item) => (
-                  <div key={item.label} className="flex items-start gap-2 rounded-md bg-muted/45 px-2 py-2 text-xs">
-                    {item.done ? (
-                      <Check className="mt-0.5 size-3.5 shrink-0 text-brand-green" />
-                    ) : (
-                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-                    )}
-                    <span className="min-w-0">
-                      <span className="block font-medium text-foreground">{item.label}</span>
-                      <span className="mt-0.5 block text-muted-foreground">{item.detail}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-              {selectedProfile.transitionChecklist.length > 0 && (
-                <div className="mt-3 border-t border-border pt-2">
-                  <p className="mb-1 text-xs font-medium text-foreground">Next transition steps</p>
-                  <ul className="space-y-1 text-xs text-muted-foreground">
-                    {selectedProfile.transitionChecklist.slice(0, 4).map((item) => (
-                      <li key={item} className="flex gap-2">
-                        <Check className="mt-0.5 size-3 shrink-0 text-brand-green" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              </div>,
-            )}
-
-            {renderProfileSection(
-              "Access inventory",
-              "Role tools, accounts, billing context, and access reset status.",
+              "Tools",
+              "Role systems, accounts, billing context, and access reset status.",
               <KeyRound className="size-4 text-muted-foreground" />,
               selectedProfile.accessItems.length,
               <div className="rounded-md border border-border bg-background px-3 py-3">
@@ -1683,10 +1607,10 @@ export default function PositionProfilesPanel({
                 <div>
                   <p className="flex items-center gap-2 text-xs font-medium text-foreground">
                     <KeyRound className="size-4 text-muted-foreground" />
-                    Access inventory
+                    Tools
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Admin record for role tools, access owner, billing context, and reset/removal status.
+                    Admin record for role systems, access owner, billing context, and reset/removal status.
                   </p>
                 </div>
                 <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">
@@ -1943,88 +1867,6 @@ export default function PositionProfilesPanel({
               </div>,
             )}
 
-            {renderProfileSection(
-              "Tool access summary",
-              "Quick view of known systems connected to this role.",
-              <KeyRound className="size-4 text-muted-foreground" />,
-              selectedProfile.tools.length,
-              <div className="rounded-md border border-border bg-background px-3 py-2">
-              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-                <KeyRound className="size-4 text-muted-foreground" />
-                Tool access
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {(selectedProfile.tools.length > 0 ? selectedProfile.tools : ["Credential vault pending"]).map((tool) => (
-                  <span key={tool} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
-                    {tool}
-                  </span>
-                ))}
-              </div>
-              </div>,
-            )}
-
-            {renderProfileSection(
-              "Assign or reassign",
-              "Choose coverage or transfer ownership to another employee.",
-              <UserCog className="size-4 text-muted-foreground" />,
-              null,
-              <div className="rounded-md border border-border bg-background px-3 py-3">
-              <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-                <UserCog className="size-4 text-muted-foreground" />
-                {assignmentFocus === "transfer"
-                  ? "Reassign selected profile"
-                  : assignmentFocus === "delegate"
-                    ? "Delegate access"
-                    : "Assign / reassign"}
-              </p>
-              <div className="grid gap-2">
-                <select
-                  value={mode}
-                  onChange={(event) => {
-                    const nextMode = event.target.value as "delegate" | "transfer";
-                    setMode(nextMode);
-                    setAssignmentFocus(nextMode);
-                  }}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  data-testid="select-position-assignment-mode"
-                >
-                  <option value="delegate">Delegate coverage</option>
-                  <option value="transfer">Transfer to new owner</option>
-                </select>
-                <select
-                  value={targetUserId}
-                  onChange={(event) => setTargetUserId(event.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  data-testid="select-position-assignment-user"
-                >
-                  {targetUsers.map((user) => (
-                    <option key={String(user.id)} value={String(user.id)}>
-                      {user.name}
-                    </option>
-                  ))}
-                </select>
-                {mode === "delegate" && (
-                  <Input
-                    type="date"
-                    value={delegateUntil}
-                    onChange={(event) => setDelegateUntil(event.target.value)}
-                    className="h-9 text-xs"
-                    data-testid="input-position-delegate-until"
-                  />
-                )}
-                <Button
-                  size="sm"
-                  onClick={() => assign.mutate()}
-                  disabled={!targetUserId || assign.isPending || !canManageProfiles}
-                  data-testid="button-position-assign"
-                >
-                  {assign.isPending ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
-                  {mode === "transfer" ? "Transfer profile" : "Start coverage"}
-                </Button>
-              </div>
-              </div>,
-              Boolean(assignmentFocus),
-            )}
           </>
         )}
       </div>
