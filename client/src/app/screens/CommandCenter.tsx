@@ -1402,11 +1402,36 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               </div>
               <div className="status-strip mb-4">
-                <Stat label="Open" value={metrics.open} />
-                <Stat label="Due today" value={metrics.dueToday} />
-                <Stat label="Needs acceptance" value={metrics.needsAcceptance} />
-                <Stat label="Approval queue" value={metrics.emailQueue} />
-                <Stat label="Completed" value={metrics.completed} />
+                <Stat
+                  label="Open"
+                  value={metrics.open}
+                  delta={metrics.dueToday > 0 ? `${metrics.dueToday} due today` : "Nothing dated today"}
+                  tone={metrics.dueToday > 0 ? "down" : "neutral"}
+                />
+                <Stat
+                  label="Due today"
+                  value={metrics.dueToday}
+                  delta={metrics.dueToday > 0 ? "Focus list" : "All clear"}
+                  tone={metrics.dueToday > 0 ? "down" : "up"}
+                />
+                <Stat
+                  label="Needs acceptance"
+                  value={metrics.needsAcceptance}
+                  delta={metrics.needsAcceptance > 0 ? "Waiting on owner" : "No handoffs pending"}
+                  tone={metrics.needsAcceptance > 0 ? "down" : "neutral"}
+                />
+                <Stat
+                  label="Approval queue"
+                  value={metrics.emailQueue}
+                  delta={metrics.emailQueue > 0 ? "Review inbox suggestions" : "Inbox clean"}
+                  tone={metrics.emailQueue > 0 ? "down" : "up"}
+                />
+                <Stat
+                  label="Completed"
+                  value={metrics.completed}
+                  delta={metrics.completed > 0 ? "That's one less thing" : "Get the first done"}
+                  tone={metrics.completed > 0 ? "up" : "neutral"}
+                />
               </div>
               <div className="grid gap-4 lg:grid-cols-12">
                 <div className="order-2 lg:sticky lg:top-[4rem] lg:order-1 lg:col-span-4 lg:h-[calc(100dvh-5.25rem)] lg:self-start xl:col-span-4">
@@ -1873,16 +1898,31 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({
+  label,
+  value,
+  delta,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number | string;
+  delta?: string;
+  tone?: "up" | "down" | "neutral";
+}) {
   return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="ui-label" style={{ color: "hsl(var(--muted-foreground))" }}>
-        {label}
-      </span>
-      <span className="font-display text-base font-bold tabular-nums text-foreground">
-        {value}
-      </span>
-    </span>
+    <div className="status-cell" data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+      <span className="status-cell-label">{label}</span>
+      <span className="status-cell-value">{value}</span>
+      {delta ? (
+        <span
+          className={`status-cell-delta ${
+            tone === "up" ? "is-up" : tone === "down" ? "is-down" : ""
+          }`}
+        >
+          {delta}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

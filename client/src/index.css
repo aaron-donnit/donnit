@@ -968,7 +968,9 @@
     background: hsl(var(--card));
   }
 
+  .status-strip > .status-cell,
   .status-strip > span {
+    display: flex;
     min-height: 68px;
     flex-direction: column;
     align-items: flex-start;
@@ -978,6 +980,7 @@
     padding: 0.75rem 1rem;
   }
 
+  .status-strip > .status-cell:last-child,
   .status-strip > span:last-child {
     border-right: 0;
   }
@@ -985,6 +988,113 @@
   .status-strip .font-display {
     font-family: var(--font-mono);
     font-size: 1.35rem;
+  }
+
+  /* Status cell — proto-style label/value/delta block (lift from proto-styles.css) */
+  .status-cell .status-cell-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .status-cell .status-cell-value {
+    font-family: var(--font-sans);
+    font-size: 1.35rem;
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.015em;
+    color: hsl(var(--foreground));
+    font-variant-numeric: tabular-nums;
+  }
+
+  .status-cell .status-cell-delta {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+    line-height: 1.2;
+  }
+
+  .status-cell .status-cell-delta.is-up {
+    color: hsl(var(--brand-green));
+  }
+
+  .status-cell .status-cell-delta.is-down {
+    color: hsl(var(--brand-alert));
+  }
+
+  /* Task group head — sticky bucket header with colored dot + count (lift from proto-tasks-shared) */
+  .task-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.25rem 0.5rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.6875rem;
+  }
+
+  .task-group-head .task-group-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: hsl(var(--border));
+    flex-shrink: 0;
+  }
+
+  .task-group-head .task-group-dot.is-overdue { background: hsl(var(--brand-alert)); }
+  .task-group-head .task-group-dot.is-today   { background: hsl(var(--brand-amber)); }
+  .task-group-head .task-group-dot.is-upcoming{ background: hsl(var(--brand-green)); }
+  .task-group-head .task-group-dot.is-delegated{ background: hsl(var(--brand-mute-text)); }
+  .task-group-head .task-group-dot.is-done    { background: hsl(var(--brand-green)); }
+
+  .task-group-head .task-group-label {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: hsl(var(--foreground));
+  }
+
+  .task-group-head .task-group-detail {
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+    letter-spacing: 0;
+  }
+
+  .task-group-head .task-group-count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.5);
+    border: 1px solid hsl(var(--border));
+    padding: 0 0.375rem;
+    border-radius: 3px;
+    min-width: 1.25rem;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  /* Source pill — small mono tag for non-manual task origin (proto-tasks-shared `.src`) */
+  .task-source-pill {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.45);
+    border: 1px solid hsl(var(--border));
+    padding: 1px 5px;
+    border-radius: 3px;
+    line-height: 1.35;
+    flex-shrink: 0;
+    text-transform: lowercase;
   }
 
   .command-chat-panel textarea {

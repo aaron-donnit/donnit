@@ -240,12 +240,11 @@ export default function TaskList({
       <div className={inlineDetail ? "tasks-split-layout" : ""}>
       <div className="flex flex-col gap-2 px-4 py-4">
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3 px-1 pt-1">
-            <div>
-              <p className="ui-label text-[10px] uppercase tracking-wide text-muted-foreground">New tasks</p>
-              <p className="text-[11px] text-muted-foreground">Newest work from the last 30 minutes</p>
-            </div>
-            <span className="text-[11px] tabular-nums text-muted-foreground">{newTasks.length}</span>
+          <div className="task-group-head" data-testid="task-group-head-new">
+            <span className="task-group-dot is-upcoming" aria-hidden="true" />
+            <span className="task-group-label">New tasks</span>
+            <span className="task-group-detail">Newest work from the last 30 minutes</span>
+            <span className="task-group-count">{newTasks.length}</span>
           </div>
           {newTasks.length > 0 ? (
             newTasks.map((task) => (
@@ -279,14 +278,24 @@ export default function TaskList({
             </p>
           </div>
         ) : (
-          grouped.map((group) => (
+          grouped.map((group) => {
+            const dotTone =
+              group.id === "overdue"
+                ? "is-overdue"
+                : group.id === "today"
+                  ? "is-today"
+                  : group.id === "scheduled"
+                    ? "is-upcoming"
+                    : group.id === "backlog"
+                      ? "is-delegated"
+                      : "is-upcoming";
+            return (
             <div key={group.id} className="space-y-2">
-              <div className="flex items-center justify-between gap-3 px-1 pt-1">
-                <div>
-                  <p className="ui-label text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</p>
-                  <p className="text-[11px] text-muted-foreground">{group.detail}</p>
-                </div>
-                <span className="text-[11px] tabular-nums text-muted-foreground">{group.tasks.length}</span>
+              <div className="task-group-head" data-testid={`task-group-head-${group.id}`}>
+                <span className={`task-group-dot ${dotTone}`} aria-hidden="true" />
+                <span className="task-group-label">{group.label}</span>
+                <span className="task-group-detail">{group.detail}</span>
+                <span className="task-group-count">{group.tasks.length}</span>
               </div>
               {group.tasks.map((task) => (
                 <TaskRow
@@ -302,15 +311,17 @@ export default function TaskList({
                 />
               ))}
             </div>
-          ))
+            );
+          })
         )}
 
         {done.length > 0 && (
           <>
-            <div className="mt-4 flex items-center gap-2 px-1" data-testid="section-done">
-              <span className="ui-label">Done</span>
-              <span className="h-px flex-1 bg-border" />
-              <span className="text-[11px] tabular-nums text-muted-foreground">{done.length}</span>
+            <div className="task-group-head mt-4" data-testid="section-done">
+              <span className="task-group-dot is-done" aria-hidden="true" />
+              <span className="task-group-label">Done</span>
+              <span className="task-group-detail">Recently completed</span>
+              <span className="task-group-count">{done.length}</span>
             </div>
             {done.slice(0, 8).map((task) => (
               <TaskRow

@@ -73,10 +73,19 @@ export default function TaskRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
           <p
-            className="task-title text-sm font-medium leading-snug text-foreground"
+            className="task-title flex min-w-0 items-center gap-2 text-sm font-medium leading-snug text-foreground"
             data-testid={`text-task-title-${task.id}`}
           >
-            {task.title}
+            <span className="min-w-0 truncate">{task.title}</span>
+            {task.source && task.source !== "manual" ? (
+              <span
+                className="task-source-pill"
+                data-testid={`text-task-source-${task.id}`}
+                title={`Source: ${task.source}`}
+              >
+                {task.source}
+              </span>
+            ) : null}
           </p>
           <div className="flex shrink-0 items-center gap-1">
             {contextHints.length > 0 && (
