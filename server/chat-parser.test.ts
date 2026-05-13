@@ -74,4 +74,18 @@ describe("chat task parser", () => {
       isAllDay: false,
     });
   });
+
+  it("does not ask for availability when an email already proposed a meeting time", () => {
+    const draft = __chatParserTest.fallbackReplyDraft({
+      from_email: "Taylor <taylor@example.com>",
+      subject: "Board meeting tomorrow",
+      suggested_title: "Schedule board meeting",
+      preview: "Taylor asked to schedule the board meeting tomorrow at noon.",
+      body: "Can you schedule the board meeting for tomorrow at noon?",
+    });
+
+    expect(draft).toContain("tomorrow at noon");
+    expect(draft.toLowerCase()).not.toContain("please send a few times");
+    expect(draft.toLowerCase()).not.toContain("availability");
+  });
 });

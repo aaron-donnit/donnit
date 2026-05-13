@@ -3912,6 +3912,22 @@ function replyScenario(suggestion: Pick<DonnitEmailSuggestion, "subject" | "sugg
   return "general";
 }
 
+function concreteSchedulingPhrase(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ").trim();
+  const date =
+    text.match(/\b(?:today|tomorrow|tonight)\b/i)?.[0] ??
+    text.match(/\b(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i)?.[0] ??
+    text.match(new RegExp(`\\b(?:${monthNamePattern})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, "i"))?.[0] ??
+    null;
+  const time =
+    text.match(/\b(?:noon|midnight)\b/i)?.[0] ??
+    text.match(/\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/i)?.[0] ??
+    null;
+  if (date && time) return `${date} at ${time}`.replace(/\s+/g, " ");
+  if (time) return time;
+  return null;
+}
+
 function fallbackReplyDraft(
   suggestion: Pick<DonnitEmailSuggestion, "from_email" | "subject" | "suggested_title" | "preview"> & { body?: string | null },
 ) {
@@ -3922,14 +3938,15 @@ function fallbackReplyDraft(
   const greeting = senderName ? `Hi ${senderName.split(/\s+/)[0]},` : "Hi,";
   const scenario = replyScenario(suggestion);
   const sourceText = `${suggestion.subject} ${suggestion.suggested_title} ${suggestion.preview} ${suggestion.body ?? ""}`;
+  const proposedTime = concreteSchedulingPhrase(sourceText);
   const hasConcreteMeetingTime =
     scenario === "scheduling" &&
-    /\b(noon|midnight|\d{1,2}(?::\d{2})?\s?(?:am|pm)|\d{1,2}:\d{2})\b/i.test(sourceText) &&
+    Boolean(proposedTime) &&
     /\b(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2})\b/i.test(sourceText);
   const bodyByScenario: Record<string, string> = {
     scheduling:
       hasConcreteMeetingTime
-        ? "Thanks for sending this over. I have the proposed meeting time noted and will follow up if anything changes."
+        ? `Thanks for sending this over. I have ${proposedTime} noted and will send the calendar invite shortly.`
         : "Thanks for reaching out. I am happy to schedule time. Please send a few times that work for you, or share a calendar link and I will find a slot.",
     approval:
       "Thanks for sending this over. I will review the approval request and follow up with a decision or any questions.",
@@ -4550,6 +4567,7 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
 
 export const __chatParserTest = {
   findBestMentionedCandidates,
+  fallbackReplyDraft,
   hasExplicitAssignmentIntent,
   nextRecurringDueDate,
   parseDueDate,
