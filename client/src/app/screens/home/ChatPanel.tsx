@@ -129,18 +129,22 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           <summary className="ui-label cursor-pointer select-none py-1 hover:text-foreground">
             {messages.length} conversation {messages.length === 1 ? "item" : "items"}
           </summary>
-          <div className="mt-2 max-h-48 space-y-1.5 overflow-y-auto rounded-md border border-border p-2">
+          <div className="mt-2 max-h-48 space-y-1.5 overflow-y-auto rounded-md border border-border bg-background p-2">
             {messages.slice(-6).map((item) => (
               <div
                 key={item.id}
-                className={`max-w-[88%] rounded px-2.5 py-1.5 text-xs leading-relaxed ${
-                  item.role === "assistant"
-                    ? "bg-muted text-foreground"
-                    : "ml-auto bg-brand-green text-white"
-                }`}
+                className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-relaxed text-foreground"
                 data-testid={`text-chat-message-${item.id}`}
               >
-                {item.content}
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+                    {item.role === "assistant" ? "Donnit" : "You"}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}
+                  </span>
+                </div>
+                <p className="whitespace-pre-wrap break-words text-muted-foreground">{item.content}</p>
               </div>
             ))}
           </div>
