@@ -284,9 +284,7 @@ export function buildPositionProfiles(
     if (!record) return profile;
     usedRecordIds.add(record.id);
     const profileTasks = tasks.filter(
-      (task) =>
-        task.visibility !== "personal" &&
-        (String(task.positionProfileId ?? "") === record.id || String(task.assignedToId) === String(profile.owner.id)),
+      (task) => task.visibility !== "personal" && String(task.positionProfileId ?? "") === record.id,
     );
     return mergeProfileRecord(
       {

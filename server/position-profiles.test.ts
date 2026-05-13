@@ -137,4 +137,51 @@ describe("position profile continuity builder", () => {
     expect(profile?.currentIncompleteTasks.map((item) => item.id)).toEqual(["task-monday"]);
     expect(profile?.recurringTasks).toEqual([]);
   });
+
+  it("keeps multiple profiles for the same owner scoped by linked profile id", () => {
+    const profiles = buildPositionProfiles(
+      [
+        task({
+          id: "task-exec-assistant",
+          title: "Prepare CEO board book",
+          assignedToId: "user-nina",
+          positionProfileId: "profile-exec",
+        }),
+        task({
+          id: "task-office-manager",
+          title: "Renew office lease file",
+          assignedToId: "user-nina",
+          positionProfileId: "profile-office",
+        }),
+        task({
+          id: "task-unbound",
+          title: "One-off unassigned profile task",
+          assignedToId: "user-nina",
+          positionProfileId: null,
+        }),
+      ],
+      users,
+      [],
+      [
+        profileRecord({
+          id: "profile-exec",
+          title: "Executive Assistant to the CEO",
+          status: "active",
+          currentOwnerId: "user-nina",
+        }),
+        profileRecord({
+          id: "profile-office",
+          title: "Office Manager",
+          status: "active",
+          currentOwnerId: "user-nina",
+        }),
+      ],
+    );
+
+    const executiveProfile = profiles.find((item) => item.id === "profile-exec");
+    const officeProfile = profiles.find((item) => item.id === "profile-office");
+
+    expect(executiveProfile?.currentIncompleteTasks.map((item) => item.id)).toEqual(["task-exec-assistant"]);
+    expect(officeProfile?.currentIncompleteTasks.map((item) => item.id)).toEqual(["task-office-manager"]);
+  });
 });
