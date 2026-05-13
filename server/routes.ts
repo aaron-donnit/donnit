@@ -3619,6 +3619,11 @@ const composioReadToolSchema = z.object({
   version: z.string().trim().min(1).max(80).optional(),
 });
 
+const composioImportSchema = composioReadToolSchema.extend({
+  source: z.enum(["email", "slack"]).default("email"),
+  maxItems: z.number().int().min(1).max(10).default(5),
+});
+
 const salesLeadSchema = z.object({
   intent: z.enum(["signup", "demo"]).default("signup"),
   name: z.string().trim().min(2).max(120),
@@ -4225,6 +4230,113 @@ function buildExternalSuggestionCandidate(input: {
     suggestedDueDate: dueDate,
     urgency,
     estimatedMinutes: estimate,
+  };
+}
+
+function compactJson(value: unknown, max = 4000) {
+  const text =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value, null, 2);
+  return compactTaskText(text ?? "", max);
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
+}
+
+function nestedValue(source: Record<string, unknown>, ...paths: string[]) {
+  for (const path of paths) {
+    const parts = path.split(".");
+    let current: unknown = source;
+    for (const part of parts) {
+      if (!current || typeof current !== "object") {
+        current = undefined;
+        break;
+      }
+      current = (current as Record<string, unknown>)[part];
+    }
+    if (current != null) return current;
+  }
+  return undefined;
+}
+
+function composioResultItems(result: unknown, maxItems: number): unknown[] {
+  const payload = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const candidates = [
+    payload.data,
+    nestedValue(payload, "data.items"),
+    nestedValue(payload, "data.messages"),
+    nestedValue(payload, "data.results"),
+    nestedValue(payload, "result"),
+    nestedValue(payload, "result.items"),
+    nestedValue(payload, "result.messages"),
+    nestedValue(payload, "items"),
+    nestedValue(payload, "messages"),
+    nestedValue(payload, "results"),
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) return candidate.slice(0, maxItems);
+  }
+  return [result].filter(Boolean).slice(0, maxItems);
+}
+
+function composioSuggestionKey(toolSlug: string, source: "email" | "slack", item: unknown) {
+  return `composio:${source}:${crypto
+    .createHash("sha1")
+    .update(`${toolSlug}:${compactJson(item, 2000)}`)
+    .digest("hex")
+    .slice(0, 24)}`;
+}
+
+function buildComposioSuggestionCandidate(input: {
+  toolSlug: string;
+  source: "email" | "slack";
+  item: unknown;
+}): TaskSuggestionCandidate {
+  const item = input.item && typeof input.item === "object" ? input.item as Record<string, unknown> : {};
+  const from = firstString(
+    nestedValue(item, "from.email"),
+    nestedValue(item, "sender.email"),
+    nestedValue(item, "author.email"),
+    item.fromEmail,
+    item.from,
+    item.sender,
+    item.author,
+    input.source === "slack" ? "composio:slack" : "composio:gmail",
+  );
+  const subject = firstString(item.subject, item.title, item.name, item.channel, `${input.source === "slack" ? "Slack" : "Email"} item from Composio`);
+  const body = firstString(
+    item.body,
+    item.text,
+    item.message,
+    item.content,
+    item.snippet,
+    item.preview,
+    nestedValue(item, "payload.body"),
+    nestedValue(item, "data.body"),
+    compactJson(input.item),
+  );
+  const receivedAt = firstString(item.receivedAt, item.received_at, item.date, item.createdAt, item.created_at, item.ts) || new Date().toISOString();
+  const sourceText = `${subject}\n${body}`;
+  const title = titleFromMessage(sourceText, [from]) || `Review imported ${input.source} item`;
+  return {
+    gmailMessageId: composioSuggestionKey(input.toolSlug, input.source, input.item),
+    gmailThreadId: firstString(item.threadId, item.thread_id, item.gmailThreadId) || null,
+    fromEmail: input.source === "slack" ? `slack:${from}` : from,
+    subject,
+    preview: compactTaskText(sourceText, 600),
+    body: compactJson({ tool: input.toolSlug, source: "composio", item: input.item }, 4000),
+    receivedAt,
+    actionItems: [`Review imported ${input.source} context from Composio.`],
+    suggestedTitle: title,
+    suggestedDueDate: parseDueDate(sourceText),
+    urgency: parseUrgency(sourceText),
+    estimatedMinutes: parseEstimate(sourceText),
   };
 }
 
@@ -5503,6 +5615,80 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         version: parsed.data.version,
       });
       res.json({ ok: true, configured: isComposioConfigured(), result });
+    } catch (error) {
+      res.status(502).json({
+        ok: false,
+        configured: isComposioConfigured(),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post("/api/integrations/composio/import", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = composioImportSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Composio import request is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceMemberContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const store = new DonnitStore(auth.client, auth.userId);
+      const result = await executeDonnitComposioReadTool({
+        orgId: context.orgId,
+        userId: auth.userId,
+        toolSlug: parsed.data.toolSlug,
+        arguments: parsed.data.arguments,
+        connectedAccountId: parsed.data.connectedAccountId,
+        version: parsed.data.version,
+      });
+      const items = composioResultItems(result, parsed.data.maxItems);
+      const source = parsed.data.source;
+      const enriched = await Promise.all(
+        items.map((item) =>
+          enrichSuggestionCandidateWithAi(
+            buildComposioSuggestionCandidate({
+              toolSlug: parsed.data.toolSlug,
+              source,
+              item,
+            }),
+            source,
+          ),
+        ),
+      );
+      const candidates = enriched.filter((candidate) => candidate.shouldCreateTask !== false);
+      const created: DonnitEmailSuggestion[] = [];
+      for (const candidate of candidates) {
+        const suggestion = await store.createEmailSuggestion(context.orgId, {
+          gmail_message_id: candidate.gmailMessageId ?? composioSuggestionKey(parsed.data.toolSlug, source, candidate.body),
+          gmail_thread_id: candidate.gmailThreadId ?? null,
+          from_email: candidate.fromEmail,
+          subject: candidate.subject,
+          preview: candidate.preview,
+          body: candidate.body,
+          received_at: normalizeTimestamp(candidate.receivedAt),
+          action_items: candidate.actionItems,
+          suggested_title: candidate.suggestedTitle,
+          suggested_due_date: normalizeDateOnly(candidate.suggestedDueDate),
+          urgency: candidate.urgency as "low" | "normal" | "high" | "critical",
+          assigned_to: auth.userId,
+          reply_suggested: Boolean(candidate.replySuggested),
+          reply_status: candidate.replyStatus ?? (candidate.replySuggested ? "suggested" : "none"),
+        });
+        created.push(suggestion);
+      }
+      res.status(201).json({
+        ok: true,
+        configured: isComposioConfigured(),
+        source,
+        readItems: items.length,
+        queued: created.length,
+        suggestions: created.map(toClientEmailSuggestion),
+      });
     } catch (error) {
       res.status(502).json({
         ok: false,
