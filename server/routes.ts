@@ -951,6 +951,8 @@ function titleFromMessage(message: string, assigneeLabels: string[] = []) {
     .replace(naturalDate, "")
     .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
+    .replace(/\b(?:at|@|by|before|around)\s+(?:noon|midnight)\b/gi, "")
+    .replace(/\b(?:at|@|by|before|around)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/gi, "")
     .replace(/\b(?:the\s+)?(?:first|second|third|fourth|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:of\s+)?(?:every|each|the)?\s*month\b/gi, "")
     .replace(/\b(?:every|each)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\b(?:every|each)\s+(?:month|quarter|year)\b/gi, "")
@@ -4548,9 +4550,13 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
 
 export const __chatParserTest = {
   findBestMentionedCandidates,
+  hasExplicitAssignmentIntent,
   nextRecurringDueDate,
   parseDueDate,
+  parseEstimate,
+  parseTaskTime,
   parseTaskRecurrence,
+  rewriteRequesterReferencesInTitle,
   titleFromMessage,
 };
 

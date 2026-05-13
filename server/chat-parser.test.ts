@@ -51,4 +51,27 @@ describe("chat task parser", () => {
 
     expect(nextDue).toBe("2026-07-06");
   });
+
+  it("rewrites requester pronouns when assigning work to someone else", () => {
+    vi.setSystemTime(new Date("2026-05-12T16:00:00-04:00"));
+    const prompt = "assign Nina to send me a payroll report by EOW";
+    const title = __chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina@example.com"]);
+
+    expect(title).toBe("Send me a payroll report");
+    expect(__chatParserTest.rewriteRequesterReferencesInTitle(title, "Aaron", true)).toBe(
+      "Send Aaron a payroll report",
+    );
+    expect(__chatParserTest.parseDueDate(prompt)).toBe("2026-05-15");
+  });
+
+  it("keeps contact names out of assignment routing for self-owned outreach", () => {
+    expect(__chatParserTest.hasExplicitAssignmentIntent("call Maya tomorrow at noon")).toBe(false);
+    expect(__chatParserTest.titleFromMessage("call Maya tomorrow at noon")).toBe("Call Maya");
+    expect(__chatParserTest.parseTaskTime("call Maya tomorrow at noon", 30)).toMatchObject({
+      dueTime: "12:00",
+      startTime: "12:00",
+      endTime: "12:30",
+      isAllDay: false,
+    });
+  });
 });
