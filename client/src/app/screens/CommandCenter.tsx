@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -101,8 +101,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
   const [agendaWorkOpen, setAgendaWorkOpen] = useState(false);
-  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchFocused, setGlobalSearchFocused] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
   const [focusedTeamUserId, setFocusedTeamUserId] = useState<string | null>(null);
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
@@ -883,7 +884,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setGlobalSearchOpen(true);
+        setGlobalSearchFocused(true);
+        globalSearchInputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1457,7 +1459,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   })();
 
   const openGlobalSearchResult = (result: GlobalSearchResult) => {
-    setGlobalSearchOpen(false);
+    setGlobalSearchFocused(false);
     setGlobalSearchQuery("");
     setFocusedProfileId(null);
     setFocusedTeamUserId(null);
@@ -1469,6 +1471,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       setNotificationTaskId(result.taskId);
     }
   };
+  const showGlobalSearchResults = globalSearchFocused && globalSearchQuery.trim().length > 0;
 
   return (
     <main
@@ -1493,16 +1496,62 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 </h1>
                 <span className="hidden text-xs text-muted-foreground md:inline">{todayLabel}</span>
               </div>
-              <button
-                type="button"
-                onClick={() => setGlobalSearchOpen(true)}
-                className="command-search hidden min-w-[260px] max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-muted/35 px-3 py-1.5 text-left text-xs text-muted-foreground transition hover:border-brand-green/40 hover:bg-muted/55 hover:text-foreground lg:flex"
-                data-testid="button-global-search"
-              >
-                <Search className="size-3.5" />
-                <span className="truncate">Search tasks, profiles, reports...</span>
-                <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">Ctrl K</span>
-              </button>
+              <div className="relative hidden min-w-[260px] max-w-md flex-1 md:block">
+                <div className="command-search flex items-center gap-2 rounded-md border border-border bg-muted/35 px-3 py-1.5 text-xs text-muted-foreground transition focus-within:border-brand-green/50 focus-within:bg-background">
+                  <Search className="size-3.5 shrink-0" />
+                  <input
+                    ref={globalSearchInputRef}
+                    value={globalSearchQuery}
+                    onFocus={() => setGlobalSearchFocused(true)}
+                    onBlur={() => window.setTimeout(() => setGlobalSearchFocused(false), 120)}
+                    onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && globalSearchResults[0]) {
+                        event.preventDefault();
+                        openGlobalSearchResult(globalSearchResults[0]);
+                      }
+                      if (event.key === "Escape") {
+                        setGlobalSearchFocused(false);
+                        globalSearchInputRef.current?.blur();
+                      }
+                    }}
+                    placeholder="Search tasks, profiles, people..."
+                    className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                    data-testid="input-global-search"
+                  />
+                  <span className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">Ctrl K</span>
+                </div>
+                {showGlobalSearchResults && (
+                  <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-[360px] overflow-y-auto rounded-md border border-border bg-popover p-1.5 shadow-lg">
+                    {globalSearchResults.length > 0 ? (
+                      globalSearchResults.slice(0, 8).map((result) => (
+                        <button
+                          key={result.id}
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            openGlobalSearchResult(result);
+                          }}
+                          className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition hover:bg-muted"
+                          data-testid={`button-search-result-${result.id}`}
+                        >
+                          <span className="mt-0.5 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground">
+                            {result.kind}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-medium text-foreground">{result.title}</span>
+                            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{result.detail}</span>
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-5 text-center text-xs text-muted-foreground">
+                        No matching work found.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <span
                   className="hidden text-xs text-muted-foreground md:inline"
@@ -1514,17 +1563,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     ? "build preview"
                     : "demo (Supabase not configured)"}
                 </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setGlobalSearchOpen(true)}
-                  className="lg:hidden"
-                  aria-label="Search Donnit"
-                  data-testid="button-global-search-mobile"
-                >
-                  <Search className="size-4" />
-                </Button>
                 <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
                 <NotificationCenter
                   notifications={notifications}
@@ -1935,72 +1973,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             </section>
           )}
 
-      <Dialog open={globalSearchOpen} onOpenChange={setGlobalSearchOpen}>
-        <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
-          <DialogHeader className={dialogHeaderClass}>
-            <DialogTitle>Search Donnit</DialogTitle>
-            <DialogDescription>
-              Jump to tasks, Position Profiles, people, inbox items, reports, or workspace views.
-            </DialogDescription>
-          </DialogHeader>
-          <div className={dialogBodyClass}>
-            <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
-              <Search className="size-4 text-muted-foreground" />
-              <input
-                autoFocus
-                value={globalSearchQuery}
-                onChange={(event) => setGlobalSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && globalSearchResults[0]) {
-                    event.preventDefault();
-                    openGlobalSearchResult(globalSearchResults[0]);
-                  }
-                }}
-                placeholder="Search tasks, profiles, people, inbox, reports..."
-                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                data-testid="input-global-search"
-              />
-              <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Enter
-              </span>
-            </div>
-            <div className="mt-3 max-h-[52vh] overflow-y-auto rounded-md border border-border">
-              {globalSearchResults.length > 0 ? (
-                globalSearchResults.map((result) => (
-                  <button
-                    key={result.id}
-                    type="button"
-                    onClick={() => openGlobalSearchResult(result)}
-                    className="flex w-full items-start gap-3 border-b border-border px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/50"
-                    data-testid={`button-search-result-${result.id}`}
-                  >
-                    <span className="mt-0.5 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-                      {result.kind}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-foreground">
-                        {result.title}
-                      </span>
-                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                        {result.detail}
-                      </span>
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-                  No matching work found.
-                </div>
-              )}
-            </div>
-          </div>
-          <DialogFooter className={dialogFooterClass}>
-            <Button variant="outline" onClick={() => setGlobalSearchOpen(false)} data-testid="button-global-search-close">
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
       <DocumentImportDialog
         open={documentImportOpen}
