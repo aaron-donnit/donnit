@@ -1851,6 +1851,7 @@ function buildPositionContinuityPlan(input: {
 
   return {
     tasksToMove,
+    historicalTasks,
     preview: {
       profileId: input.profileId,
       profileTitle: input.profileTitle,
@@ -7075,6 +7076,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             type: mode === "transfer" ? "position_profile_transferred" : "position_profile_delegated",
             note: JSON.stringify(inheritedContext),
           });
+        }
+        if (profileId) {
+          for (const task of plan.historicalTasks) {
+            const existingProfileId = (task as { position_profile_id?: string | null }).position_profile_id ?? null;
+            if (existingProfileId === profileId) continue;
+            const updated = await writeStore.updateTask(task.id, { position_profile_id: profileId });
+            if (!updated) continue;
+            await writeStore.addEvent(orgId, {
+              task_id: task.id,
+              actor_id: auth.userId,
+              type: "position_profile_history_linked",
+              note: JSON.stringify({
+                profileTitle,
+                fromUserId,
+                toUserId,
+                mode,
+                linkedAt: new Date().toISOString(),
+                reason: "Preserve completed task history for future profile holders.",
+              }),
+            });
+          }
         }
         let profile = null;
         if (parsed.data.profileId) {
