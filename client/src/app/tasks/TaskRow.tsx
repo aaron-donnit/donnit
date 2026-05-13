@@ -2,7 +2,7 @@ import { Check, Loader2, Minus, MoveUp, Play, Triangle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Id, Task, TaskEvent, User } from "@/app/types";
 import { urgencyLabel } from "@/app/lib/urgency";
-import { taskDueLabel } from "@/app/lib/date";
+import { localDateIso, taskDueLabel } from "@/app/lib/date";
 import { taskRepeatLabel } from "@/app/lib/task-text";
 import { latestOpenUpdateRequest } from "@/app/lib/permissions";
 
@@ -59,7 +59,7 @@ export default function TaskRow({
   const isDone = task.status === "completed";
   const latestUpdateRequest = latestOpenUpdateRequest(task, events);
   const repeatLabel = taskRepeatLabel(task);
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = localDateIso();
   const dueLabel = taskDueLabel(task);
   const dueClass = dueTone(task, todayIso);
   const initials = (assignee?.name ?? "?")
