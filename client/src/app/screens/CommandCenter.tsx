@@ -793,7 +793,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         (task.collaboratorIds ?? []).some((id) => String(id) === userId),
     );
   }, [data?.currentUserId, displayTasks]);
-  const notificationTasks = canViewManagerReports(currentWorkspaceUser) ? displayTasks : currentUserActionTasks;
+  const canSeeWorkspaceQueues = canViewManagerReports(currentWorkspaceUser);
+  const currentUserQueueSuggestions = useMemo(() => {
+    const suggestions = data?.suggestions ?? [];
+    if (canSeeWorkspaceQueues) return suggestions;
+    const userId = String(data?.currentUserId ?? "");
+    return suggestions.filter(
+      (suggestion) => !suggestion.assignedToId || String(suggestion.assignedToId) === userId,
+    );
+  }, [canSeeWorkspaceQueues, data?.currentUserId, data?.suggestions]);
+  const notificationTasks = canSeeWorkspaceQueues ? displayTasks : currentUserActionTasks;
 
   useEffect(() => {
     if (!canUseTeamWorkspaceView) {
@@ -808,7 +817,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const metrics = useMemo(() => {
     const tasks = scopedDisplayTasks;
-    const suggestions = data?.suggestions ?? [];
+    const suggestions = currentUserQueueSuggestions;
     const today = localDateIso();
     const waitingTasks = tasks.filter((t) => t.status === "pending_acceptance").length;
     const pendingSuggestions = suggestions.filter((s) => s.status === "pending").length;
@@ -820,7 +829,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       emailQueue: pendingSuggestions,
       completed: tasks.filter((t) => t.status === "completed").length,
     };
-  }, [scopedDisplayTasks, data?.suggestions]);
+  }, [scopedDisplayTasks, currentUserQueueSuggestions]);
 
   const todayLabel = useMemo(
     () =>
@@ -828,8 +837,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     [],
   );
   const rawNotifications = useMemo(
-    () => buildNotifications(notificationTasks, data?.suggestions ?? [], data?.events ?? [], data?.currentUserId),
-    [notificationTasks, data?.suggestions, data?.events, data?.currentUserId],
+    () => buildNotifications(notificationTasks, currentUserQueueSuggestions, data?.events ?? [], data?.currentUserId),
+    [notificationTasks, currentUserQueueSuggestions, data?.events, data?.currentUserId],
   );
   const notifications = useMemo(
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
@@ -1861,7 +1870,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           {appView === "inbox" && (
             <section key={`inbox-${viewResetKeys.inbox}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-                <AcceptancePanel tasks={currentUserActionTasks} suggestions={data.suggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
+                <AcceptancePanel tasks={currentUserActionTasks} suggestions={currentUserQueueSuggestions} onOpenInbox={() => setApprovalInboxOpen(true)} />
                 <div className="rounded-md border border-border bg-card p-4">
                   <p className="text-sm font-medium text-foreground">Capture sources</p>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -2032,7 +2041,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         open={approvalInboxOpen}
         onOpenChange={setApprovalInboxOpen}
         tasks={currentUserActionTasks}
-        suggestions={data.suggestions}
+        suggestions={currentUserQueueSuggestions}
         onScanEmail={() => scan.mutate()}
         scanningEmail={scan.isPending}
         onOpenManualImport={() => setManualImportOpen(true)}
