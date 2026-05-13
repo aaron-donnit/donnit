@@ -594,6 +594,28 @@ const donnitLanguageLexicon = {
   },
 };
 
+const donnitTaskExtractionPolicy = [
+  "Extract one actionable Donnit task for a professional workplace continuity tool.",
+  "Return only schema fields. Use null dueDate when no date is clear.",
+  "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
+  "Ask-don't-guess policy: when the source is ambiguous, context-only, or missing a clear action, set shouldCreateTask=false or confidence=low so Donnit can ask a clarifying question.",
+  "Ownership rule: only set assigneeHint when the user clearly assigns ownership using language like assign, delegate, reassign, route to, hand off, put on someone's plate, have/get/ask someone to do the work. If the user says call Maya, email Maya, ping Maya, meet with Maya, ask Maya about something, or follow up with Maya, Maya is the object/contact, not the task owner.",
+  "If the text clearly assigns someone, put that person in assigneeHint and make the title the work itself.",
+  "If multiple assignees could match a first name, keep the assigneeHint exactly as written and use medium confidence so the application can ask which teammate.",
+  "If the user marks the task confidential, sensitive, privileged, or restricted, set visibility=confidential. If they mark it personal or private/non-work, set visibility=personal. Otherwise set visibility=work.",
+  "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
+  "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
+  "Descriptions should explain the next step in one or two plain sentences.",
+  "Extract structured timing. Use dueTime for a clear time like noon, 3pm, or 14:30. For meetings, calls, appointments, interviews, travel, or other fixed-time events, also set startTime and endTime. Use null time fields when the user only gives a date. Use isAllDay=true only when the user explicitly says all day.",
+  "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
+  "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
+  "Business phrases like close the loop, circle back, take care of, look into, check on, put on someone's plate, fire drill, blocker, QBR, OKR, KPI, SLA, RFP, SOW, MSA, NDA, ARR, MRR, CRM, and ATS should be interpreted as normal workplace language, not copied blindly into awkward task titles.",
+  "When the user says 'not urgent' or 'no rush', set urgency=normal and do not include that phrase in the title.",
+  "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
+  "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
+  "For email input, set replyNeeded=true only when the sender appears to expect a response; replyIntent should explain the response goal in plain language. Receipts, newsletters, automated notices, and FYI messages usually do not need replies.",
+];
+
 function toIsoDate(year: number, month: number, day: number) {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -3738,26 +3760,7 @@ async function extractTaskWithAi(input: {
         input: [
           {
             role: "system",
-            content:
-              [
-                "Extract one actionable Donnit task for a professional workplace continuity tool.",
-                "Return only schema fields. Use null dueDate when no date is clear.",
-                "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
-                "Ownership rule: only set assigneeHint when the user clearly assigns ownership using language like assign, delegate, reassign, route to, hand off, put on someone's plate, have/get/ask someone to do the work. If the user says call Maya, email Maya, ping Maya, meet with Maya, ask Maya about something, or follow up with Maya, Maya is the object/contact, not the task owner.",
-                "If the text clearly assigns someone, put that person in assigneeHint and make the title the work itself.",
-                "If the user marks the task confidential, sensitive, privileged, or restricted, set visibility=confidential. If they mark it personal or private/non-work, set visibility=personal. Otherwise set visibility=work.",
-                "Separate actual work from context. Pure FYI, shipment updates, newsletters, and status-only messages should set shouldCreateTask=false and taskType=context_only.",
-                "Receipts and business purchases can be tasks when reconciliation or expense review is implied; write them like 'Reconcile ChatGPT expense ($55.00)'.",
-                "Descriptions should explain the next step in one or two plain sentences.",
-                "Extract structured timing. Use dueTime for a clear time like noon, 3pm, or 14:30. For meetings, calls, appointments, interviews, travel, or other fixed-time events, also set startTime and endTime. Use null time fields when the user only gives a date. Use isAllDay=true only when the user explicitly says all day.",
-                "Use the exact time estimate if the user provides one. 1.5 hours is 90 minutes.",
-                "Interpret common workplace shorthand and abbreviations. EOW means end of week, EOD/COB means today by end of day, EOM means end of month, EOQ means end of quarter, EOY means end of year, OOO means out of office, PTO means paid time off, RIF means reduction in force.",
-                "Business phrases like close the loop, circle back, take care of, look into, check on, put on someone's plate, fire drill, blocker, QBR, OKR, KPI, SLA, RFP, SOW, MSA, NDA, ARR, MRR, CRM, and ATS should be interpreted as normal workplace language, not copied blindly into awkward task titles.",
-                "When the user says 'not urgent' or 'no rush', set urgency=normal and do not include that phrase in the title.",
-                "Use critical urgency only for past due, blocker, emergency, or explicit critical work.",
-                "sourceExcerpt should be a short source quote or summary that explains why the task was suggested.",
-                "For email input, set replyNeeded=true only when the sender appears to expect a response; replyIntent should explain the response goal in plain language. Receipts, newsletters, automated notices, and FYI messages usually do not need replies.",
-              ].join(" "),
+            content: donnitTaskExtractionPolicy.join(" "),
           },
           {
             role: "user",

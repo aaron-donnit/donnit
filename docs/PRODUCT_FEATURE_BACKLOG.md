@@ -19,6 +19,8 @@ Status: Open
 
 Goal: Add a Donnit AI assistant that can be assigned work by a user, complete bounded tasks through approved tools, report back, and update the related task profile with what it did, what it found, and what still needs human action.
 
+Roadmap: See `docs/AGENTIC_AI_ASSISTANT_ROADMAP.md`.
+
 Core workflow:
 
 1. User assigns a task to Donnit AI from chat, a task detail view, or a future assistant command surface.
