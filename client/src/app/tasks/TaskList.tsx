@@ -12,6 +12,7 @@ import { taskRepeatLabel } from "@/app/lib/task-text";
 import { stripRepeatDetails } from "@/app/lib/repeat";
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import { activityEventLabel } from "@/app/lib/activity";
+import { richNoteToPlainText } from "@/app/lib/rich-notes";
 import TaskRow from "@/app/tasks/TaskRow";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
 import SuggestionCard from "@/app/inbox/SuggestionCard";
@@ -174,7 +175,7 @@ export default function TaskList({
     const haystack = [
       task.title,
       task.description,
-      task.completionNotes,
+      richNoteToPlainText(task.completionNotes),
       task.source,
       task.urgency,
       task.status,

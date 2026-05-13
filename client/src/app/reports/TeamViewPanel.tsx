@@ -10,6 +10,7 @@ import { localDateIso, addLocalDays } from "@/app/lib/date";
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import { apiErrorMessage } from "@/app/lib/tasks";
 import { teamMembersForUser } from "@/app/lib/permissions";
+import { richNoteToPlainText } from "@/app/lib/rich-notes";
 import ReportMetric from "@/app/reports/ReportMetric";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
 
@@ -452,7 +453,7 @@ export default function TeamViewPanel({
                       <span className="mt-1 block truncate text-muted-foreground">
                         {taskSubtasks.length > 0
                           ? `${doneSubtasks}/${taskSubtasks.length} subtasks`
-                          : task.completionNotes || task.description || lastEvent?.note}
+                          : richNoteToPlainText(task.completionNotes) || task.description || lastEvent?.note}
                       </span>
                     )}
                     </button>

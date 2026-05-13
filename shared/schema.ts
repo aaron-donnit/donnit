@@ -143,11 +143,11 @@ export const taskUpdateRequestSchema = z.object({
   visibleFrom: z.string().nullable().optional(),
   recurrence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]).optional(),
   reminderDaysBefore: z.number().int().min(0).max(365).optional(),
-  note: z.string().trim().max(1000).optional(),
+  note: z.string().trim().max(4000).optional(),
 });
 
 export const noteRequestSchema = z.object({
-  note: z.string().trim().min(1).max(1000),
+  note: z.string().trim().min(1).max(4000),
 });
 
 export const externalTaskSuggestionSchema = z.object({

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, CheckCircle2, History, ListChecks, ListPlus, Loader2, MoreHorizontal, Send, UserPlus, UserRoundCheck, Users, X } from "lucide-react";
+import { Check, CheckCircle2, History, ListChecks, ListPlus, Loader2, MoreHorizontal, Paperclip, Send, UserPlus, UserRoundCheck, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,7 @@ import { dialogShellClass } from "@/app/constants";
 import { urgencyLabel } from "@/app/lib/urgency";
 import { taskDueLabel } from "@/app/lib/date";
 import { taskRepeatLabel } from "@/app/lib/task-text";
+import { RichNoteContent, richNoteToPlainText } from "@/app/lib/rich-notes";
 import { extractRepeatDetails, stripRepeatDetails, descriptionWithRepeatDetails, defaultRepeatDetails } from "@/app/lib/repeat";
 import { sortSubtasks, normalizeLocalSubtasks, apiErrorMessage, parseInheritedTaskContext } from "@/app/lib/tasks";
 import { isActiveUser, latestOpenUpdateRequest } from "@/app/lib/permissions";
@@ -21,6 +22,23 @@ import { profilePrimaryOwnerId, profileAssignmentLabel } from "@/app/lib/profile
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import { statusLabels } from "@/app/lib/urgency";
 import RichNoteEditor from "@/app/tasks/RichNoteEditor";
+
+type CapturedAttachment = {
+  name: string;
+  kind: "Document" | "Image" | "Spreadsheet" | "Other";
+  size: number;
+};
+
+const htmlPattern = /<\/?[a-z][\s\S]*>/i;
+
+function escapeNoteHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 export default function TaskDetailDialog({
   task,
@@ -62,10 +80,14 @@ export default function TaskDetailDialog({
   const [delegatedToId, setDelegatedToId] = useState("");
   const [collaboratorIds, setCollaboratorIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [attachmentName, setAttachmentName] = useState("");
+  const [attachments, setAttachments] = useState<CapturedAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const [localSubtasks, setLocalSubtasks] = useState<LocalSubtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
   const [showPositionHistory, setShowPositionHistory] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!task) return;
@@ -88,6 +110,9 @@ export default function TaskDetailDialog({
     setDelegatedToId(task.delegatedToId ? String(task.delegatedToId) : "");
     setCollaboratorIds((task.collaboratorIds ?? []).map((id) => String(id)));
     setNote(task.completionNotes ?? "");
+    setAttachmentName("");
+    setAttachments([]);
+    setDraggingFiles(false);
     setNewSubtaskTitle("");
     setShowInheritedHistory(false);
     setShowPositionHistory(false);
@@ -114,10 +139,46 @@ export default function TaskDetailDialog({
     }
   }, [positionProfileId, visibility]);
 
+  const classifyAttachment = (file: File): CapturedAttachment["kind"] => {
+    const lower = file.name.toLowerCase();
+    if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(lower)) return "Image";
+    if (/\.(csv|xls|xlsx|numbers)$/i.test(lower)) return "Spreadsheet";
+    if (file.type.includes("pdf") || /\.(pdf|doc|docx|txt|rtf)$/i.test(lower)) return "Document";
+    return "Other";
+  };
+
+  const captureFiles = (fileList: FileList | null) => {
+    const captured = Array.from(fileList ?? []).map((file) => ({
+      name: file.name,
+      kind: classifyAttachment(file),
+      size: file.size,
+    }));
+    if (captured.length > 0) {
+      setAttachments((current) => [...current, ...captured].slice(0, 12));
+    }
+  };
+
+  const attachmentLines = () => [
+    ...(attachmentName.trim() ? [`Attachment noted: ${attachmentName.trim()}`] : []),
+    ...attachments.map((file) => `Attachment captured: [${file.kind}] ${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`),
+  ];
+
+  const noteWithAttachments = () => {
+    const baseNote = note.trim();
+    const lines = attachmentLines();
+    if (!baseNote) return lines.join("\n");
+    if (lines.length === 0) return baseNote;
+    if (htmlPattern.test(baseNote)) {
+      return `${baseNote}${lines.map((line) => `<div>${escapeNoteHtml(line)}</div>`).join("")}`;
+    }
+    return [baseNote, ...lines].join("\n");
+  };
+
   const save = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
       if (readOnly) throw new Error("This team view is read-only.");
+      const nextNote = noteWithAttachments();
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, {
         title: title.trim(),
         description: descriptionWithRepeatDetails(description.trim(), recurrence === "none" ? "" : repeatDetails),
@@ -136,7 +197,7 @@ export default function TaskDetailDialog({
         positionProfileId: visibility === "personal" ? null : positionProfileId || null,
         delegatedToId: delegatedToId || null,
         collaboratorIds,
-        note: note.trim() || undefined,
+        note: nextNote || undefined,
       });
       return (await res.json()) as Task;
     },
@@ -207,7 +268,7 @@ export default function TaskDetailDialog({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
       if (readOnly) throw new Error("This team view is read-only.");
-      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: note.trim() || "Donnit." });
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: noteWithAttachments() || "Donnit." });
       return (await res.json()) as Task;
     },
     onSuccess: async () => {
@@ -614,7 +675,7 @@ export default function TaskDetailDialog({
                   {inheritedContext.inheritedCompletionNotes && (
                     <div className="rounded-md border border-border bg-background px-3 py-2">
                       <p className="mb-1 font-medium text-foreground">Previous notes</p>
-                      <p className="whitespace-pre-wrap text-muted-foreground">{inheritedContext.inheritedCompletionNotes}</p>
+                      <RichNoteContent note={inheritedContext.inheritedCompletionNotes} className="text-muted-foreground" />
                     </div>
                   )}
                   {!inheritedContext.inheritedDescription && !inheritedContext.inheritedCompletionNotes && (
@@ -660,7 +721,7 @@ export default function TaskDetailDialog({
                         </p>
                         {(item.description || item.completionNotes) && (
                           <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-muted-foreground">
-                            {[stripRepeatDetails(item.description), item.completionNotes].filter(Boolean).join("\n\n")}
+                            {[stripRepeatDetails(item.description), richNoteToPlainText(item.completionNotes)].filter(Boolean).join("\n\n")}
                           </p>
                         )}
                       </div>
@@ -829,6 +890,98 @@ export default function TaskDetailDialog({
             maxLength={1600}
             testId="input-task-detail-note"
           />
+          <div className="rounded-md border border-border bg-background px-3 py-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">Attachments</p>
+                <p className="text-xs text-muted-foreground">Add links or files to record with this task update.</p>
+              </div>
+              <Paperclip className="size-4 text-muted-foreground" />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Input
+                value={attachmentName}
+                onChange={(event) => setAttachmentName(event.target.value)}
+                disabled={readOnly}
+                placeholder="Paste a link or file note"
+                data-testid="input-task-detail-attachment-note"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => attachmentInputRef.current?.click()}
+                disabled={readOnly}
+                data-testid="button-task-detail-choose-attachments"
+              >
+                <Paperclip className="size-4" />
+                Choose files
+              </Button>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  captureFiles(event.target.files);
+                  event.target.value = "";
+                }}
+                data-testid="input-task-detail-attachments"
+              />
+            </div>
+            <div
+              className={`mt-2 rounded-md border border-dashed px-3 py-3 text-xs transition ${
+                draggingFiles ? "border-brand-green bg-brand-green/10" : "border-border bg-muted/30"
+              }`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                if (!readOnly) setDraggingFiles(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (!readOnly) setDraggingFiles(true);
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                setDraggingFiles(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (!readOnly) captureFiles(event.dataTransfer.files);
+                setDraggingFiles(false);
+              }}
+              data-testid="dropzone-task-detail-attachments"
+            >
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                <Paperclip className="size-3.5" />
+                Drop files here
+              </div>
+              {attachments.length > 0 ? (
+                <div className="mt-2 space-y-1">
+                  {attachments.map((file, index) => (
+                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1">
+                      <span className="min-w-0 truncate">{file.name}</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">{file.kind}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-6"
+                          onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          disabled={readOnly}
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="size-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-[11px] leading-4 text-muted-foreground">Dropped or chosen files are recorded with the next save or completion note.</p>
+              )}
+            </div>
+          </div>
           <div className="rounded-md border border-border bg-background px-3 py-3">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div>

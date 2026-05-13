@@ -17,6 +17,7 @@ import { titleCase, taskKnowledgeText, inferTaskCadence, taskRepeatLabel } from 
 import { memoryHowToNotes, memoryRecurringResponsibilities, memoryRecentSignals, memorySourceMix, mergeRecurringResponsibilities, recurringResponsibilitiesFromTasks } from "@/app/lib/memory";
 import { canAdministerProfiles, isActiveUser } from "@/app/lib/permissions";
 import { profilePrimaryOwnerId, profilesForUser, profileAssignmentLabel } from "@/app/lib/profiles";
+import { richNoteToPlainText } from "@/app/lib/rich-notes";
 import ReportMetric from "@/app/reports/ReportMetric";
 import ToolStatusBadge from "@/app/admin/ToolStatusBadge";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
@@ -571,7 +572,7 @@ export default function PositionProfilesPanel({
     const haystack = [
       task.title,
       task.description,
-      task.completionNotes,
+      richNoteToPlainText(task.completionNotes),
       task.source,
       task.urgency,
       task.status,
@@ -728,7 +729,7 @@ export default function PositionProfilesPanel({
         }
 
         allSelectedProfileTasks.forEach((task) => {
-          if (!matches([task.title, task.description, task.completionNotes, task.source, task.status, task.urgency, task.dueDate, taskRepeatLabel(task)])) return;
+          if (!matches([task.title, task.description, richNoteToPlainText(task.completionNotes), task.source, task.status, task.urgency, task.dueDate, taskRepeatLabel(task)])) return;
           add({
             id: `task-${task.id}`,
             type: task.status === "completed" ? "History" : task.recurrence !== "none" ? "Recurring task" : "Task",
@@ -1809,7 +1810,7 @@ export default function PositionProfilesPanel({
                         </div>
                         {(task.description || task.completionNotes) && (
                           <p className="mt-1 line-clamp-3 text-muted-foreground">
-                            {[task.description, task.completionNotes].filter(Boolean).join(" ")}
+                            {[task.description, richNoteToPlainText(task.completionNotes)].filter(Boolean).join(" ")}
                           </p>
                         )}
                       </div>
