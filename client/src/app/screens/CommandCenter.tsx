@@ -101,6 +101,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
   const [agendaWorkOpen, setAgendaWorkOpen] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     try {
@@ -867,6 +869,18 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }
   }, [data?.currentUserId, data?.users]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setGlobalSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   if (isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
@@ -1317,6 +1331,121 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     admin: "Admin",
     settings: "Settings",
   };
+  type GlobalSearchResult = {
+    id: string;
+    kind: "Task" | "Profile" | "Inbox" | "Person" | "View";
+    title: string;
+    detail: string;
+    view?: AppView;
+    taskId?: string;
+  };
+  const globalSearchResults: GlobalSearchResult[] = (() => {
+    const query = globalSearchQuery.trim().toLowerCase();
+    const matches = (value: string) => !query || value.toLowerCase().includes(query);
+    const results: GlobalSearchResult[] = [];
+
+    appNavItems.forEach((item) => {
+      if (!item.disabled && matches(`${item.label} ${item.id}`)) {
+        results.push({
+          id: `view-${item.id}`,
+          kind: "View",
+          title: item.label,
+          detail: `Open ${item.label}`,
+          view: item.id,
+        });
+      }
+    });
+
+    displayTasks.forEach((task) => {
+      const owner = data.users.find((user) => String(user.id) === String(task.assignedToId));
+      const text = [
+        task.title,
+        task.description,
+        task.status,
+        task.urgency,
+        task.source,
+        task.dueDate,
+        owner?.name,
+        owner?.email,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      if (matches(text)) {
+        results.push({
+          id: `task-${task.id}`,
+          kind: "Task",
+          title: task.title,
+          detail: `${owner?.name ?? "Unassigned"} - ${task.status.replace(/_/g, " ")}${task.dueDate ? ` - due ${task.dueDate}` : ""}`,
+          view: "tasks",
+          taskId: String(task.id),
+        });
+      }
+    });
+
+    positionProfiles.forEach((profile) => {
+      const text = [
+        profile.title,
+        profile.owner.name,
+        profile.status,
+        profile.howTo.join(" "),
+        profile.stakeholders.join(" "),
+        profile.tools.join(" "),
+      ].join(" ");
+      if (matches(text)) {
+        results.push({
+          id: `profile-${profile.id}`,
+          kind: "Profile",
+          title: profile.title,
+          detail: `${profile.owner.name} - ${profile.status} - ${profile.currentIncompleteTasks.length} open`,
+          view: "profiles",
+        });
+      }
+    });
+
+    data.suggestions.forEach((suggestion) => {
+      const text = [
+        suggestion.suggestedTitle,
+        suggestion.subject,
+        suggestion.fromEmail,
+        suggestion.preview,
+        suggestion.status,
+      ].join(" ");
+      if (matches(text)) {
+        results.push({
+          id: `suggestion-${suggestion.id}`,
+          kind: "Inbox",
+          title: suggestion.suggestedTitle || suggestion.subject,
+          detail: `${suggestion.fromEmail} - ${suggestion.status}`,
+          view: "inbox",
+        });
+      }
+    });
+
+    data.users.forEach((user) => {
+      const text = [user.name, user.email, user.role, user.persona].join(" ");
+      if (matches(text)) {
+        results.push({
+          id: `user-${user.id}`,
+          kind: "Person",
+          title: user.name,
+          detail: `${user.role}${user.email ? ` - ${user.email}` : ""}`,
+          view: canOpenManagerReports ? "team" : "settings",
+        });
+      }
+    });
+
+    return results.slice(0, 18);
+  })();
+
+  const openGlobalSearchResult = (result: GlobalSearchResult) => {
+    setGlobalSearchOpen(false);
+    setGlobalSearchQuery("");
+    if (result.view) openAppView(result.view);
+    if (result.kind === "Inbox") setApprovalInboxOpen(true);
+    if (result.taskId) {
+      setNotificationTaskId(result.taskId);
+    }
+  };
 
   return (
     <main
@@ -1341,11 +1470,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 </h1>
                 <span className="hidden text-xs text-muted-foreground md:inline">{todayLabel}</span>
               </div>
-              <div className="command-search hidden min-w-[260px] max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-muted/35 px-3 py-1.5 text-xs text-muted-foreground lg:flex">
+              <button
+                type="button"
+                onClick={() => setGlobalSearchOpen(true)}
+                className="command-search hidden min-w-[260px] max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-muted/35 px-3 py-1.5 text-left text-xs text-muted-foreground transition hover:border-brand-green/40 hover:bg-muted/55 hover:text-foreground lg:flex"
+                data-testid="button-global-search"
+              >
                 <Search className="size-3.5" />
                 <span className="truncate">Search tasks, profiles, reports...</span>
                 <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">Ctrl K</span>
-              </div>
+              </button>
               <div className="flex items-center gap-2">
                 <span
                   className="hidden text-xs text-muted-foreground md:inline"
@@ -1494,7 +1628,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                         type="button"
                         onClick={() => {
                           setWorkspaceTaskScope("team");
-                          openAppView("team");
                         }}
                         className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
                           teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
@@ -1510,7 +1643,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                         onChange={(event) => {
                           setSelectedTeamViewUserId(event.target.value);
                           setWorkspaceTaskScope("team");
-                          openAppView("team");
                         }}
                         className="flex h-10 min-w-[220px] rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         data-testid="select-workspace-team-member"
@@ -1767,6 +1899,72 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             </section>
           )}
 
+      <Dialog open={globalSearchOpen} onOpenChange={setGlobalSearchOpen}>
+        <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
+          <DialogHeader className={dialogHeaderClass}>
+            <DialogTitle>Search Donnit</DialogTitle>
+            <DialogDescription>
+              Jump to tasks, Position Profiles, people, inbox items, reports, or workspace views.
+            </DialogDescription>
+          </DialogHeader>
+          <div className={dialogBodyClass}>
+            <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
+              <Search className="size-4 text-muted-foreground" />
+              <input
+                autoFocus
+                value={globalSearchQuery}
+                onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && globalSearchResults[0]) {
+                    event.preventDefault();
+                    openGlobalSearchResult(globalSearchResults[0]);
+                  }
+                }}
+                placeholder="Search tasks, profiles, people, inbox, reports..."
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                data-testid="input-global-search"
+              />
+              <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                Enter
+              </span>
+            </div>
+            <div className="mt-3 max-h-[52vh] overflow-y-auto rounded-md border border-border">
+              {globalSearchResults.length > 0 ? (
+                globalSearchResults.map((result) => (
+                  <button
+                    key={result.id}
+                    type="button"
+                    onClick={() => openGlobalSearchResult(result)}
+                    className="flex w-full items-start gap-3 border-b border-border px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/50"
+                    data-testid={`button-search-result-${result.id}`}
+                  >
+                    <span className="mt-0.5 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
+                      {result.kind}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-foreground">
+                        {result.title}
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {result.detail}
+                      </span>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  No matching work found.
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter className={dialogFooterClass}>
+            <Button variant="outline" onClick={() => setGlobalSearchOpen(false)} data-testid="button-global-search-close">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ManualEmailImportDialog open={manualImportOpen} onOpenChange={setManualImportOpen} />
       <DocumentImportDialog
         open={documentImportOpen}

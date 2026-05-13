@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2, Send } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
@@ -72,20 +72,20 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div className="mb-5" data-testid="panel-chat">
-      {/* Composer card */}
       <div className="composer-box">
         <textarea
+          id="chat-message"
           ref={taRef}
           value={message}
           rows={2}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
             }
           }}
-          placeholder='Tell Donnit what to do — e.g. "Follow up with Linh on Q1 deck variance by Thursday — urgent"'
+          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent"'
           className="composer-input"
           data-testid="input-chat-message"
         />
@@ -99,7 +99,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
             );
           })}
           <span className="flex-1" />
-          <span className="composer-kbd">⌘↵</span>
+          <span className="composer-kbd">Enter</span>
           <button
             type="button"
             onClick={send}
@@ -116,16 +116,14 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
         </div>
       </div>
 
-      {/* Parse preview — slides in below composer when text is typed */}
       {parsedPreview && (
         <div className="parse-preview mt-3">
           <span className="parse-preview-label">Donnit understood</span>
           <span className="min-w-0 flex-1 truncate text-sm text-foreground">{parsedPreview.title}</span>
-          <span className="composer-kbd ml-2">⌘↵ to confirm</span>
+          <span className="composer-kbd ml-2">Shift+Enter for line break</span>
         </div>
       )}
 
-      {/* Conversation history — collapsed by default */}
       {messages.length > 0 && (
         <details className="mt-2">
           <summary className="ui-label cursor-pointer select-none py-1 hover:text-foreground">
