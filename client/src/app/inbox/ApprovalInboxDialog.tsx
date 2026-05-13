@@ -8,6 +8,7 @@ import type { EmailSuggestion, Id, SuggestionPatch, Task } from "@/app/types";
 import { dialogShellClass } from "@/app/constants";
 import { urgencyClass, urgencyLabel } from "@/app/lib/urgency";
 import { invalidateWorkspace } from "@/app/lib/hooks";
+import { apiErrorMessage } from "@/app/lib/tasks";
 import SuggestionCard from "@/app/inbox/SuggestionCard";
 
 export default function ApprovalInboxDialog({
@@ -33,25 +34,75 @@ export default function ApprovalInboxDialog({
 
   const accept = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/accept`),
-    onSuccess: invalidateWorkspace,
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Task accepted", description: "It is now in the active task list." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not accept task",
+        description: apiErrorMessage(error, "Try accepting it again."),
+        variant: "destructive",
+      });
+    },
   });
   const deny = useMutation({
     mutationFn: async (id: Id) =>
       apiRequest("POST", `/api/tasks/${id}/deny`, { note: "Not the right owner." }),
-    onSuccess: invalidateWorkspace,
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Task denied", description: "The task was removed from your active queue." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not deny task",
+        description: apiErrorMessage(error, "Try denying it again."),
+        variant: "destructive",
+      });
+    },
   });
   const approveSuggestion = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/approve`),
-    onSuccess: invalidateWorkspace,
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Task added", description: "The approved suggestion is now in the task list." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not add suggestion",
+        description: apiErrorMessage(error, "Review the suggestion and try again."),
+        variant: "destructive",
+      });
+    },
   });
   const dismissSuggestion = useMutation({
     mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
-    onSuccess: invalidateWorkspace,
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Suggestion dismissed", description: "It was removed from the approval queue." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not dismiss suggestion",
+        description: apiErrorMessage(error, "Try dismissing it again."),
+        variant: "destructive",
+      });
+    },
   });
   const updateSuggestion = useMutation({
     mutationFn: async ({ id, patch }: { id: Id; patch: SuggestionPatch }) =>
       apiRequest("PATCH", `/api/suggestions/${id}`, patch),
-    onSuccess: invalidateWorkspace,
+    onSuccess: async () => {
+      await invalidateWorkspace();
+      toast({ title: "Suggestion updated", description: "Your edits were saved." });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save suggestion",
+        description: apiErrorMessage(error, "Check the edited fields and try again."),
+        variant: "destructive",
+      });
+    },
   });
 
   return (

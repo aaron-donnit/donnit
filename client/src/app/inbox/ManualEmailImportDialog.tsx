@@ -97,7 +97,7 @@ export default function ManualEmailImportDialog({
               id="manual-email-body"
               value={body}
               onChange={(event) => setBody(event.target.value)}
-              placeholder="Paste the relevant excerpt — the suggested task title, due date, and urgency will be inferred."
+              placeholder="Paste the relevant excerpt. Donnit will infer the suggested task title, due date, and urgency."
               className="min-h-[140px]"
               maxLength={4000}
               data-testid="input-manual-email-body"
