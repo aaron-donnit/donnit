@@ -10,20 +10,20 @@ function PrioIcon({ urgency }: { urgency: string }) {
   const cls = `task-prio prio-${urgency}`;
   if (urgency === "critical" || urgency === "high") {
     return (
-      <span className={cls} aria-label={`${urgency} priority`}>
+      <span className={cls} aria-hidden="true">
         <Triangle className="fill-current" strokeWidth={0} />
       </span>
     );
   }
   if (urgency === "normal" || urgency === "medium") {
     return (
-      <span className={cls} aria-label="normal priority">
+      <span className={cls} aria-hidden="true">
         <MoveUp strokeWidth={1.7} />
       </span>
     );
   }
   return (
-    <span className={`task-prio prio-${urgency}`} aria-label="low priority">
+    <span className={`task-prio prio-${urgency}`} aria-hidden="true">
       <Minus strokeWidth={1.7} />
     </span>
   );
@@ -79,17 +79,9 @@ export default function TaskRow({
     <div
       className={`task-row task-row-openable ${isDone ? "is-done" : ""}`}
       data-testid={`row-task-${task.id}`}
-      role="button"
-      tabIndex={0}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) return;
         onOpen();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
       }}
     >
       {/* Col 1 — check circle */}
@@ -112,8 +104,10 @@ export default function TaskRow({
       <PrioIcon urgency={task.urgency} />
 
       {/* Col 3 — title */}
-      <p
-        className="task-title min-w-0 truncate text-sm font-medium text-foreground"
+      <button
+        type="button"
+        onClick={onOpen}
+        className="task-title min-w-0 truncate text-left text-sm font-medium text-foreground hover:text-brand-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
         data-testid={`text-task-title-${task.id}`}
         title={task.title}
       >
@@ -123,7 +117,7 @@ export default function TaskRow({
             {task.source}
           </span>
         ) : null}
-      </p>
+      </button>
 
       {/* Col 4 — urgency badge + optional context tooltip */}
       <span className="inline-flex items-center gap-1">

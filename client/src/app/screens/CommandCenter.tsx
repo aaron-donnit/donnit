@@ -1521,7 +1521,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       className="min-h-screen bg-background"
       data-testid="page-command-center"
     >
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen flex-col lg:flex-row">
         <AppShellNav
           view={appView}
           onViewChange={openAppView}
@@ -1529,7 +1529,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           currentUser={currentUser}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="command-topbar sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
+          <header className="command-topbar border-b border-border bg-background/85 backdrop-blur lg:sticky lg:top-0 lg:z-40">
             <div className="flex h-11 items-center justify-between gap-3 px-4 lg:px-6">
               <div className="flex min-w-0 items-center gap-2 text-sm">
                 <span className="font-medium text-muted-foreground">Donnit</span>
