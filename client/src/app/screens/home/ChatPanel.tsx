@@ -8,7 +8,7 @@ import type { ChatMessage } from "@/app/types";
 
 export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const [message, setMessage] = useState("");
-  const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const [localAssistantMessage, setLocalAssistantMessage] = useState<ChatMessage | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const parsedPreview = useMemo(() => {
@@ -45,23 +45,11 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
     return { title, urgency, due, recurrence, assignee };
   }, [message]);
 
-  const visibleMessages = useMemo(() => {
-    const official = messages.filter((item) => item.role !== "system");
-    const officialKeys = new Set(official.map((item) => `${item.role}:${item.content}`));
-    const transient = localMessages.filter((item) => {
-      if (!String(item.id).startsWith("local-")) return !official.some((officialItem) => String(officialItem.id) === String(item.id));
-      return !officialKeys.has(`${item.role}:${item.content}`);
-    });
-    return [...official, ...transient]
-      .filter((item) => {
-        if (!item.content.trim()) return false;
-        return true;
-      })
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .slice(-8);
-  }, [localMessages, messages]);
-
-  const latestAssistant = [...visibleMessages].reverse().find((item) => item.role === "assistant");
+  const latestPersistedAssistant = useMemo(
+    () => [...messages].reverse().find((item) => item.role === "assistant" && item.content.trim()),
+    [messages],
+  );
+  const latestAssistant = localAssistantMessage ?? latestPersistedAssistant;
   const latestAssistantNeedsReply = Boolean(
     latestAssistant?.content &&
       (latestAssistant.content.includes("?") || /which|who should|when is|what should|how urgent/i.test(latestAssistant.content)),
@@ -73,22 +61,10 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       const response = await apiRequest("POST", "/api/chat", { message: text });
       return await response.json() as { assistant?: ChatMessage; pending?: boolean; task?: unknown };
     },
-    onMutate: (text) => {
-      setLocalMessages((current) => [
-        ...current,
-        {
-          id: `local-user-${Date.now()}`,
-          role: "user",
-          content: text,
-          taskId: null,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-    },
     onSuccess: async (result) => {
       setMessage("");
       if (result.assistant) {
-        setLocalMessages((current) => [...current, result.assistant!]);
+        setLocalAssistantMessage(result.assistant);
         if (result.task) {
           toast({
             title: "Task created",
@@ -121,58 +97,6 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   return (
     <div className="mb-5" data-testid="panel-chat">
-      {visibleMessages.length > 0 && (
-        <div className="mb-3 rounded-md border border-border bg-card p-2.5 shadow-sm" data-testid="panel-visible-chat-thread">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="ui-label">Chat to task</span>
-            {latestAssistant && (
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${
-                  latestAssistantNeedsReply
-                    ? "bg-amber-50 text-amber-800"
-                    : latestAssistantCreatedTask
-                      ? "bg-emerald-50 text-emerald-800"
-                      : "bg-muted text-muted-foreground"
-                }`}
-                data-testid="text-chat-latest-status"
-              >
-                {latestAssistantNeedsReply ? <HelpCircle className="size-3" /> : <CheckCircle2 className="size-3" />}
-                {latestAssistantNeedsReply ? "Reply needed" : latestAssistantCreatedTask ? "Task created" : "Updated"}
-              </span>
-            )}
-          </div>
-          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-            {visibleMessages.map((item) => {
-              const fromAssistant = item.role === "assistant";
-              return (
-                <div
-                  key={item.id}
-                  className={`flex ${fromAssistant ? "justify-start" : "justify-end"}`}
-                  data-testid={`text-chat-message-${item.id}`}
-                >
-                  <div
-                    className={`max-w-[88%] rounded-md border px-3 py-2 text-sm leading-relaxed ${
-                      fromAssistant
-                        ? "border-border bg-background text-foreground"
-                        : "border-brand-green/20 bg-brand-green/10 text-foreground"
-                    }`}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <span className="font-mono text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-                        {fromAssistant ? "Donnit" : "You"}
-                      </span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        {item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}
-                      </span>
-                    </div>
-                    <p className="whitespace-pre-wrap break-words">{item.content}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
       <div className="composer-box">
         <textarea
           id="chat-message"
@@ -216,6 +140,25 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
           </button>
         </div>
       </div>
+
+      {latestAssistant && (
+        <div
+          className={`mt-2 flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+            latestAssistantNeedsReply
+              ? "border-amber-200 bg-amber-50 text-amber-950"
+              : latestAssistantCreatedTask
+                ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+                : "border-border bg-card text-foreground"
+          }`}
+          data-testid="text-chat-latest-response"
+        >
+          {latestAssistantNeedsReply ? <HelpCircle className="size-4 shrink-0" /> : <CheckCircle2 className="size-4 shrink-0" />}
+          <span className="shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.07em]">
+            {latestAssistantNeedsReply ? "Reply needed" : latestAssistantCreatedTask ? "Task created" : "Donnit"}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{latestAssistant.content}</span>
+        </div>
+      )}
 
       {parsedPreview && (
         <div className="parse-preview mt-3">
