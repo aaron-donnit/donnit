@@ -794,7 +794,7 @@ export default function PositionProfilesPanel({
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-foreground">{profile.title}</p>
                         <p className="truncate text-xs text-muted-foreground">
-                          {profile.status === "vacant" ? "Vacant" : `Owner: ${profile.owner.name}`} - {profile.status}
+                          {profileAssignmentLabel(profile, users)} - {profile.status}
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
@@ -878,7 +878,7 @@ export default function PositionProfilesPanel({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {selectedProfile.status === "vacant" ? "Vacant profile" : `Owner: ${selectedProfile.owner.name}`} - {selectedProfile.status} -{" "}
+                    {profileAssignmentLabel(selectedProfile, users)} - {selectedProfile.status} -{" "}
                     {selectedProfile.persisted ? "saved admin record" : "generated from task history"}
                   </p>
                 </div>
@@ -980,7 +980,9 @@ export default function PositionProfilesPanel({
                             ? `Covered by ${temporaryOwner.name}`
                             : delegateOwner
                               ? `Delegated to ${delegateOwner.name}`
-                              : `Owned by ${handoffOwner?.name ?? selectedProfile.owner.name}`}
+                              : handoffOwner
+                                ? `Owned by ${handoffOwner.name}`
+                                : "Vacant"}
                       </p>
                       {selectedProfile.delegateUntil && (
                         <p className="mt-1 text-muted-foreground">Through {selectedProfile.delegateUntil}</p>
@@ -1078,7 +1080,7 @@ export default function PositionProfilesPanel({
                             id: selectedProfile.id,
                             patch: {
                               status: event.target.value,
-                              currentOwnerId: event.target.value === "vacant" ? null : selectedProfile.owner.id,
+                              currentOwnerId: event.target.value === "vacant" ? null : selectedProfile.currentOwnerId ?? null,
                             },
                           })
                         }
