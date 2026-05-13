@@ -10,7 +10,7 @@ import { toast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { EmailSuggestion, Id, SuggestionDraftReplyResult, SuggestionPatch, SuggestionReplyResult } from "@/app/types";
 import { EMAIL_SIGNATURE_TEMPLATES, EMAIL_SIGNATURE_TEMPLATE_KEY, dialogShellClass, dialogHeaderClass, dialogBodyClass, dialogFooterClass } from "@/app/constants";
-import { urgencyClass, urgencyLabel } from "@/app/lib/urgency";
+import { urgencyLabel } from "@/app/lib/urgency";
 import { apiErrorMessage } from "@/app/lib/tasks";
 import { formatReceivedAt, parseSuggestionInsight, readCustomEmailSignature, readPreferredEmailSignatureTemplate, resolveEmailSignature, applyEmailSignature } from "@/app/lib/suggestions";
 import { invalidateWorkspace } from "@/app/lib/hooks";
@@ -207,11 +207,13 @@ export default function SuggestionCard({
   return (
     <>
       <div
-        className={`task-row ${urgencyClass(suggestion.urgency)} flex-col items-stretch`}
+        className="rounded-md border border-border bg-card p-3 shadow-sm"
         data-testid={`row-suggestion-${suggestion.id}`}
       >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
+          <p className="ui-label mb-1">Proposed task</p>
           {editing ? (
             <Input
               value={draftTitle}
@@ -225,14 +227,8 @@ export default function SuggestionCard({
               {suggestion.suggestedTitle}
             </p>
           )}
-          <p className="mt-0.5 text-xs text-muted-foreground break-words" data-testid={`text-suggestion-from-${suggestion.id}`}>
-            {sourceLabel} - {suggestion.fromEmail} - {formatReceivedAt(suggestion.receivedAt ?? null)}
-          </p>
-          <p className="mt-0.5 text-xs italic text-muted-foreground break-words">
-            Source: {suggestion.subject}
-          </p>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
           {insight.confidence && (
             <span className="rounded-md bg-brand-green/10 px-2 py-1 text-[10px] font-semibold uppercase text-brand-green">
               {insight.confidence}
@@ -246,6 +242,23 @@ export default function SuggestionCard({
           <span className="ui-label whitespace-nowrap text-[10px]">
             {urgencyLabel(suggestion.urgency)}
           </span>
+        </div>
+      </div>
+
+      <div className="grid gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs sm:grid-cols-3">
+        <div className="min-w-0">
+          <p className="ui-label">Source</p>
+          <p className="mt-1 truncate text-foreground" data-testid={`text-suggestion-from-${suggestion.id}`}>
+            {sourceLabel} - {suggestion.fromEmail}
+          </p>
+        </div>
+        <div className="min-w-0">
+          <p className="ui-label">Subject</p>
+          <p className="mt-1 truncate text-foreground">{suggestion.subject}</p>
+        </div>
+        <div className="min-w-0">
+          <p className="ui-label">Received</p>
+          <p className="mt-1 truncate text-foreground">{formatReceivedAt(suggestion.receivedAt ?? null)}</p>
         </div>
       </div>
 
@@ -280,7 +293,7 @@ export default function SuggestionCard({
       )}
 
       {insight.why && !editing && (
-        <div className="mt-2 rounded-sm border border-brand-green/15 bg-brand-green/5 px-2 py-1.5 text-xs text-foreground">
+        <div className="rounded-md border border-brand-green/15 bg-brand-green/5 px-3 py-2 text-xs text-foreground">
           <p className="font-medium">Why Donnit suggested this</p>
           <p className="mt-0.5 text-muted-foreground">{insight.why}</p>
           {(insight.estimate || insight.excerpt) && (
@@ -292,15 +305,18 @@ export default function SuggestionCard({
       )}
 
       {insight.nextSteps.length > 0 && (
-        <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-foreground" data-testid={`list-action-items-${suggestion.id}`}>
-          {insight.nextSteps.map((item, index) => (
-            <li key={`${suggestion.id}-ai-${index}`}>{item}</li>
-          ))}
-        </ul>
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <p className="ui-label mb-1">Proposed next steps</p>
+          <ul className="list-disc space-y-0.5 pl-4 text-xs text-foreground" data-testid={`list-action-items-${suggestion.id}`}>
+            {insight.nextSteps.map((item, index) => (
+              <li key={`${suggestion.id}-ai-${index}`}>{item}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {(preview || body) && (
-        <div className="mt-2 rounded-sm bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+        <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {expanded && body ? (
             <div className="space-y-2">
               <p className="font-medium text-foreground">Donnit interpretation</p>
@@ -334,7 +350,7 @@ export default function SuggestionCard({
       )}
 
       {canReplyToSource && (suggestion.replySuggested || sourceLabel === "Email") && (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-sm border border-brand-green/20 bg-brand-green/5 px-2 py-2 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-brand-green/20 bg-brand-green/5 px-3 py-2 text-xs">
           <div className="min-w-0">
             <p className="font-medium text-foreground">Need to respond?</p>
             <p className="text-muted-foreground">
@@ -354,7 +370,7 @@ export default function SuggestionCard({
         </div>
       )}
 
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {editing ? (
           <>
             <Button
@@ -416,6 +432,7 @@ export default function SuggestionCard({
             Reply
           </Button>
         )}
+      </div>
       </div>
       </div>
       <Dialog open={replyOpen} onOpenChange={setReplyOpen}>

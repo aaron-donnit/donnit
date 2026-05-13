@@ -336,7 +336,7 @@ export default function TaskList({
                 {reviewTasks.map((task) => (
                   <div
                     key={task.id}
-                    className="task-row flex-col items-stretch"
+                    className="rounded-md border border-border bg-card p-3 shadow-sm"
                     data-testid={`row-needs-review-task-${task.id}`}
                   >
                     <div className="flex items-start justify-between gap-3">
