@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Id, PositionProfile, Task, TaskEvent, TaskSubtask, User } from "@/app/types";
+import type { EmailSuggestion, Id, PositionProfile, SuggestionPatch, Task, TaskEvent, TaskSubtask, User } from "@/app/types";
 import { urgencyLabel, statusLabels } from "@/app/lib/urgency";
 import { localDateIso, addLocalDays, taskDueLabel } from "@/app/lib/date";
 import { taskRepeatLabel } from "@/app/lib/task-text";
@@ -14,11 +14,13 @@ import { invalidateWorkspace } from "@/app/lib/hooks";
 import { activityEventLabel } from "@/app/lib/activity";
 import TaskRow from "@/app/tasks/TaskRow";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
+import SuggestionCard from "@/app/inbox/SuggestionCard";
 
 export type TaskStatusFilter = "open" | "today" | "overdue" | "needs_acceptance" | "completed";
 
 export default function TaskList({
   tasks,
+  suggestions = [],
   users,
   subtasks = [],
   events = [],
@@ -33,6 +35,7 @@ export default function TaskList({
   onStatusFilterChange,
 }: {
   tasks: Task[];
+  suggestions?: EmailSuggestion[];
   users: User[];
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
@@ -51,7 +54,7 @@ export default function TaskList({
   const [dialogTaskId, setDialogTaskId] = useState<string | null>(null);
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
-  const [taskView, setTaskView] = useState<"active" | "mine" | "done" | "all">("active");
+  const [taskView, setTaskView] = useState<"active" | "mine" | "review" | "done" | "all">("active");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const visibleTasks = useMemo(
     () =>
@@ -96,6 +99,27 @@ export default function TaskList({
       });
       setCompletingId(null);
     },
+  });
+  const approveSuggestion = useMutation({
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/approve`),
+    onSuccess: invalidateWorkspace,
+  });
+  const dismissSuggestion = useMutation({
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/suggestions/${id}/dismiss`),
+    onSuccess: invalidateWorkspace,
+  });
+  const acceptTask = useMutation({
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/accept`),
+    onSuccess: invalidateWorkspace,
+  });
+  const denyTask = useMutation({
+    mutationFn: async (id: Id) => apiRequest("POST", `/api/tasks/${id}/deny`, { note: "Not the right owner." }),
+    onSuccess: invalidateWorkspace,
+  });
+  const updateSuggestion = useMutation({
+    mutationFn: async ({ id, patch }: { id: Id; patch: SuggestionPatch }) =>
+      apiRequest("PATCH", `/api/suggestions/${id}`, patch),
+    onSuccess: invalidateWorkspace,
   });
 
   // Sort for execution: completion last, then time pressure, urgency, shorter work, and age.
@@ -164,13 +188,23 @@ export default function TaskList({
     if (statusFilter === "completed") return task.status === "completed";
     return true;
   };
-  const effectiveTaskView = statusFilter === "completed" ? "done" : statusFilter ? "active" : taskView;
+  const pendingSuggestions = suggestions.filter((suggestion) => suggestion.status === "pending");
+  const pendingTaskCount = visibleTasks.filter((task) => task.status === "pending_acceptance").length;
+  const effectiveTaskView =
+    statusFilter === "completed"
+      ? "done"
+      : statusFilter === "needs_acceptance"
+        ? "review"
+        : statusFilter
+          ? "active"
+          : taskView;
   const scopedTasks = visibleTasks.filter((task) => {
     if (effectiveTaskView === "mine" && !isMineTask(task)) return false;
     return matchesTaskSearch(task);
   });
   const filteredTasks = scopedTasks.filter((task) => {
     if (effectiveTaskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
+    if (effectiveTaskView === "review" && task.status !== "pending_acceptance") return false;
     if (effectiveTaskView === "done" && task.status !== "completed") return false;
     return matchesStatusFilter(task);
   });
@@ -192,6 +226,7 @@ export default function TaskList({
   });
 
   const open = sorted.filter((t) => t.status !== "completed" && t.status !== "denied");
+  const reviewTasks = effectiveTaskView === "review" ? open.filter((task) => task.status === "pending_acceptance") : [];
   const newTaskCutoff = nowMs - 30 * 60 * 1000;
   const newTasks = open
     .filter((task) => {
@@ -200,9 +235,9 @@ export default function TaskList({
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 2);
-  const showNewTaskBucket = !statusFilter || statusFilter === "open";
+  const showNewTaskBucket = (!statusFilter || statusFilter === "open") && effectiveTaskView !== "review";
   const newTaskIds = new Set(showNewTaskBucket ? newTasks.map((task) => String(task.id)) : []);
-  const prioritizedOpen = open.filter((task) => !newTaskIds.has(String(task.id)));
+  const prioritizedOpen = effectiveTaskView === "review" ? [] : open.filter((task) => !newTaskIds.has(String(task.id)));
   const done =
     statusFilter && statusFilter !== "completed"
       ? []
@@ -239,6 +274,7 @@ export default function TaskList({
         {([
           ["active", "Active", visibleTasks.filter((task) => task.status !== "completed" && task.status !== "denied").length],
           ["mine", "Mine", null],
+          ["review", "Needs Review", pendingTaskCount + pendingSuggestions.length],
           ["done", "Done", visibleTasks.filter((task) => task.status === "completed").length],
           ["all", "All", null],
         ] as Array<[string, string, number | null]>).map(([id, label, count]) => (
@@ -247,9 +283,9 @@ export default function TaskList({
             type="button"
             onClick={() => {
               onStatusFilterChange?.(null);
-              setTaskView(id as "active" | "mine" | "done" | "all");
+              setTaskView(id as "active" | "mine" | "review" | "done" | "all");
             }}
-            className={`work-tab${!statusFilter && taskView === id ? " active" : ""}`}
+            className={`work-tab${effectiveTaskView === id ? " active" : ""}`}
             data-testid={`button-task-view-${id}`}
           >
             {label}
@@ -271,6 +307,87 @@ export default function TaskList({
 
       <div className={inlineDetail ? "tasks-split-layout" : ""}>
       <div className="flex flex-col gap-2 px-4 py-4">
+        {effectiveTaskView === "review" && (
+          <div className="space-y-2">
+            <div className="task-group-head bucket-review" data-testid="task-group-head-review">
+              <span className="task-group-dot is-upcoming" aria-hidden="true" />
+              <span className="task-group-label">Needs review</span>
+              <span className="task-group-detail">Scanned emails and assigned tasks waiting for your decision</span>
+              <span className="task-group-count">{pendingTaskCount + pendingSuggestions.length}</span>
+            </div>
+            {pendingSuggestions.length > 0 && (
+              <div className="space-y-2" data-testid="section-needs-review-suggestions">
+                {pendingSuggestions.map((suggestion) => (
+                  <SuggestionCard
+                    key={suggestion.id}
+                    suggestion={suggestion}
+                    onApprove={() => approveSuggestion.mutate(suggestion.id)}
+                    onDismiss={() => dismissSuggestion.mutate(suggestion.id)}
+                    onSaveEdits={(id, patch) => updateSuggestion.mutate({ id, patch })}
+                    approving={approveSuggestion.isPending}
+                    dismissing={dismissSuggestion.isPending}
+                    saving={updateSuggestion.isPending}
+                  />
+                ))}
+              </div>
+            )}
+            {reviewTasks.length > 0 && (
+              <div className="space-y-2" data-testid="section-needs-review-tasks">
+                {reviewTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="task-row flex-col items-stretch"
+                    data-testid={`row-needs-review-task-${task.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground break-words">{task.title}</p>
+                        {task.description && (
+                          <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{task.description}</p>
+                        )}
+                      </div>
+                      <span className="ui-label whitespace-nowrap">{urgencyLabel(task.urgency)}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>Due {task.dueDate ?? "not set"}</span>
+                      <span>{task.estimatedMinutes} min</span>
+                      <span>Source: {task.source}</span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => acceptTask.mutate(task.id)}
+                        disabled={acceptTask.isPending || denyTask.isPending}
+                        data-testid={`button-needs-review-accept-${task.id}`}
+                      >
+                        <Check className="size-4" />
+                        Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => denyTask.mutate(task.id)}
+                        disabled={acceptTask.isPending || denyTask.isPending}
+                        data-testid={`button-needs-review-deny-${task.id}`}
+                      >
+                        Deny
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedTaskId(String(task.id))}
+                        data-testid={`button-needs-review-open-${task.id}`}
+                      >
+                        Open
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {showNewTaskBucket && (
           <div className="space-y-2">
             <div className="task-group-head bucket-upcoming" data-testid="task-group-head-new">
@@ -301,14 +418,14 @@ export default function TaskList({
           </div>
         )}
 
-        {open.length === 0 && done.length === 0 ? (
+        {open.length === 0 && done.length === 0 && !(effectiveTaskView === "review" && pendingSuggestions.length > 0) ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">
             <Search className="mx-auto size-8 text-brand-green" />
             <p className="display-font mt-3 text-base font-bold">
-              {taskSearch.trim() ? "No matching tasks." : "Plate's clear."}
+              {taskSearch.trim() ? "No matching tasks." : effectiveTaskView === "review" ? "Nothing needs review." : "Plate's clear."}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {taskSearch.trim() ? "Try a different keyword, owner, source, or status." : "Done. That's one less thing."}
+              {taskSearch.trim() ? "Try a different keyword, owner, source, or status." : effectiveTaskView === "review" ? "Scanned emails and assigned tasks that need approval will appear here." : "Done. That's one less thing."}
             </p>
           </div>
         ) : (

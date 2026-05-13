@@ -484,13 +484,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         title: "Email scan complete",
         description:
           created > 0
-            ? `Added ${created} new unread email${created === 1 ? "" : "s"} to your queue.`
+            ? `Added ${created} new unread email${created === 1 ? "" : "s"} to Needs Review.`
             : scanned > 0
               ? "No new unread emails to add. Existing suggestions are already queued."
               : "No matching unread emails found.",
       });
-      if (created > 0) {
-        setApprovalInboxOpen(true);
+      if (created > 0 || scanned > 0) {
+        openAppView("tasks");
+        setTaskStatusFilter("needs_acceptance");
+        setApprovalInboxOpen(false);
       }
     },
     onError: (error: unknown) => {
@@ -1710,6 +1712,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               <TaskList
                 key={`home-tasks-${viewResetKeys.home}`}
                 tasks={scopedDisplayTasks}
+                suggestions={currentUserQueueSuggestions}
                 users={data.users}
                 subtasks={data.subtasks ?? []}
                 events={data.events}
@@ -1787,6 +1790,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
               <TaskList
                 key={`tasks-${viewResetKeys.tasks}`}
                 tasks={scopedDisplayTasks}
+                suggestions={currentUserQueueSuggestions}
                 users={data.users}
                 subtasks={data.subtasks ?? []}
                 events={data.events}
