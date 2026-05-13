@@ -383,7 +383,7 @@ export default function TaskDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-2xl`}>
-        <DialogHeader className="relative shrink-0 border-b border-border px-5 py-4 pr-24">
+        <DialogHeader className="relative shrink-0 border-b border-border px-5 pb-4 pr-24 pt-4">
           <div className="absolute right-14 top-4">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -519,9 +519,24 @@ export default function TaskDetailDialog({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <DialogTitle>Task details</DialogTitle>
+          {task && (
+            <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+              <span className="text-foreground/70">#{task.id}</span>
+              <span className="text-muted-foreground/40">·</span>
+              <span className="capitalize">{task.source ?? "manual"}</span>
+              {task.urgency && task.urgency !== "normal" && (
+                <>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span className={task.urgency === "critical" || task.urgency === "high" ? "text-brand-alert" : "text-brand-amber"}>
+                    {task.urgency}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          <DialogTitle className="text-base font-semibold leading-snug">{title || task?.title || "Task details"}</DialogTitle>
           <DialogDescription>
-            Owned by {assignee?.name ?? "Unknown"} - assigned by {assigner?.name ?? "Unknown"}
+            Owned by {assignee?.name ?? "Unknown"} · assigned by {assigner?.name ?? "Unknown"}
             {delegate ? `, delegated to ${delegate.name}` : ""}.
             {readOnly ? " You are viewing this as a manager; changes are disabled." : ""}
           </DialogDescription>

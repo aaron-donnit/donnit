@@ -205,35 +205,34 @@ export default function TaskList({
         </span>
       </div>
 
-      <div className="grid gap-2 border-b border-border px-4 py-3 lg:grid-cols-[1fr_auto] lg:items-center">
+      <div className="work-toolbar border-b border-border px-2">
+        {([
+          ["active", "Active", open.length + done.length],
+          ["mine", "Mine", null],
+          ["done", "Done", done.length],
+          ["all", "All", null],
+        ] as Array<[string, string, number | null]>).map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTaskView(id as "active" | "mine" | "done" | "all")}
+            className={`work-tab${taskView === id ? " active" : ""}`}
+            data-testid={`button-task-view-${id}`}
+          >
+            {label}
+            {count != null && <span className="work-tab-count">{count}</span>}
+          </button>
+        ))}
+        <span className="flex-1" />
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={taskSearch}
             onChange={(event) => setTaskSearch(event.target.value)}
-            placeholder="Search tasks, owners, sources, notes..."
-            className="h-9 pl-9 text-sm"
+            placeholder="Search..."
+            className="h-7 w-40 pl-7 text-xs"
             data-testid="input-task-list-search"
           />
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {[
-            ["active", "Active"],
-            ["mine", "Mine"],
-            ["done", "Done"],
-            ["all", "All"],
-          ].map(([id, label]) => (
-            <Button
-              key={id}
-              type="button"
-              variant={taskView === id ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTaskView(id as "active" | "mine" | "done" | "all")}
-              data-testid={`button-task-view-${id}`}
-            >
-              {label}
-            </Button>
-          ))}
         </div>
       </div>
 

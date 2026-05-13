@@ -1136,6 +1136,48 @@
     color: hsl(var(--brand-alert));
   }
 
+  /* ── Work toolbar — tab strip above task lists ── */
+  .work-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 36px;
+  }
+
+  .work-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 5px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    border: 0;
+    background: transparent;
+    transition: background 120ms ease, color 120ms ease;
+    white-space: nowrap;
+  }
+
+  .work-tab:hover { background: hsl(var(--muted) / 0.6); color: hsl(var(--foreground)); }
+
+  .work-tab.active {
+    background: hsl(var(--muted));
+    color: hsl(var(--foreground));
+  }
+
+  .work-tab-count {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: hsl(var(--muted-foreground));
+    min-width: 16px;
+    text-align: center;
+  }
+
+  .work-tab.active .work-tab-count { color: hsl(var(--brand-green)); }
+
   /* Task group head — sticky bucket header with colored dot + count (lift from proto-tasks-shared) */
   .task-group-head {
     display: flex;
@@ -1213,36 +1255,123 @@
     text-transform: lowercase;
   }
 
-  .command-chat-panel textarea {
-    border-radius: 0.5rem;
+  /* ── Composer box (proto-style unified card) ── */
+  .composer-box {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.625rem;
+    background: hsl(var(--card));
+    box-shadow: 0 1px 3px rgba(28, 31, 36, 0.06);
+    overflow: hidden;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
   }
 
-  .composer-preview {
+  .composer-box:focus-within {
+    border-color: hsl(var(--brand-green) / 0.45);
+    box-shadow: 0 1px 3px rgba(28, 31, 36, 0.06), 0 0 0 3px hsl(var(--brand-green) / 0.1);
+  }
+
+  .composer-input {
+    display: block;
+    width: 100%;
+    border: 0;
+    outline: none;
+    resize: none;
+    padding: 14px 16px 8px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+    background: transparent;
+    color: hsl(var(--foreground));
+  }
+
+  .composer-input::placeholder { color: hsl(var(--muted-foreground)); }
+
+  .composer-bar {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    border: 1px solid hsl(var(--brand-green) / 0.25);
-    border-radius: 0.5rem;
-    background: hsl(var(--brand-green-pale) / 0.7);
-    padding: 0.55rem 0.7rem;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 8px 10px 10px;
+    border-top: 1px dashed hsl(var(--border));
   }
 
   .composer-chip {
     display: inline-flex;
     align-items: center;
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.375rem;
-    background: hsl(var(--muted) / 0.3);
-    padding: 0.25rem 0.45rem;
-    color: hsl(var(--muted-foreground));
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 11px;
+    border: 1px dashed hsl(var(--border));
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
-    line-height: 1;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.4);
+    white-space: nowrap;
   }
 
   .composer-chip.is-set {
-    border-color: hsl(var(--brand-green) / 0.32);
-    background: hsl(var(--brand-green-pale) / 0.75);
-    color: hsl(var(--foreground));
+    border-style: solid;
+    border-color: hsl(var(--brand-green) / 0.35);
+    background: hsl(var(--brand-green-pale));
+    color: hsl(156 100% 22%);
+  }
+
+  .composer-kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: hsl(var(--muted-foreground));
+    padding: 1px 5px;
+    border: 1px solid hsl(var(--border));
+    border-radius: 3px;
+    background: hsl(var(--muted) / 0.5);
+    white-space: nowrap;
+  }
+
+  .composer-send {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 5px;
+    background: hsl(var(--brand-green));
+    color: white;
+    font-size: 12.5px;
+    font-weight: 500;
+    border: 0;
+    cursor: pointer;
+    transition: background 140ms ease;
+  }
+
+  .composer-send:hover:not(.is-disabled) { background: hsl(156 100% 32%); }
+
+  .composer-send.is-disabled {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+    border: 1px solid hsl(var(--border));
+    cursor: default;
+  }
+
+  /* Parse preview strip */
+  .parse-preview {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid hsl(var(--brand-green) / 0.25);
+    border-radius: 0.5rem;
+    background: hsl(var(--brand-green) / 0.04);
+    padding: 10px 14px;
+    font-size: 12.5px;
+  }
+
+  .parse-preview-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: hsl(var(--brand-green));
+    white-space: nowrap;
   }
 
   .position-profiles-shell {
