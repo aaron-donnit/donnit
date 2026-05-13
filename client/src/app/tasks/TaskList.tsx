@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, History, Loader2, Pin, Search } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, History, Loader2, Pin, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
@@ -55,6 +55,7 @@ export default function TaskList({
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
   const [taskView, setTaskView] = useState<"active" | "mine" | "review" | "done" | "all">("active");
+  const [reviewIndex, setReviewIndex] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const visibleTasks = useMemo(
     () =>
@@ -227,6 +228,21 @@ export default function TaskList({
 
   const open = sorted.filter((t) => t.status !== "completed" && t.status !== "denied");
   const reviewTasks = effectiveTaskView === "review" ? open.filter((task) => task.status === "pending_acceptance") : [];
+  const reviewItems = [
+    ...pendingSuggestions.map((suggestion) => ({
+      id: `suggestion-${suggestion.id}`,
+      kind: "suggestion" as const,
+      suggestion,
+    })),
+    ...reviewTasks.map((task) => ({
+      id: `task-${task.id}`,
+      kind: "task" as const,
+      task,
+    })),
+  ];
+  const reviewCount = reviewItems.length;
+  const activeReviewIndex = Math.min(reviewIndex, Math.max(0, reviewCount - 1));
+  const activeReviewItem = reviewItems[activeReviewIndex] ?? null;
   const newTaskCutoff = nowMs - 30 * 60 * 1000;
   const newTasks = open
     .filter((task) => {
@@ -255,6 +271,18 @@ export default function TaskList({
   const inlineAssignee = inlineTask ? users.find((user) => String(user.id) === String(inlineTask.assignedToId)) : null;
   const inlineTaskEvents = inlineTask ? events.filter((event) => String(event.taskId) === String(inlineTask.id)).slice(0, 4) : [];
   const inlineTaskSubtasks = inlineTask ? subtasks.filter((subtask) => String(subtask.taskId) === String(inlineTask.id)) : [];
+
+  useEffect(() => {
+    setReviewIndex((current) => Math.min(current, Math.max(0, reviewCount - 1)));
+  }, [reviewCount]);
+
+  const showPreviousReviewItem = () => {
+    setReviewIndex((current) => (reviewCount <= 1 ? current : current <= 0 ? reviewCount - 1 : current - 1));
+  };
+
+  const showNextReviewItem = () => {
+    setReviewIndex((current) => (reviewCount <= 1 ? current : (current + 1) % reviewCount));
+  };
 
   return (
     <div className="panel flex flex-col" data-testid="panel-tasks">
@@ -289,7 +317,7 @@ export default function TaskList({
             data-testid={`button-task-view-${id}`}
           >
             {label}
-            {count != null && <span className="work-tab-count">{count}</span>}
+            {count != null && <span className={`work-tab-count${id === "review" && count > 0 ? " is-alert" : ""}`}>{count}</span>}
           </button>
         ))}
         <span className="flex-1" />
@@ -313,52 +341,47 @@ export default function TaskList({
               <span className="task-group-dot is-upcoming" aria-hidden="true" />
               <span className="task-group-label">Needs review</span>
               <span className="task-group-detail">Scanned emails and assigned tasks waiting for your decision</span>
-              <span className="task-group-count">{pendingTaskCount + pendingSuggestions.length}</span>
+              <span className={`task-group-count${reviewCount > 0 ? " is-alert" : ""}`}>{reviewCount}</span>
             </div>
-            {pendingSuggestions.length > 0 && (
-              <div className="space-y-2" data-testid="section-needs-review-suggestions">
-                {pendingSuggestions.map((suggestion) => (
+            {activeReviewItem && (
+              <div className="space-y-2" data-testid="section-needs-review-items">
+                {activeReviewItem.kind === "suggestion" ? (
                   <SuggestionCard
-                    key={suggestion.id}
-                    suggestion={suggestion}
-                    onApprove={() => approveSuggestion.mutate(suggestion.id)}
-                    onDismiss={() => dismissSuggestion.mutate(suggestion.id)}
+                    key={activeReviewItem.id}
+                    suggestion={activeReviewItem.suggestion}
+                    onApprove={() => approveSuggestion.mutate(activeReviewItem.suggestion.id)}
+                    onDismiss={() => dismissSuggestion.mutate(activeReviewItem.suggestion.id)}
                     onSaveEdits={(id, patch) => updateSuggestion.mutate({ id, patch })}
                     approving={approveSuggestion.isPending}
                     dismissing={dismissSuggestion.isPending}
                     saving={updateSuggestion.isPending}
                   />
-                ))}
-              </div>
-            )}
-            {reviewTasks.length > 0 && (
-              <div className="space-y-2" data-testid="section-needs-review-tasks">
-                {reviewTasks.map((task) => (
+                ) : (
                   <div
-                    key={task.id}
+                    key={activeReviewItem.id}
                     className="rounded-md border border-border bg-card p-3 shadow-sm"
-                    data-testid={`row-needs-review-task-${task.id}`}
+                    data-testid={`row-needs-review-task-${activeReviewItem.task.id}`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground break-words">{task.title}</p>
-                        {task.description && (
-                          <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{task.description}</p>
+                        <p className="text-sm font-medium text-foreground break-words">{activeReviewItem.task.title}</p>
+                        {activeReviewItem.task.description && (
+                          <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{activeReviewItem.task.description}</p>
                         )}
                       </div>
-                      <span className="ui-label whitespace-nowrap">{urgencyLabel(task.urgency)}</span>
+                      <span className="ui-label whitespace-nowrap">{urgencyLabel(activeReviewItem.task.urgency)}</span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span>Due {task.dueDate ?? "not set"}</span>
-                      <span>{task.estimatedMinutes} min</span>
-                      <span>Source: {task.source}</span>
+                      <span>Due {activeReviewItem.task.dueDate ?? "not set"}</span>
+                      <span>{activeReviewItem.task.estimatedMinutes} min</span>
+                      <span>Source: {activeReviewItem.task.source}</span>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         size="sm"
-                        onClick={() => acceptTask.mutate(task.id)}
+                        onClick={() => acceptTask.mutate(activeReviewItem.task.id)}
                         disabled={acceptTask.isPending || denyTask.isPending}
-                        data-testid={`button-needs-review-accept-${task.id}`}
+                        data-testid={`button-needs-review-accept-${activeReviewItem.task.id}`}
                       >
                         <Check className="size-4" />
                         Accept
@@ -366,23 +389,50 @@ export default function TaskList({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => denyTask.mutate(task.id)}
+                        onClick={() => denyTask.mutate(activeReviewItem.task.id)}
                         disabled={acceptTask.isPending || denyTask.isPending}
-                        data-testid={`button-needs-review-deny-${task.id}`}
+                        data-testid={`button-needs-review-deny-${activeReviewItem.task.id}`}
                       >
                         Deny
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => setSelectedTaskId(String(task.id))}
-                        data-testid={`button-needs-review-open-${task.id}`}
+                        onClick={() => setSelectedTaskId(String(activeReviewItem.task.id))}
+                        data-testid={`button-needs-review-open-${activeReviewItem.task.id}`}
                       >
                         Open
                       </Button>
                     </div>
                   </div>
-                ))}
+                )}
+                {reviewCount > 1 && (
+                  <div className="flex items-center justify-end gap-2" data-testid="needs-review-carousel-controls">
+                    <span className="ui-label tabular-nums">{activeReviewIndex + 1} / {reviewCount}</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-8"
+                      onClick={showPreviousReviewItem}
+                      aria-label="Previous review item"
+                      data-testid="button-needs-review-previous"
+                    >
+                      <ChevronLeft className="size-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-8"
+                      onClick={showNextReviewItem}
+                      aria-label="Next review item"
+                      data-testid="button-needs-review-next"
+                    >
+                      <ChevronRight className="size-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -418,7 +468,7 @@ export default function TaskList({
           </div>
         )}
 
-        {open.length === 0 && done.length === 0 && !(effectiveTaskView === "review" && pendingSuggestions.length > 0) ? (
+        {open.length === 0 && done.length === 0 && !(effectiveTaskView === "review" && reviewCount > 0) ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">
             <Search className="mx-auto size-8 text-brand-green" />
             <p className="display-font mt-3 text-base font-bold">

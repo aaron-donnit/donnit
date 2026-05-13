@@ -1318,11 +1318,18 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: hsl(var(--muted-foreground));
+    font-weight: 500;
     min-width: 16px;
     text-align: center;
   }
 
   .work-tab.active .work-tab-count { color: hsl(var(--brand-green)); }
+
+  .work-tab-count.is-alert,
+  .work-tab.active .work-tab-count.is-alert {
+    color: hsl(var(--brand-alert));
+    font-weight: 800;
+  }
 
   /* Task group head — sticky bucket header with colored dot + count (lift from proto-tasks-shared) */
   .task-group-head {
@@ -1387,6 +1394,13 @@
     min-width: 1.25rem;
     text-align: center;
     line-height: 1.4;
+  }
+
+  .task-group-head .task-group-count.is-alert {
+    color: hsl(var(--brand-alert));
+    font-weight: 800;
+    background: hsl(var(--brand-alert) / 0.08);
+    border-color: hsl(var(--brand-alert) / 0.35);
   }
 
   /* Source pill — small mono tag for non-manual task origin (proto-tasks-shared `.src`) */
