@@ -1336,17 +1336,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     ...(canOpenManagerReports
       ? [
           {
-            id: "mvp-readiness",
-            label: "MVP readiness",
-            icon: ShieldCheck,
-            onClick: openMvpReadiness,
-            hint: "Show the Thursday demo readiness checklist",
-          } satisfies FunctionAction,
-        ]
-      : []),
-    ...(canOpenManagerReports
-      ? [
-          {
             id: "manager-report",
             label: "Reporting",
             icon: BarChart3,
@@ -1596,16 +1585,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <span
-                  className="hidden text-xs text-muted-foreground md:inline"
-                  data-testid="text-app-mode"
-                >
-                  {auth.authenticated
-                    ? `signed in as ${auth.email ?? "you"}`
-                    : supabaseConfig.configured
-                    ? "build preview"
-                    : "demo (Supabase not configured)"}
-                </span>
                 <WorkspaceMenu primaryActions={dailyActions} menuGroups={menuGroups} />
                 <NotificationCenter
                   notifications={notifications}
@@ -1969,31 +1948,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <section key={`admin-${viewResetKeys.admin}`} className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 lg:px-6">
               {canOpenManagerReports ? (
                 <>
-                  {showMvpReadiness && (
-                    <MvpReadinessPanel steps={mvpReadinessSteps} onDismiss={dismissMvpReadiness} />
-                  )}
-                  {showOnboarding && (
-                    <OnboardingChecklist steps={onboardingSteps} onDismiss={() => dismissOnboarding(true)} />
-                  )}
-                  {showDemoGuide && (
-                    <DemoWorkspaceGuide
-                      users={data.users}
-                      tasks={data.tasks}
-                      suggestions={data.suggestions}
-                      positionProfiles={positionProfiles}
-                      onOpenTeam={() => openAppView("team")}
-                      onOpenApprovals={() => {
-                        openAppView("inbox");
-                        setApprovalInboxOpen(true);
-                      }}
-                      onOpenReports={() => openAppView("reports")}
-                      onOpenPositionProfiles={() => openAppView("profiles")}
-                      onDismiss={() => {
-                        setDemoGuideDismissed(true);
-                        setDemoGuideManuallyOpen(false);
-                      }}
-                    />
-                  )}
+                  <div className="rounded-md border border-border bg-card p-4">
+                    <p className="text-sm font-medium text-foreground">Admin</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Manage members, Position Profile ownership, reusable templates, and workspace controls.
+                    </p>
+                  </div>
                   <div className="grid gap-4 xl:grid-cols-[1fr_.9fr]">
                     {Boolean(data.authenticated) && <TaskTemplatesPanel templates={data.taskTemplates ?? []} authenticated={Boolean(data.authenticated)} />}
                     <WorkspaceMembersPanel
@@ -2021,16 +1981,29 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "settings" && (
-            <section key={`settings-${viewResetKeys.settings}`} className="mx-auto w-full max-w-3xl px-4 py-4 lg:px-6">
-              <div className="rounded-md border border-border bg-card p-5">
+            <section key={`settings-${viewResetKeys.settings}`} className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-6">
+              <div className="mb-4 rounded-md border border-border bg-card p-5">
                 <p className="text-sm font-medium text-foreground">Settings</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Personal signature, connected tools, and workspace preferences are grouped here while deeper admin controls live in Admin.
+                  Personal preferences, integrations, automation behavior, and workspace controls are grouped by what users expect to change.
                 </p>
-                <Button className="mt-4" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid="button-settings-open-workspace">
-                  <Settings className="size-4" />
-                  Open settings
-                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {[
+                  ["Personal", "Email signature and user-level preferences.", "Open personal settings"],
+                  ["Integrations", "Gmail, Calendar, Slack, Composio, and SMS status.", "Open integrations"],
+                  ["Automation", "Unread delay and auto-suggestion controls.", "Open automation"],
+                  ["Workspace", "Members, permissions, and workspace-wide defaults.", "Open workspace settings"],
+                ].map(([title, detail, action]) => (
+                  <div key={title} className="rounded-md border border-border bg-card p-4">
+                    <p className="text-sm font-medium text-foreground">{title}</p>
+                    <p className="mt-1 min-h-10 text-xs leading-5 text-muted-foreground">{detail}</p>
+                    <Button className="mt-3" size="sm" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid={`button-settings-open-${title.toLowerCase()}`}>
+                      <Settings className="size-4" />
+                      {action}
+                    </Button>
+                  </div>
+                ))}
               </div>
             </section>
           )}
@@ -2152,29 +2125,6 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         }}
       />
       <FloatingTaskBox task={activeTask} users={data.users} onClose={() => setActiveWorkTask(null)} />
-
-      <footer className="border-t border-border bg-background/80">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground lg:px-6">
-          <span>
-            Auth: {data.integrations.auth.provider} · Email loop:{" "}
-            {data.integrations.email.provider}
-            {oauthData?.connected
-              ? ` · Gmail OAuth: ${oauthData.email ?? "connected"}`
-              : oauthData?.requiresReconnect
-                ? " · Gmail OAuth: needs reconnect"
-                : oauthData?.configured && !oauthData?.connected
-                  ? " · Gmail OAuth: not connected"
-                  : !oauthData?.configured
-                    ? " · Gmail OAuth: not configured"
-                    : null}
-          </span>
-          <span className="flex items-center gap-3">
-            <span>
-              Reminders: {data.integrations.reminders.channelOrder.join(" → ")}
-            </span>
-          </span>
-        </div>
-      </footer>
         </div>
       </div>
     </main>

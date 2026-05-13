@@ -68,6 +68,11 @@ export default function TaskList({
   );
   const selectedTask = visibleTasks.find((task) => String(task.id) === selectedTaskId) ?? null;
   const dialogTask = visibleTasks.find((task) => String(task.id) === (dialogTaskId ?? selectedTaskId)) ?? null;
+  const previewTask = (id: Id) => setSelectedTaskId(String(id));
+  const openTaskEditor = (id: Id) => {
+    setSelectedTaskId(String(id));
+    if (inlineDetail) setDialogTaskId(String(id));
+  };
 
   useEffect(() => {
     setLocallyCompletedIds((current) => {
@@ -455,7 +460,8 @@ export default function TaskList({
                   events={events}
                   isCompleting={completingId === task.id && complete.isPending}
                   onComplete={() => complete.mutate(task.id)}
-                  onOpen={() => setSelectedTaskId(String(task.id))}
+                  onOpen={() => openTaskEditor(task.id)}
+                  onPreview={() => previewTask(task.id)}
                   onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
                   readOnly={readOnly}
                 />
@@ -506,7 +512,8 @@ export default function TaskList({
                   events={events}
                   isCompleting={completingId === task.id && complete.isPending}
                   onComplete={() => complete.mutate(task.id)}
-                  onOpen={() => setSelectedTaskId(String(task.id))}
+                  onOpen={() => openTaskEditor(task.id)}
+                  onPreview={() => previewTask(task.id)}
                   onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
                   readOnly={readOnly}
                 />
@@ -532,7 +539,8 @@ export default function TaskList({
                 events={events}
                 isCompleting={false}
                 onComplete={() => undefined}
-                onOpen={() => setSelectedTaskId(String(task.id))}
+                onOpen={() => openTaskEditor(task.id)}
+                onPreview={() => previewTask(task.id)}
                 onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
                 readOnly={readOnly}
               />

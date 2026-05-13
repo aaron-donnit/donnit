@@ -115,7 +115,7 @@ export default function ApprovalInboxDialog({
           </DialogTitle>
           <DialogDescription>
             {total > 0
-              ? `${total} item${total === 1 ? "" : "s"} waiting for manager review.`
+              ? `${total} item${total === 1 ? "" : "s"} waiting for review.`
               : "No pending approvals or email suggestions."}
           </DialogDescription>
         </DialogHeader>

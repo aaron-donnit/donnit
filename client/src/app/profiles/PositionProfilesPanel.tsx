@@ -341,8 +341,8 @@ export default function PositionProfilesPanel({
     if (authenticated) {
       if (!selectedProfile.persisted) {
         toast({
-          title: "Generated profile cannot be deleted",
-          description: "This profile is generated from active task history. Rename or create it first to save an admin record.",
+          title: "Save this Position Profile first",
+          description: "This profile is still being assembled from task history. Save it as an admin record before deleting it.",
         });
         return;
       }
@@ -365,7 +365,7 @@ export default function PositionProfilesPanel({
       if (!selectedProfile.persisted) {
         toast({
           title: "Save the Position Profile first",
-          description: "Generated profiles need to be saved before they can be archived.",
+          description: "Save this profile as an admin record before archiving it.",
         });
         return;
       }
@@ -552,7 +552,6 @@ export default function PositionProfilesPanel({
           profile.title,
           profile.status,
           ownerLabel,
-          profile.riskLevel,
           ...profile.tools,
           ...profile.stakeholders,
         ].join(" ").toLowerCase();
@@ -597,13 +596,7 @@ export default function PositionProfilesPanel({
           tone: "warning" as const,
           action: "Assign temporary coverage or transfer the profile before showing this in a live handoff.",
         }
-      : selectedProfile.riskLevel === "high"
-        ? {
-            label: "Needs manager review",
-            tone: "warning" as const,
-            action: "Review overdue work and add how-to notes for recurring responsibilities.",
-          }
-        : selectedProfile.recurringTasks.length === 0 && selectedProfile.completedTasks.length === 0
+      : selectedProfile.recurringTasks.length === 0 && selectedProfile.completedTasks.length === 0
           ? {
               label: "Learning",
               tone: "setup" as const,
@@ -725,12 +718,12 @@ export default function PositionProfilesPanel({
           if (!results.some((result) => result.id === item.id)) results.push(item);
         };
 
-        if (matches([selectedProfile.title, selectedProfile.status, selectedProfile.riskLevel, profileAssignmentLabel(selectedProfile, users)])) {
+        if (matches([selectedProfile.title, selectedProfile.status, profileAssignmentLabel(selectedProfile, users)])) {
           add({
             id: "profile-summary",
             type: "Profile",
             label: selectedProfile.title,
-            detail: `${profileAssignmentLabel(selectedProfile, users)} / ${selectedProfile.status} / Risk ${selectedProfile.riskScore}`,
+            detail: `${profileAssignmentLabel(selectedProfile, users)} / ${selectedProfile.status}`,
           });
         }
 
@@ -762,9 +755,6 @@ export default function PositionProfilesPanel({
             label: item.toolName,
             detail: `${item.accountOwner || "No owner noted"} / ${accessStatusLabels[item.status]}`,
           });
-        });
-        selectedProfile.riskReasons.forEach((item, index) => {
-          if (matches([item])) add({ id: `risk-${index}`, type: "Risk", label: item, detail: "Continuity risk" });
         });
         selectedProfile.transitionChecklist.forEach((item, index) => {
           if (matches([item])) add({ id: `checklist-${index}`, type: "Checklist", label: item, detail: "Transition step" });
@@ -1005,20 +995,6 @@ export default function PositionProfilesPanel({
                             Archived
                           </span>
                         )}
-                        <span
-                          className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
-                            profile.riskLevel === "high"
-                              ? "bg-destructive/10 text-destructive"
-                              : profile.riskLevel === "medium"
-                                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                                : "bg-brand-green/10 text-brand-green"
-                          }`}
-                        >
-                          Risk {profile.riskScore}
-                        </span>
-                        <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
-                          {profile.persisted ? "Saved" : "Generated"}
-                        </span>
                       </div>
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-5">
@@ -1187,21 +1163,9 @@ export default function PositionProfilesPanel({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">{selectedProfile.title}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {profileAssignmentLabel(selectedProfile, users)} - {selectedProfile.status} -{" "}
-                    {selectedProfile.persisted ? "saved admin record" : "generated from task history"}
+                    {profileAssignmentLabel(selectedProfile, users)} - {selectedProfile.status}
                   </p>
                 </div>
-                <span
-                  className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
-                    selectedProfile.riskLevel === "high"
-                      ? "bg-destructive/10 text-destructive"
-                      : selectedProfile.riskLevel === "medium"
-                        ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                        : "bg-brand-green/10 text-brand-green"
-                  }`}
-                >
-                  Risk {selectedProfile.riskScore}
-                </span>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                 <div className="rounded-md bg-muted px-2 py-2">

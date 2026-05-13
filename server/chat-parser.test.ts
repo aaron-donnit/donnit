@@ -86,6 +86,7 @@ describe("chat task parser", () => {
       display: "2:30",
     });
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 2:30pm")).toBeNull();
+    expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 14:30")).toBeNull();
   });
 
   it("does not ask for availability when an email already proposed a meeting time", () => {

@@ -365,7 +365,7 @@ export default function SuggestionCard({
             data-testid={`button-suggestion-draft-reply-inline-${suggestion.id}`}
           >
             {draftReply.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            Draft
+            Draft reply
           </Button>
         </div>
       )}
@@ -409,7 +409,7 @@ export default function SuggestionCard({
           disabled={approving || dismissing || editing}
           data-testid={`button-suggestion-approve-${suggestion.id}`}
         >
-          <Check className="size-4" /> Review and add
+          <Check className="size-4" /> Approve task
         </Button>
         <Button
           size="sm"

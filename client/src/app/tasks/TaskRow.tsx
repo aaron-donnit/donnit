@@ -42,6 +42,7 @@ export default function TaskRow({
   events = [],
   onComplete,
   onOpen,
+  onPreview,
   onPin,
   isCompleting,
   readOnly = false,
@@ -51,6 +52,7 @@ export default function TaskRow({
   events?: TaskEvent[];
   onComplete: () => void;
   onOpen: () => void;
+  onPreview?: () => void;
   onPin?: () => void;
   isCompleting: boolean;
   readOnly?: boolean;
@@ -81,7 +83,7 @@ export default function TaskRow({
       data-testid={`row-task-${task.id}`}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) return;
-        onOpen();
+        (onPreview ?? onOpen)();
       }}
     >
       {/* Col 1 — check circle */}

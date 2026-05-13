@@ -6101,6 +6101,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           recurrence: resolvedRecurrence,
           reminderDaysBefore: resolvedReminderDaysBefore,
         };
+    const ambiguousTime = ambiguousCompactClockTime(parsed.data.message);
+    if (ambiguousTime) {
+      await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
+      const assistant = await storage.createChatMessage({
+        role: "assistant",
+        content: `I can add "${taskInput.title}", but do you mean ${ambiguousTime.display} AM or PM?`,
+        taskId: null,
+      });
+      res.json({ assistant, pending: true });
+      return;
+    }
     if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedUser && !aiAssignee))) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assistant = await storage.createChatMessage({
