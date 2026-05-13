@@ -88,6 +88,100 @@ export function buildEmptyPositionProfile(record: PersistedPositionProfile, user
   return mergeProfileRecord(base, record);
 }
 
+function profileWithLinkedTasks(
+  profile: PositionProfile,
+  record: PersistedPositionProfile,
+  linkedTasks: Task[],
+  users: User[],
+  events: TaskEvent[],
+  today: string,
+) {
+  if (linkedTasks.length === 0) return profile;
+  const currentIncompleteTasks = linkedTasks.filter((task) => task.status !== "completed" && task.status !== "denied");
+  const completedTasks = linkedTasks.filter((task) => task.status === "completed");
+  const recurringTasks = linkedTasks.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
+  const criticalDates = Array.from(
+    new Set(
+      linkedTasks
+        .filter((task) => task.dueDate && (task.recurrence !== "none" || task.urgency === "critical" || task.urgency === "high"))
+        .map((task) => `${task.dueDate}: ${task.title}`),
+    ),
+  ).slice(0, 6);
+  const howTo = Array.from(
+    new Set(
+      linkedTasks
+        .map(taskKnowledgeText)
+        .filter((text) => text.length >= 30)
+        .map((text) => text.slice(0, 180)),
+    ),
+  ).slice(0, 6);
+  const stakeholders = users
+    .filter((candidate) =>
+      linkedTasks.some((task) => {
+        const text = `${task.title} ${task.description} ${task.completionNotes}`.toLowerCase();
+        return text.includes(candidate.name.toLowerCase()) || String(task.assignedById) === String(candidate.id);
+      }),
+    )
+    .map((candidate) => candidate.name)
+    .slice(0, 8);
+  const overdue = currentIncompleteTasks.filter((task) => task.dueDate && task.dueDate < today);
+  const high = currentIncompleteTasks.filter((task) => task.urgency === "critical" || task.urgency === "high");
+  const missingHowTo = recurringTasks.filter((task) => taskKnowledgeText(task).length < 30);
+  const tools = inferToolsFromTasks(linkedTasks);
+  const riskScore = Math.min(
+    100,
+    Math.max(
+      profile.riskScore,
+      overdue.length * 24 +
+        high.length * 12 +
+        Math.max(0, currentIncompleteTasks.length - 5) * 4 +
+        missingHowTo.length * 8 +
+        (tools.length === 0 && linkedTasks.length > 0 ? 8 : 0),
+    ),
+  );
+  const riskReasons = Array.from(
+    new Set([
+      ...profile.riskReasons,
+      overdue.length > 0 ? `${overdue.length} overdue linked task${overdue.length === 1 ? "" : "s"}` : "",
+      high.length > 0 ? `${high.length} high-urgency linked task${high.length === 1 ? "" : "s"}` : "",
+      missingHowTo.length > 0 ? `${missingHowTo.length} recurring linked item${missingHowTo.length === 1 ? "" : "s"} need better how-to notes` : "",
+      currentIncompleteTasks.length > 0 ? `${currentIncompleteTasks.length} active linked task${currentIncompleteTasks.length === 1 ? "" : "s"} to cover` : "",
+    ].filter(Boolean)),
+  ).slice(0, 6);
+  const recentEvent = events
+    .filter((event) => linkedTasks.some((task) => String(task.id) === String(event.taskId)))
+    .map((event) => event.createdAt)
+    .sort()
+    .at(-1);
+  const latestTaskDate = linkedTasks.map((task) => task.createdAt).sort().at(-1) ?? null;
+  return mergeProfileRecord(
+    {
+      ...profile,
+      currentIncompleteTasks,
+      recurringTasks,
+      completedTasks,
+      criticalDates: Array.from(new Set([...criticalDates, ...profile.criticalDates])).slice(0, 6),
+      howTo: Array.from(new Set([...howTo, ...profile.howTo])).slice(0, 6),
+      tools: Array.from(new Set([...tools, ...profile.tools])).slice(0, 8),
+      stakeholders: Array.from(new Set([...stakeholders, ...profile.stakeholders])).slice(0, 8),
+      riskScore,
+      riskLevel: riskScore >= 60 ? "high" : riskScore >= 30 ? "medium" : "low",
+      riskReasons,
+      transitionChecklist: Array.from(
+        new Set([
+          `Review ${currentIncompleteTasks.length} active linked task${currentIncompleteTasks.length === 1 ? "" : "s"}.`,
+          recurringTasks.length > 0
+            ? `Confirm next occurrence for ${recurringTasks.length} recurring linked ${recurringTasks.length === 1 ? "responsibility" : "responsibilities"}.`
+            : "Confirm whether this role has recurring responsibilities.",
+          ...profile.transitionChecklist,
+        ]),
+      ).slice(0, 7),
+      lastUpdatedAt: recentEvent ?? latestTaskDate ?? profile.lastUpdatedAt,
+    },
+    record,
+  );
+}
+
 export function buildPositionProfiles(
   tasks: Task[],
   users: User[],
@@ -207,7 +301,12 @@ export function buildPositionProfiles(
   for (const record of persistedProfiles) {
     if (usedRecordIds.has(record.id)) continue;
     const profile = buildEmptyPositionProfile(record, users);
-    if (profile) merged.push(profile);
+    if (profile) {
+      const linkedTasks = tasks.filter(
+        (task) => task.visibility !== "personal" && String(task.positionProfileId ?? "") === String(record.id),
+      );
+      merged.push(profileWithLinkedTasks(profile, record, linkedTasks, users, events, today));
+    }
   }
   return merged.sort((a, b) => a.title.localeCompare(b.title));
 }
