@@ -1868,6 +1868,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onDisconnectGmail={() => disconnectGmail.mutate()}
         onScanEmail={() => scan.mutate()}
         onOpenCalendarExport={() => setCalendarExportOpen(true)}
+        onOpenApprovalInbox={() => setApprovalInboxOpen(true)}
         isConnectingGmail={connectGmail.isPending}
         isDisconnectingGmail={disconnectGmail.isPending}
         isScanningEmail={scan.isPending}

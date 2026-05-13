@@ -121,6 +121,7 @@ export default function WorkspaceSettingsDialog({
   onDisconnectGmail,
   onScanEmail,
   onOpenCalendarExport,
+  onOpenApprovalInbox,
   isConnectingGmail,
   isDisconnectingGmail,
   isScanningEmail,
@@ -141,6 +142,7 @@ export default function WorkspaceSettingsDialog({
   onDisconnectGmail: () => void;
   onScanEmail: () => void;
   onOpenCalendarExport: () => void;
+  onOpenApprovalInbox: () => void;
   isConnectingGmail: boolean;
   isDisconnectingGmail: boolean;
   isScanningEmail: boolean;
@@ -159,6 +161,9 @@ export default function WorkspaceSettingsDialog({
   const smsData = smsStatus.data;
   const composioStatus = useComposioToolsStatus(authenticated);
   const composioToolCount = Array.isArray(composioStatus.data?.tools) ? composioStatus.data.tools.length : 0;
+  const [composioSource, setComposioSource] = useState<"email" | "slack">("email");
+  const [composioToolSlug, setComposioToolSlug] = useState("GMAIL_SEARCH_EMAILS");
+  const [composioArguments, setComposioArguments] = useState('{\n  "query": "is:unread newer_than:7d"\n}');
   const googleHealthLabel =
     oauthStatus?.health === "ready"
       ? "Ready"
@@ -231,6 +236,41 @@ export default function WorkspaceSettingsDialog({
       toast({
         title: "Slack test failed",
         description: "Donnit could not queue a Slack test suggestion.",
+        variant: "destructive",
+      });
+    },
+  });
+  const importComposio = useMutation({
+    mutationFn: async () => {
+      let parsedArguments: Record<string, unknown>;
+      try {
+        parsedArguments = JSON.parse(composioArguments || "{}") as Record<string, unknown>;
+      } catch {
+        throw new Error("Composio arguments must be valid JSON.");
+      }
+      const res = await apiRequest("POST", "/api/integrations/composio/import", {
+        source: composioSource,
+        toolSlug: composioToolSlug.trim(),
+        arguments: parsedArguments,
+        maxItems: 5,
+      });
+      return (await res.json()) as { ok: boolean; queued: number; readItems: number };
+    },
+    onSuccess: async (result) => {
+      await invalidateWorkspace();
+      toast({
+        title: result.queued > 0 ? "Composio import queued" : "Composio import reviewed",
+        description:
+          result.queued > 0
+            ? `${result.queued} suggestion${result.queued === 1 ? "" : "s"} added to the Approval inbox.`
+            : `Read ${result.readItems} item${result.readItems === 1 ? "" : "s"}, but Donnit did not find an actionable task.`,
+      });
+      if (result.queued > 0) onOpenApprovalInbox();
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Composio import failed",
+        description: apiErrorMessage(error, "Check the tool slug, arguments, and connected account in Composio."),
         variant: "destructive",
       });
     },
@@ -422,6 +462,67 @@ export default function WorkspaceSettingsDialog({
                 action={() => composioStatus.refetch()}
                 loading={composioStatus.isFetching}
               />
+              <div className="rounded-md border border-dashed border-border bg-muted/25 px-3 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Import from Composio</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Run a safe read tool and queue actionable results for approval.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => importComposio.mutate()}
+                    disabled={!composioStatus.data?.configured || !composioToolSlug.trim() || importComposio.isPending}
+                    data-testid="button-composio-import"
+                  >
+                    {importComposio.isPending ? <Loader2 className="size-4 animate-spin" /> : <Workflow className="size-4" />}
+                    Queue suggestions
+                  </Button>
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-[120px_1fr]">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="composio-source" className="ui-label">Source</Label>
+                    <select
+                      id="composio-source"
+                      value={composioSource}
+                      onChange={(event) => {
+                        const next = event.target.value as "email" | "slack";
+                        setComposioSource(next);
+                        setComposioToolSlug(next === "email" ? "GMAIL_SEARCH_EMAILS" : "SLACK_SEARCH_MESSAGES");
+                        setComposioArguments(next === "email" ? '{\n  "query": "is:unread newer_than:7d"\n}' : '{\n  "query": "after:yesterday"\n}');
+                      }}
+                      className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      data-testid="select-composio-source"
+                    >
+                      <option value="email">Email</option>
+                      <option value="slack">Slack</option>
+                    </select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="composio-tool-slug" className="ui-label">Tool slug</Label>
+                    <Input
+                      id="composio-tool-slug"
+                      value={composioToolSlug}
+                      onChange={(event) => setComposioToolSlug(event.target.value)}
+                      placeholder="GMAIL_SEARCH_EMAILS"
+                      className="h-9 font-mono text-xs"
+                      data-testid="input-composio-tool-slug"
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-1.5">
+                  <Label htmlFor="composio-arguments" className="ui-label">Arguments</Label>
+                  <Textarea
+                    id="composio-arguments"
+                    value={composioArguments}
+                    onChange={(event) => setComposioArguments(event.target.value)}
+                    className="min-h-[92px] font-mono text-xs"
+                    data-testid="input-composio-arguments"
+                  />
+                </div>
+              </div>
               <ConnectedToolRow
                 icon={Send}
                 name="SMS"
