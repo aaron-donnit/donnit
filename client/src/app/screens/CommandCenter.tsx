@@ -87,6 +87,7 @@ import TeamViewPanel from "@/app/reports/TeamViewPanel";
 import PositionProfilesPanel from "@/app/profiles/PositionProfilesPanel";
 import ActivityLogPanel from "@/app/activity/ActivityLogPanel";
 import CalendarExportDialog from "@/app/admin/CalendarExportDialog";
+import OrgChartPanel from "@/app/admin/OrgChartPanel";
 import TaskTemplatesPanel from "@/app/admin/TaskTemplatesPanel";
 import WorkspaceMembersPanel from "@/app/admin/WorkspaceMembersPanel";
 import WorkspaceSettingsDialog from "@/app/admin/WorkspaceSettingsDialog";
@@ -1915,6 +1916,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                       Manage members, Position Profile ownership, reusable templates, and workspace controls.
                     </p>
                   </div>
+                  <OrgChartPanel users={data.users} currentUser={currentUser} />
                   <div className="grid gap-4 xl:grid-cols-[1fr_.9fr]">
                     {Boolean(data.authenticated) && <TaskTemplatesPanel templates={data.taskTemplates ?? []} authenticated={Boolean(data.authenticated)} />}
                     <WorkspaceMembersPanel
