@@ -4589,6 +4589,7 @@ export const __chatParserTest = {
   parseTaskTime,
   parseTaskRecurrence,
   repeatDetailsFromDescription,
+  resolveChatPositionProfile,
   rewriteRequesterReferencesInTitle,
   chatTaskOutcome,
   titleFromMessage,

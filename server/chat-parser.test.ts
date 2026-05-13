@@ -115,4 +115,41 @@ describe("chat task parser", () => {
       "I assigned Nina Patel to update the company financial reports by June 1, 2026. It repeats First Monday of every month.",
     );
   });
+
+  it("asks for a profile only when a teammate owns more than one matching profile", () => {
+    const profiles = [
+      {
+        id: "profile-exec",
+        title: "Executive Assistant to the CEO",
+        current_owner_id: "user-nina",
+        temporary_owner_id: null,
+        delegate_user_id: null,
+      },
+      {
+        id: "profile-office",
+        title: "Office Manager",
+        current_owner_id: "user-nina",
+        temporary_owner_id: null,
+        delegate_user_id: null,
+      },
+    ];
+
+    expect(
+      __chatParserTest.resolveChatPositionProfile({
+        profiles: profiles as never,
+        assignedToId: "user-nina",
+        message: "Assign Nina to renew the vendor contract by Friday",
+        visibility: "work",
+      }),
+    ).toMatchObject({ positionProfileId: null, needsChoice: true });
+
+    expect(
+      __chatParserTest.resolveChatPositionProfile({
+        profiles: profiles as never,
+        assignedToId: "user-nina",
+        message: "Assign Nina under Office Manager to renew the vendor contract by Friday",
+        visibility: "work",
+      }),
+    ).toMatchObject({ positionProfileId: "profile-office", needsChoice: false });
+  });
 });
