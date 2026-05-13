@@ -15,6 +15,8 @@ import { activityEventLabel } from "@/app/lib/activity";
 import TaskRow from "@/app/tasks/TaskRow";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
 
+export type TaskStatusFilter = "open" | "today" | "overdue" | "needs_acceptance" | "completed";
+
 export default function TaskList({
   tasks,
   users,
@@ -27,6 +29,8 @@ export default function TaskList({
   onPinTask,
   readOnly = false,
   inlineDetail = false,
+  statusFilter = null,
+  onStatusFilterChange,
 }: {
   tasks: Task[];
   users: User[];
@@ -39,6 +43,8 @@ export default function TaskList({
   onPinTask?: (taskId: Id) => void;
   readOnly?: boolean;
   inlineDetail?: boolean;
+  statusFilter?: TaskStatusFilter | null;
+  onStatusFilterChange?: (filter: TaskStatusFilter | null) => void;
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -149,14 +155,24 @@ export default function TaskList({
       .toLowerCase();
     return haystack.includes(normalizedTaskSearch);
   };
+  const matchesStatusFilter = (task: Task) => {
+    if (!statusFilter) return true;
+    if (statusFilter === "open") return task.status !== "completed" && task.status !== "denied";
+    if (statusFilter === "today") return task.dueDate === today && task.status !== "completed" && task.status !== "denied";
+    if (statusFilter === "overdue") return Boolean(task.dueDate && task.dueDate < today && task.status !== "completed" && task.status !== "denied");
+    if (statusFilter === "needs_acceptance") return task.status === "pending_acceptance";
+    if (statusFilter === "completed") return task.status === "completed";
+    return true;
+  };
+  const effectiveTaskView = statusFilter === "completed" ? "done" : statusFilter ? "active" : taskView;
   const scopedTasks = visibleTasks.filter((task) => {
-    if (taskView === "mine" && !isMineTask(task)) return false;
+    if (effectiveTaskView === "mine" && !isMineTask(task)) return false;
     return matchesTaskSearch(task);
   });
   const filteredTasks = scopedTasks.filter((task) => {
-    if (taskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
-    if (taskView === "done" && task.status !== "completed") return false;
-    return true;
+    if (effectiveTaskView === "active" && (task.status === "completed" || task.status === "denied")) return false;
+    if (effectiveTaskView === "done" && task.status !== "completed") return false;
+    return matchesStatusFilter(task);
   });
 
   const sorted = [...filteredTasks].sort((a, b) => {
@@ -184,11 +200,15 @@ export default function TaskList({
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 2);
-  const newTaskIds = new Set(newTasks.map((task) => String(task.id)));
+  const showNewTaskBucket = !statusFilter || statusFilter === "open";
+  const newTaskIds = new Set(showNewTaskBucket ? newTasks.map((task) => String(task.id)) : []);
   const prioritizedOpen = open.filter((task) => !newTaskIds.has(String(task.id)));
-  const done = (taskView === "active" ? scopedTasks : filteredTasks)
-    .filter((t) => t.status === "completed")
-    .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
+  const done =
+    statusFilter && statusFilter !== "completed"
+      ? []
+      : (effectiveTaskView === "active" ? scopedTasks : filteredTasks)
+          .filter((t) => t.status === "completed")
+          .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
   const grouped = prioritizedOpen.reduce<Array<{ id: string; label: string; detail: string; tasks: Task[] }>>((groups, task) => {
     const group = groupForTask(task);
     const existing = groups.find((item) => item.id === group.id);
@@ -225,8 +245,11 @@ export default function TaskList({
           <button
             key={id}
             type="button"
-            onClick={() => setTaskView(id as "active" | "mine" | "done" | "all")}
-            className={`work-tab${taskView === id ? " active" : ""}`}
+            onClick={() => {
+              onStatusFilterChange?.(null);
+              setTaskView(id as "active" | "mine" | "done" | "all");
+            }}
+            className={`work-tab${!statusFilter && taskView === id ? " active" : ""}`}
             data-testid={`button-task-view-${id}`}
           >
             {label}
@@ -248,33 +271,35 @@ export default function TaskList({
 
       <div className={inlineDetail ? "tasks-split-layout" : ""}>
       <div className="flex flex-col gap-2 px-4 py-4">
-        <div className="space-y-2">
-          <div className="task-group-head bucket-upcoming" data-testid="task-group-head-new">
-            <span className="task-group-dot is-upcoming" aria-hidden="true" />
-            <span className="task-group-label">New tasks</span>
-            <span className="task-group-detail">Newest work from the last 30 minutes</span>
-            <span className="task-group-count">{newTasks.length}</span>
-          </div>
-          {newTasks.length > 0 ? (
-            newTasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                users={users}
-                events={events}
-                isCompleting={completingId === task.id && complete.isPending}
-                onComplete={() => complete.mutate(task.id)}
-                onOpen={() => setSelectedTaskId(String(task.id))}
-                onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
-                readOnly={readOnly}
-              />
-            ))
-          ) : (
-            <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-4 text-center text-sm text-muted-foreground/70">
-              No new tasks
+        {showNewTaskBucket && (
+          <div className="space-y-2">
+            <div className="task-group-head bucket-upcoming" data-testid="task-group-head-new">
+              <span className="task-group-dot is-upcoming" aria-hidden="true" />
+              <span className="task-group-label">New tasks</span>
+              <span className="task-group-detail">Newest work from the last 30 minutes</span>
+              <span className="task-group-count">{newTasks.length}</span>
             </div>
-          )}
-        </div>
+            {newTasks.length > 0 ? (
+              newTasks.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  users={users}
+                  events={events}
+                  isCompleting={completingId === task.id && complete.isPending}
+                  onComplete={() => complete.mutate(task.id)}
+                  onOpen={() => setSelectedTaskId(String(task.id))}
+                  onPin={!readOnly && onPinTask ? () => onPinTask(task.id) : undefined}
+                  readOnly={readOnly}
+                />
+              ))
+            ) : (
+              <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-4 text-center text-sm text-muted-foreground/70">
+                No new tasks
+              </div>
+            )}
+          </div>
+        )}
 
         {open.length === 0 && done.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-10 text-center">

@@ -1210,6 +1210,27 @@
     padding: 0.75rem 1rem;
   }
 
+  .status-strip > button.status-cell {
+    appearance: none;
+    cursor: pointer;
+    text-align: left;
+    transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  }
+
+  .status-strip > button.status-cell:hover {
+    background: hsl(var(--muted) / 0.55);
+  }
+
+  .status-strip > button.status-cell:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: -2px;
+  }
+
+  .status-strip > button.status-cell.is-active {
+    background: hsl(var(--brand-green) / 0.08);
+    box-shadow: inset 0 0 0 1px hsl(var(--brand-green) / 0.35);
+  }
+
   .status-strip > .status-cell:last-child,
   .status-strip > span:last-child {
     border-right: 0;

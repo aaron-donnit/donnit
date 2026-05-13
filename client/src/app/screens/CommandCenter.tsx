@@ -72,7 +72,7 @@ import ChatPanel from "@/app/screens/home/ChatPanel";
 import OnboardingChecklist from "@/app/screens/home/OnboardingChecklist";
 import DemoWorkspaceGuide from "@/app/screens/home/DemoWorkspaceGuide";
 import MvpReadinessPanel from "@/app/screens/home/MvpReadinessPanel";
-import TaskList from "@/app/tasks/TaskList";
+import TaskList, { type TaskStatusFilter } from "@/app/tasks/TaskList";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
 import FloatingTaskBox from "@/app/tasks/FloatingTaskBox";
 import AcceptancePanel from "@/app/tasks/AcceptancePanel";
@@ -107,6 +107,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
   const [focusedTeamUserId, setFocusedTeamUserId] = useState<string | null>(null);
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
+  const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatusFilter | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     try {
       if (typeof window === "undefined") return null;
@@ -1625,6 +1626,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   delta={metrics.dueToday > 0 ? `${metrics.dueToday} due today` : "Nothing dated today"}
                   tone={metrics.dueToday > 0 ? "down" : "neutral"}
                   accent="info"
+                  active={taskStatusFilter === "open"}
+                  onClick={() => setTaskStatusFilter((current) => current === "open" ? null : "open")}
                 />
                 <Stat
                   label="Due today"
@@ -1632,6 +1635,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   delta={metrics.dueToday > 0 ? "Focus list" : "All clear"}
                   tone={metrics.dueToday > 0 ? "down" : "up"}
                   accent={metrics.dueToday > 0 ? "danger" : "success"}
+                  active={taskStatusFilter === "today"}
+                  onClick={() => setTaskStatusFilter((current) => current === "today" ? null : "today")}
                 />
                 <Stat
                   label="Overdue"
@@ -1639,6 +1644,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   delta={metrics.overdue > 0 ? "Past due — act now" : "Nothing overdue"}
                   tone={metrics.overdue > 0 ? "down" : "up"}
                   accent={metrics.overdue > 0 ? "danger" : "success"}
+                  active={taskStatusFilter === "overdue"}
+                  onClick={() => setTaskStatusFilter((current) => current === "overdue" ? null : "overdue")}
                 />
                 <Stat
                   label="Needs acceptance"
@@ -1646,6 +1653,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   delta={metrics.needsAcceptance > 0 ? "Waiting on owner" : "No handoffs pending"}
                   tone={metrics.needsAcceptance > 0 ? "down" : "neutral"}
                   accent="warning"
+                  active={taskStatusFilter === "needs_acceptance"}
+                  onClick={() => setTaskStatusFilter((current) => current === "needs_acceptance" ? null : "needs_acceptance")}
                 />
                 <Stat
                   label="Completed"
@@ -1653,6 +1662,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   delta={metrics.completed > 0 ? "That's one less thing" : "Get the first done"}
                   tone={metrics.completed > 0 ? "up" : "neutral"}
                   accent="success"
+                  active={taskStatusFilter === "completed"}
+                  onClick={() => setTaskStatusFilter((current) => current === "completed" ? null : "completed")}
                 />
               </div>
               <ChatPanel messages={data.messages} />
@@ -1668,6 +1679,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 readOnly={teamWorkspaceViewActive}
                 inlineDetail
+                statusFilter={taskStatusFilter}
+                onStatusFilterChange={setTaskStatusFilter}
               />
             </section>
           )}
@@ -2125,15 +2138,19 @@ function Stat({
   delta,
   tone = "neutral",
   accent,
+  active = false,
+  onClick,
 }: {
   label: string;
   value: number | string;
   delta?: string;
   tone?: "up" | "down" | "neutral";
   accent?: "success" | "warning" | "danger" | "info";
+  active?: boolean;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="status-cell" data-accent={accent} data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+  const content = (
+    <>
       <span className="status-cell-label">{label}</span>
       <span className="status-cell-value">{value}</span>
       {delta ? (
@@ -2145,6 +2162,25 @@ function Stat({
           {delta}
         </span>
       ) : null}
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={`status-cell ${active ? "is-active" : ""}`}
+        data-accent={accent}
+        aria-pressed={active}
+        onClick={onClick}
+        data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className="status-cell" data-accent={accent} data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+      {content}
     </div>
   );
 }
