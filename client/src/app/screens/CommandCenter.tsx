@@ -930,10 +930,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const openMvpReadiness = () => {
     setMvpReadinessDismissed(false);
     setMvpReadinessManuallyOpen(true);
+    setAppView("admin");
+    setManagerReportOpen(false);
+    setWorkspaceSettingsOpen(false);
     if (typeof window !== "undefined") window.localStorage.removeItem("donnit.mvpReadinessDismissed");
     window.setTimeout(() => {
       document.getElementById("panel-mvp-readiness")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 75);
+    }, 100);
   };
   const dismissMvpReadiness = () => {
     setMvpReadinessDismissed(true);
@@ -1060,6 +1063,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const openOnboardingChecklist = () => {
     setOnboardingDismissed(false);
     setOnboardingManuallyOpen(true);
+    setAppView("admin");
+    setManagerReportOpen(false);
+    setWorkspaceSettingsOpen(false);
     persistWorkspaceState({
       key: "onboarding_state",
       value: {
@@ -1069,7 +1075,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     });
     window.setTimeout(() => {
       document.getElementById("panel-onboarding-checklist")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+    }, 100);
   };
   const showOnboarding = onboardingManuallyOpen || (!onboardingDismissed && onboardingSteps.some((step) => !step.done));
   const openDemoGuide = () => {
