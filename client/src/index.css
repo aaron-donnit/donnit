@@ -1227,6 +1227,35 @@
   }
 
   /* Status cell — proto-style label/value/delta block (lift from proto-styles.css) */
+  .home-work-grid {
+    display: grid;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .home-chat-panel {
+    min-width: 0;
+  }
+
+  .home-chat-panel > [data-testid="panel-chat"] {
+    margin-bottom: 0;
+  }
+
+  .home-work-grid > [data-testid="panel-tasks"] {
+    min-width: 0;
+  }
+
+  @media (min-width: 900px) {
+    .home-work-grid {
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    }
+
+    .home-chat-panel {
+      position: sticky;
+      top: 64px;
+    }
+  }
+
   .status-cell .status-cell-label {
     font-family: var(--font-mono);
     font-size: 0.65rem;

@@ -1596,20 +1596,24 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   accent="success"
                 />
               </div>
-              <ChatPanel messages={data.messages} />
-              <TaskList
-                tasks={scopedDisplayTasks}
-                users={data.users}
-                subtasks={data.subtasks ?? []}
-                events={data.events}
-                authenticated={Boolean(data.authenticated)}
-                positionProfiles={positionProfiles}
-                currentUserId={activeTaskListUserId}
-                viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
-                onPinTask={(taskId) => setActiveWorkTask(taskId)}
-                readOnly={teamWorkspaceViewActive}
-                inlineDetail
-              />
+              <div className="home-work-grid">
+                <div className="home-chat-panel">
+                  <ChatPanel messages={data.messages} />
+                </div>
+                <TaskList
+                  tasks={scopedDisplayTasks}
+                  users={data.users}
+                  subtasks={data.subtasks ?? []}
+                  events={data.events}
+                  authenticated={Boolean(data.authenticated)}
+                  positionProfiles={positionProfiles}
+                  currentUserId={activeTaskListUserId}
+                  viewLabel={teamWorkspaceViewActive && selectedTeamViewUser ? `${selectedTeamViewUser.name}'s tasks` : "My Tasks"}
+                  onPinTask={(taskId) => setActiveWorkTask(taskId)}
+                  readOnly={teamWorkspaceViewActive}
+                  inlineDetail
+                />
+              </div>
             </section>
           )}
 
