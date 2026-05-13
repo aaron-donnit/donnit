@@ -1202,10 +1202,16 @@
   .task-group-head .task-group-dot.is-delegated{ background: hsl(var(--brand-mute-text)); }
   .task-group-head .task-group-dot.is-done    { background: hsl(var(--brand-green)); }
 
-  /* Tinted gradient sweep behind bucket headers */
-  .task-group-head[data-bucket="overdue"]  { background: linear-gradient(90deg, hsl(var(--tint-danger)) 0%, transparent 220px); }
-  .task-group-head[data-bucket="today"]    { background: linear-gradient(90deg, hsl(var(--tint-warning)) 0%, transparent 220px); }
-  .task-group-head[data-bucket="done"]     { background: linear-gradient(90deg, hsl(var(--tint-success)) 0%, transparent 220px); }
+  /* Tinted gradient sweep + colored label text per bucket (proto spec) */
+  .task-group-head.bucket-overdue  { background: linear-gradient(90deg, hsl(var(--tint-danger)) 0%, transparent 240px); }
+  .task-group-head.bucket-today    { background: linear-gradient(90deg, hsl(var(--tint-warning)) 0%, transparent 240px); }
+  .task-group-head.bucket-upcoming { background: linear-gradient(90deg, hsl(var(--tint-success)) 0%, transparent 240px); }
+  .task-group-head.bucket-done     { background: linear-gradient(90deg, hsl(var(--tint-success)) 0%, transparent 240px); }
+
+  .task-group-head.bucket-overdue  .task-group-label { color: hsl(var(--brand-alert)); }
+  .task-group-head.bucket-today    .task-group-label { color: hsl(var(--brand-amber)); }
+  .task-group-head.bucket-upcoming .task-group-label { color: hsl(156 100% 28%); }
+  .task-group-head.bucket-done     .task-group-label { color: hsl(var(--brand-green)); }
 
   .task-group-head .task-group-label {
     font-family: var(--font-mono);
@@ -1372,6 +1378,206 @@
     letter-spacing: 0.06em;
     color: hsl(var(--brand-green));
     white-space: nowrap;
+  }
+
+  /* ── Reports grid (proto spec: 12-col with KPI + med + wide cards) ── */
+  .reports-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 14px;
+  }
+
+  .report-card {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.625rem;
+    background: hsl(var(--card));
+    padding: 14px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .report-card.kpi  { grid-column: span 3; border-top-width: 2px; }
+  .report-card.med  { grid-column: span 6; }
+  .report-card.wide { grid-column: span 12; }
+
+  @media (max-width: 1023px) {
+    .report-card.kpi  { grid-column: span 6; }
+    .report-card.med  { grid-column: span 12; }
+  }
+  @media (max-width: 640px) {
+    .report-card.kpi  { grid-column: span 12; }
+  }
+
+  .report-card .report-lbl {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .report-card .report-val {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.05;
+    color: hsl(var(--foreground));
+  }
+
+  .report-card .report-delta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .report-card .report-delta.is-up   { color: hsl(var(--brand-green)); }
+  .report-card .report-delta.is-down { color: hsl(var(--brand-alert)); }
+
+  .report-card .report-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .report-card .report-head h3 {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+
+  /* Horizontal bar chart rows */
+  .bars-h { display: flex; flex-direction: column; gap: 8px; }
+
+  .bars-h-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 36px;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  .bars-h-row .bars-h-nm { color: hsl(var(--muted-foreground)); font-size: 11.5px; }
+
+  .bars-h-row .bars-h-track {
+    height: 8px;
+    background: hsl(var(--muted) / 0.5);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .bars-h-row .bars-h-fill {
+    height: 100%;
+    background: hsl(var(--brand-green));
+    border-radius: 4px;
+  }
+
+  .bars-h-row .bars-h-val {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: hsl(var(--muted-foreground));
+    text-align: right;
+  }
+
+  /* ── Team grid (proto spec: auto-fill card grid) ── */
+  .team-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+  }
+
+  .team-card {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.625rem;
+    background: hsl(var(--card));
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .team-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--member-color, hsl(var(--brand-green)));
+    border-radius: 0 2px 2px 0;
+  }
+
+  .team-card-head { display: flex; align-items: center; gap: 12px; }
+
+  .team-card-avatar {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: grid; place-items: center;
+    color: white;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 12px;
+    background: var(--member-color, hsl(var(--brand-green)));
+    flex-shrink: 0;
+  }
+
+  .team-card-name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; }
+  .team-card-role { font-size: 11.5px; color: hsl(var(--muted-foreground)); }
+
+  .team-stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid hsl(var(--border));
+    border-bottom: 1px solid hsl(var(--border));
+  }
+
+  .team-stat .team-stat-lbl {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .team-stat .team-stat-val {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--foreground));
+  }
+
+  .team-stat .team-stat-val.is-danger { color: hsl(var(--brand-alert)); }
+  .team-stat .team-stat-val.is-warning { color: hsl(var(--brand-amber)); }
+
+  .team-capacity-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .team-capacity-track {
+    height: 6px;
+    background: hsl(var(--muted) / 0.5);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .team-capacity-fill {
+    height: 100%;
+    border-radius: 3px;
   }
 
   .position-profiles-shell {

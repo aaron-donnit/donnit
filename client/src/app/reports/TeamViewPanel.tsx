@@ -154,8 +154,97 @@ export default function TeamViewPanel({
     },
   });
 
+  const MEMBER_COLORS = [
+    "#00C27A", "#2c6dd1", "#F5B800", "#FF5C35", "#7c3aed",
+    "#0891b2", "#d97706", "#dc2626", "#059669", "#7c2d12",
+  ];
+  const memberColor = (index: number) => MEMBER_COLORS[index % MEMBER_COLORS.length];
+  const maxWorkload = Math.max(1, ...teamStats.map((s) => s.workload));
+
   return (
-    <div className="panel" data-testid="panel-team-view">
+    <div data-testid="panel-team-view" className="space-y-4">
+      {teamMembers.length > 0 && (
+        <>
+          <div className="status-strip">
+            <div className="status-cell" data-accent="info">
+              <span className="status-cell-label">Direct reports</span>
+              <span className="status-cell-value">{teamMembers.length}</span>
+              <span className="status-cell-delta">across team</span>
+            </div>
+            <div className="status-cell">
+              <span className="status-cell-label">Open work</span>
+              <span className="status-cell-value">{teamOpen}</span>
+              <span className="status-cell-delta">tasks across team</span>
+            </div>
+            <div className="status-cell" data-accent={teamOverdue > 0 ? "danger" : "success"}>
+              <span className="status-cell-label">Overdue</span>
+              <span className="status-cell-value">{teamOverdue}</span>
+              <span className={`status-cell-delta ${teamOverdue > 0 ? "is-down" : "is-up"}`}>
+                {teamOverdue > 0 ? "needs attention" : "all clear"}
+              </span>
+            </div>
+            <div className="status-cell" data-accent="warning">
+              <span className="status-cell-label">Due soon</span>
+              <span className="status-cell-value">{teamDueSoon}</span>
+              <span className="status-cell-delta">within 2 days</span>
+            </div>
+          </div>
+          <div className="team-grid">
+            {teamStats.map((item, index) => {
+              const color = memberColor(index);
+              const capacityPct = maxWorkload > 0 ? Math.min(100, Math.round((item.workload / maxWorkload) * 100)) : 0;
+              const capacityColor = capacityPct > 90 ? "hsl(var(--brand-alert))" : capacityPct > 75 ? "hsl(var(--brand-amber))" : color;
+              const initials = item.user.name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+              const isSelected = String(item.user.id) === String(member?.id);
+              return (
+                <div
+                  key={String(item.user.id)}
+                  className="team-card"
+                  style={{ "--member-color": color, outline: isSelected ? `2px solid ${color}` : "none", outlineOffset: "2px" } as React.CSSProperties}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedUserId(String(item.user.id))}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedUserId(String(item.user.id)); }}
+                  data-testid={`button-team-card-${item.user.id}`}
+                >
+                  <div className="team-card-head">
+                    <div className="team-card-avatar" style={{ background: color }}>{initials}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="team-card-name truncate">{item.user.name}</div>
+                      <div className="team-card-role truncate">{item.user.role}</div>
+                    </div>
+                  </div>
+                  <div className="team-stat-row">
+                    <div className="team-stat">
+                      <div className="team-stat-lbl">Open</div>
+                      <div className="team-stat-val">{item.open.length}</div>
+                    </div>
+                    <div className="team-stat">
+                      <div className="team-stat-lbl">Due soon</div>
+                      <div className={`team-stat-val ${item.dueSoon.length > 0 ? "is-warning" : ""}`}>{item.dueSoon.length}</div>
+                    </div>
+                    <div className="team-stat">
+                      <div className="team-stat-lbl">Overdue</div>
+                      <div className={`team-stat-val ${item.overdue.length > 0 ? "is-danger" : ""}`}>{item.overdue.length}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="team-capacity-label">
+                      <span>Workload</span>
+                      <span style={{ color: capacityColor }}>{Math.round(item.workload / 60)}h</span>
+                    </div>
+                    <div className="team-capacity-track">
+                      <div className="team-capacity-fill" style={{ width: `${capacityPct}%`, background: capacityColor }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div className="panel">
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -400,6 +489,7 @@ export default function TeamViewPanel({
           if (!open) setSelectedTaskId(null);
         }}
       />
+      </div>
     </div>
   );
 }

@@ -239,7 +239,7 @@ export default function TaskList({
       <div className={inlineDetail ? "tasks-split-layout" : ""}>
       <div className="flex flex-col gap-2 px-4 py-4">
         <div className="space-y-2">
-          <div className="task-group-head" data-bucket="new" data-testid="task-group-head-new">
+          <div className="task-group-head bucket-upcoming" data-testid="task-group-head-new">
             <span className="task-group-dot is-upcoming" aria-hidden="true" />
             <span className="task-group-label">New tasks</span>
             <span className="task-group-detail">Newest work from the last 30 minutes</span>
@@ -290,7 +290,7 @@ export default function TaskList({
                       : "is-upcoming";
             return (
             <div key={group.id} className="space-y-2">
-              <div className="task-group-head" data-bucket={group.id} data-testid={`task-group-head-${group.id}`}>
+              <div className={`task-group-head bucket-${group.id}`} data-testid={`task-group-head-${group.id}`}>
                 <span className={`task-group-dot ${dotTone}`} aria-hidden="true" />
                 <span className="task-group-label">{group.label}</span>
                 <span className="task-group-detail">{group.detail}</span>
@@ -316,7 +316,7 @@ export default function TaskList({
 
         {done.length > 0 && (
           <>
-            <div className="task-group-head mt-4" data-bucket="done" data-testid="section-done">
+            <div className="task-group-head bucket-done mt-4" data-testid="section-done">
               <span className="task-group-dot is-done" aria-hidden="true" />
               <span className="task-group-label">Done</span>
               <span className="task-group-detail">Recently completed</span>
