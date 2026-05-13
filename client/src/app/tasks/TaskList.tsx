@@ -34,6 +34,9 @@ export default function TaskList({
   inlineDetail = false,
   statusFilter = null,
   onStatusFilterChange,
+  teamMembers = [],
+  teamViewUserId = null,
+  onTeamViewChange,
 }: {
   tasks: Task[];
   suggestions?: EmailSuggestion[];
@@ -49,13 +52,16 @@ export default function TaskList({
   inlineDetail?: boolean;
   statusFilter?: TaskStatusFilter | null;
   onStatusFilterChange?: (filter: TaskStatusFilter | null) => void;
+  teamMembers?: User[];
+  teamViewUserId?: string | null;
+  onTeamViewChange?: (userId: string | null) => void;
 }) {
   const [completingId, setCompletingId] = useState<Id | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dialogTaskId, setDialogTaskId] = useState<string | null>(null);
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
-  const [taskView, setTaskView] = useState<"active" | "mine" | "review" | "done" | "all">("active");
+  const [taskView, setTaskView] = useState<"active" | "review" | "done" | "all">("active");
   const [reviewIndex, setReviewIndex] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const visibleTasks = useMemo(
@@ -166,10 +172,6 @@ export default function TaskList({
 
   const normalizedTaskSearch = taskSearch.trim().toLowerCase();
   const userNameForTask = (task: Task) => users.find((user) => String(user.id) === String(task.assignedToId))?.name ?? "";
-  const isMineTask = (task: Task) =>
-    currentUserId
-      ? String(task.assignedToId) === String(currentUserId) || String(task.delegatedToId ?? "") === String(currentUserId)
-      : true;
   const matchesTaskSearch = (task: Task) => {
     if (!normalizedTaskSearch) return true;
     const haystack = [
@@ -206,7 +208,6 @@ export default function TaskList({
           ? "active"
           : taskView;
   const scopedTasks = visibleTasks.filter((task) => {
-    if (effectiveTaskView === "mine" && !isMineTask(task)) return false;
     return matchesTaskSearch(task);
   });
   const filteredTasks = scopedTasks.filter((task) => {
@@ -307,7 +308,6 @@ export default function TaskList({
       <div className="work-toolbar border-b border-border px-2">
         {([
           ["active", "Active", visibleTasks.filter((task) => task.status !== "completed" && task.status !== "denied").length],
-          ["mine", "Mine", null],
           ["review", "Needs Review", pendingTaskCount + pendingSuggestions.length],
           ["done", "Done", visibleTasks.filter((task) => task.status === "completed").length],
           ["all", "All", null],
@@ -317,7 +317,7 @@ export default function TaskList({
             type="button"
             onClick={() => {
               onStatusFilterChange?.(null);
-              setTaskView(id as "active" | "mine" | "review" | "done" | "all");
+              setTaskView(id as "active" | "review" | "done" | "all");
             }}
             className={`work-tab${effectiveTaskView === id ? " active" : ""}`}
             data-testid={`button-task-view-${id}`}
@@ -327,6 +327,25 @@ export default function TaskList({
           </button>
         ))}
         <span className="flex-1" />
+        {teamMembers.length > 0 && onTeamViewChange && (
+          <div className="flex items-center gap-1.5">
+            <span className="ui-label">Team</span>
+            <select
+              value={teamViewUserId ?? ""}
+              onChange={(event) => onTeamViewChange(event.target.value || null)}
+              className="h-7 max-w-[180px] rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              aria-label="Team task view"
+              data-testid="select-task-list-team"
+            >
+              <option value="">My tasks</option>
+              {teamMembers.map((user) => (
+                <option key={String(user.id)} value={String(user.id)}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input

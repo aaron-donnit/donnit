@@ -37,7 +37,6 @@ export function teamMembersForUser(users: User[], currentUser: User | null | und
   if (!["owner", "admin", "manager"].includes(currentUser.role)) return [];
   return users.filter((user) => {
     if (!isActiveUser(user)) return false;
-    if (currentUser.role === "owner" || currentUser.role === "admin") return String(user.id) !== String(currentUserId);
     return String(user.managerId) === String(currentUserId);
   });
 }

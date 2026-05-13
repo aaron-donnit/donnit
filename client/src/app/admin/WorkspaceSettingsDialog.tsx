@@ -17,6 +17,7 @@ import { formatReceivedAt, readCustomEmailSignature } from "@/app/lib/suggestion
 import ConnectedToolRow from "@/app/admin/ConnectedToolRow";
 import TaskTemplatesPanel from "@/app/admin/TaskTemplatesPanel";
 import WorkspaceMembersPanel from "@/app/admin/WorkspaceMembersPanel";
+import OrgChartPanel from "@/app/admin/OrgChartPanel";
 
 export type GmailOAuthStatus = {
   configured: boolean;
@@ -613,6 +614,8 @@ export default function WorkspaceSettingsDialog({
               </div>
             </div>
           </div>
+
+          <OrgChartPanel users={users} currentUser={currentUser} />
 
           <WorkspaceMembersPanel
             users={users}

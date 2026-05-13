@@ -817,6 +817,16 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     }
   }, [canUseTeamWorkspaceView, managerTeamMembers, selectedTeamViewUserId, workspaceTaskScope]);
 
+  const handleTeamTaskViewChange = (userId: string | null) => {
+    if (!userId) {
+      setWorkspaceTaskScope("mine");
+      setSelectedTeamViewUserId("");
+      return;
+    }
+    setSelectedTeamViewUserId(userId);
+    setWorkspaceTaskScope("team");
+  };
+
   const metrics = useMemo(() => {
     const tasks = scopedDisplayTasks;
     const suggestions = currentUserQueueSuggestions;
@@ -1704,67 +1714,15 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 inlineDetail
                 statusFilter={taskStatusFilter}
                 onStatusFilterChange={setTaskStatusFilter}
+                teamMembers={managerTeamMembers}
+                teamViewUserId={teamWorkspaceViewActive && selectedTeamViewUser ? String(selectedTeamViewUser.id) : null}
+                onTeamViewChange={handleTeamTaskViewChange}
               />
             </section>
           )}
 
           {appView === "tasks" && (
             <section key={`tasks-${viewResetKeys.tasks}`} className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-4 lg:px-6">
-              {canUseTeamWorkspaceView && (
-                <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-foreground">Task view</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {teamWorkspaceViewActive && selectedTeamViewUser
-                        ? `Viewing ${selectedTeamViewUser.name}'s tasks as read-only.`
-                        : "Your assigned, delegated, and collaborative work."}
-                    </p>
-                  </div>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
-                      <button
-                        type="button"
-                        onClick={() => setWorkspaceTaskScope("mine")}
-                        className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
-                          !teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
-                        }`}
-                        data-testid="button-workspace-view-mine"
-                      >
-                        My Tasks
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWorkspaceTaskScope("team");
-                        }}
-                        className={`h-9 rounded-[6px] px-3 text-xs font-medium transition ${
-                          teamWorkspaceViewActive ? "bg-brand-green text-white shadow-sm" : "text-muted-foreground hover:bg-muted"
-                        }`}
-                        data-testid="button-workspace-view-team"
-                      >
-                        My Team
-                      </button>
-                    </div>
-                    {workspaceTaskScope === "team" && (
-                      <select
-                        value={String(selectedTeamViewUser?.id ?? "")}
-                        onChange={(event) => {
-                          setSelectedTeamViewUserId(event.target.value);
-                          setWorkspaceTaskScope("team");
-                        }}
-                        className="flex h-10 min-w-[220px] rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        data-testid="select-workspace-team-member"
-                      >
-                        {managerTeamMembers.map((user) => (
-                          <option key={String(user.id)} value={String(user.id)}>
-                            {user.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </div>
-              )}
               <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               <TaskList
                 key={`tasks-${viewResetKeys.tasks}`}
@@ -1780,6 +1738,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                 onPinTask={(taskId) => setActiveWorkTask(taskId)}
                 readOnly={teamWorkspaceViewActive}
                 inlineDetail
+                teamMembers={managerTeamMembers}
+                teamViewUserId={teamWorkspaceViewActive && selectedTeamViewUser ? String(selectedTeamViewUser.id) : null}
+                onTeamViewChange={handleTeamTaskViewChange}
               />
             </section>
           )}
