@@ -90,6 +90,13 @@ export default function AgendaPanel({
             Export
           </Button>
         </div>
+        {agenda.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {approved
+              ? "Approved agenda is ready to work from or export."
+              : "Review the agenda, remove anything unnecessary, then approve it to unlock calendar export."}
+          </p>
+        )}
       </div>
       <div className="px-4 py-3">
         <div className="space-y-3">

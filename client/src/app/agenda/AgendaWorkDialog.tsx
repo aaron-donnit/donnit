@@ -111,20 +111,22 @@ export default function AgendaWorkDialog({
                         ? 20
                         : 0;
                 return (
-                  <li key={`${item.taskId}-${item.order}`} className={`task-row ${urgencyClass(item.urgency)}`}>
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
-                      {index + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium leading-snug text-foreground">{item.title}</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
+                  <li key={`${item.taskId}-${item.order}`} className={`task-row flex-col items-stretch gap-2 ${urgencyClass(item.urgency)}`}>
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <p className="line-clamp-1 min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">{item.title}</p>
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold tabular-nums">
+                        {index + 1}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-xs text-muted-foreground">
                         {formatAgendaSlot(item)} / {item.estimatedMinutes} min / {urgencyLabel(item.urgency)}
                       </p>
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                         <div className="h-full rounded-full bg-brand-green" style={{ width: `${progressPct}%` }} />
                       </div>
                     </div>
-                    <div className="flex shrink-0 gap-1.5">
+                    <div className="flex items-center justify-end gap-1.5 border-t border-border pt-2">
                       <Button
                         variant="outline"
                         size="sm"

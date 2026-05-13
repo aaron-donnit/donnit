@@ -635,6 +635,13 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         document.getElementById("panel-agenda")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }, 50);
     },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not build agenda",
+        description: apiErrorMessage(error, "Donnit could not read your tasks or calendar availability. Try again in a moment."),
+        variant: "destructive",
+      });
+    },
   });
 
   useEffect(() => {
@@ -1996,7 +2003,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         onOpenChange={setCalendarExportOpen}
         agenda={approvedAgenda}
         oauthStatus={oauthData}
-        onDownload={() => downloadAgendaCalendar(approvedAgenda)}
+        onDownload={() => {
+          downloadAgendaCalendar(approvedAgenda);
+          setCalendarExportOpen(false);
+        }}
         onExportGoogle={() => exportGoogleCalendar.mutate()}
         onReconnectGoogle={startGoogleConnect}
         isExportingGoogle={exportGoogleCalendar.isPending}

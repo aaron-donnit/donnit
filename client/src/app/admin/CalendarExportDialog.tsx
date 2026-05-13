@@ -1,8 +1,8 @@
 import { CalendarCheck, CalendarPlus, ExternalLink, Loader2, MailPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import type { AgendaItem } from "@/app/types";
-import { dialogShellClass, dialogHeaderClass, dialogBodyClass } from "@/app/constants";
+import { dialogShellClass, dialogHeaderClass, dialogBodyClass, dialogFooterClass } from "@/app/constants";
 import type { GmailOAuthStatus } from "@/app/admin/WorkspaceSettingsDialog";
 
 export default function CalendarExportDialog({
@@ -29,6 +29,7 @@ export default function CalendarExportDialog({
   const calendarReady = Boolean(oauthStatus?.connected && oauthStatus.calendarConnected);
   const needsCalendarReconnect = Boolean(oauthStatus?.connected && oauthStatus.calendarRequiresReconnect);
   const scheduledCount = agenda.filter((item) => item.startAt && item.endAt && item.scheduleStatus === "scheduled").length;
+  const unscheduledCount = Math.max(agenda.length - scheduledCount, 0);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} max-w-lg`}>
@@ -36,11 +37,16 @@ export default function CalendarExportDialog({
           <DialogTitle>Calendar export</DialogTitle>
           <DialogDescription>
             {scheduledCount > 0
-              ? `${scheduledCount} scheduled agenda block${scheduledCount === 1 ? "" : "s"} ready.`
+              ? `${scheduledCount} scheduled agenda block${scheduledCount === 1 ? "" : "s"} ready${unscheduledCount ? `, ${unscheduledCount} still needs time` : ""}.`
               : "Build an agenda before exporting."}
           </DialogDescription>
         </DialogHeader>
         <div className={`${dialogBodyClass} space-y-3`}>
+          {unscheduledCount > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Only scheduled blocks are exported. Rebuild the agenda after connecting Google Calendar or widening the workday if tasks still need a slot.
+            </div>
+          )}
           <div className="rounded-md border border-border px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -116,6 +122,11 @@ export default function CalendarExportDialog({
             </div>
           </div>
         </div>
+        <DialogFooter className={dialogFooterClass}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
