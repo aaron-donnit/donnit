@@ -778,6 +778,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     const pendingSuggestions = suggestions.filter((s) => s.status === "pending").length;
     return {
       open: tasks.filter((t) => !["completed", "denied"].includes(t.status)).length,
+      overdue: tasks.filter((t) => t.dueDate != null && t.dueDate < today && t.status !== "completed").length,
       dueToday: tasks.filter((t) => t.dueDate === today && t.status !== "completed").length,
       needsAcceptance: waitingTasks,
       emailQueue: pendingSuggestions,
@@ -1391,13 +1392,23 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
             <section className="command-page mx-auto w-full max-w-[1600px] px-4 py-4 lg:px-6">
               <div className="home-hero mb-4">
                 <div className="min-w-0">
-                  <h2 className="greet text-2xl font-semibold text-foreground">
+                  <h2 className="greet">
                     Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}
                     {currentUser?.name ? `, ${currentUser.name.split(" ")[0]}` : ""}.
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Capture the loose work, review what changed, and keep today moving.
-                  </p>
+                  <div className="home-meta">
+                    <span>{metrics.overdue} overdue</span>
+                    <span className="sep">·</span>
+                    <span>{metrics.dueToday} due today</span>
+                    <span className="sep">·</span>
+                    <span>{metrics.needsAcceptance} waiting on team</span>
+                    {metrics.emailQueue > 0 && (
+                      <>
+                        <span className="sep">·</span>
+                        <span>{metrics.emailQueue} in inbox</span>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <FunctionBar addTaskActions={addTaskActions} primaryActions={dailyActions} />
               </div>

@@ -1,10 +1,40 @@
-import { CalendarClock, Check, Clock3, Eye, HelpCircle, Loader2, Play, Repeat2, Send, ShieldCheck, UserPlus, UserRoundCheck, Users } from "lucide-react";
+import { Check, Loader2, Minus, MoveUp, Play, Triangle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Id, Task, TaskEvent, User } from "@/app/types";
-import { urgencyClass, urgencyLabel, statusLabels } from "@/app/lib/urgency";
+import { urgencyLabel } from "@/app/lib/urgency";
 import { taskDueLabel } from "@/app/lib/date";
 import { taskRepeatLabel } from "@/app/lib/task-text";
 import { latestOpenUpdateRequest } from "@/app/lib/permissions";
+
+function PrioIcon({ urgency }: { urgency: string }) {
+  const cls = `task-prio prio-${urgency}`;
+  if (urgency === "critical" || urgency === "high") {
+    return (
+      <span className={cls} aria-label={`${urgency} priority`}>
+        <Triangle className="fill-current" strokeWidth={0} />
+      </span>
+    );
+  }
+  if (urgency === "normal" || urgency === "medium") {
+    return (
+      <span className={cls} aria-label="normal priority">
+        <MoveUp strokeWidth={1.7} />
+      </span>
+    );
+  }
+  return (
+    <span className={`task-prio prio-${urgency}`} aria-label="low priority">
+      <Minus strokeWidth={1.7} />
+    </span>
+  );
+}
+
+function dueTone(task: Task, todayIso: string): string {
+  if (!task.dueDate) return "";
+  if (task.dueDate < todayIso) return "due-overdue";
+  if (task.dueDate === todayIso) return "due-today";
+  return "";
+}
 
 export default function TaskRow({
   task,
@@ -25,41 +55,49 @@ export default function TaskRow({
   isCompleting: boolean;
   readOnly?: boolean;
 }) {
-  const assignee = users.find((user) => user.id === task.assignedToId);
-  const delegate = users.find((user) => String(user.id) === String(task.delegatedToId));
-  const collaboratorCount = task.collaboratorIds?.length ?? 0;
+  const assignee = users.find((u) => u.id === task.assignedToId);
   const isDone = task.status === "completed";
   const latestUpdateRequest = latestOpenUpdateRequest(task, events);
   const repeatLabel = taskRepeatLabel(task);
-  const contextHints = [
-    repeatLabel ? `${repeatLabel} responsibility` : "",
-    task.description ? task.description.slice(0, 140) : "",
-    task.completionNotes ? `Last note: ${task.completionNotes.slice(0, 120)}` : "",
-    task.source !== "manual" ? `Source: ${task.source}` : "",
-  ].filter(Boolean);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const dueLabel = taskDueLabel(task);
+  const dueClass = dueTone(task, todayIso);
+  const initials = (assignee?.name ?? "?")
+    .split(" ")
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+  const hasExtra =
+    Boolean(task.description) ||
+    repeatLabel ||
+    Boolean(task.source && task.source !== "manual") ||
+    latestUpdateRequest;
 
   return (
     <div
-      className={`task-row task-row-openable ${urgencyClass(task.urgency)} ${isDone ? "is-done" : ""}`}
+      className={`task-row task-row-openable ${isDone ? "is-done" : ""}`}
       data-testid={`row-task-${task.id}`}
       role="button"
       tabIndex={0}
-      onClick={(event) => {
-        if ((event.target as HTMLElement).closest("button")) return;
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("button")) return;
         onOpen();
       }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
           onOpen();
         }
       }}
     >
+      {/* Col 1 — check circle */}
       <button
         type="button"
         onClick={onComplete}
         disabled={isCompleting || isDone || readOnly}
-        aria-label={readOnly ? "Read-only team task" : isDone ? "Completed" : "Mark complete"}
+        aria-label={readOnly ? "Read-only" : isDone ? "Completed" : "Mark complete"}
         className={`check-circle ${isDone ? "is-checked" : ""}`}
         data-testid={`button-complete-${task.id}`}
       >
@@ -70,125 +108,86 @@ export default function TaskRow({
         )}
       </button>
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p
-            className="task-title flex min-w-0 items-center gap-2 text-sm font-medium leading-snug text-foreground"
-            data-testid={`text-task-title-${task.id}`}
-          >
-            <span className="min-w-0 truncate">{task.title}</span>
-            {task.source && task.source !== "manual" ? (
-              <span
-                className="task-source-pill"
-                data-testid={`text-task-source-${task.id}`}
-                title={`Source: ${task.source}`}
+      {/* Col 2 — priority icon */}
+      <PrioIcon urgency={task.urgency} />
+
+      {/* Col 3 — title */}
+      <p
+        className="task-title min-w-0 truncate text-sm font-medium text-foreground"
+        data-testid={`text-task-title-${task.id}`}
+        title={task.title}
+      >
+        {task.title}
+        {task.source && task.source !== "manual" ? (
+          <span className="task-source-pill ml-1.5" data-testid={`text-task-source-${task.id}`}>
+            {task.source}
+          </span>
+        ) : null}
+      </p>
+
+      {/* Col 4 — urgency badge + optional context tooltip */}
+      <span className="inline-flex items-center gap-1">
+        {hasExtra && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Task details"
+                className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:text-foreground"
+                data-testid={`button-task-context-${task.id}`}
               >
-                {task.source}
-              </span>
-            ) : null}
-          </p>
-          <div className="flex shrink-0 items-center gap-1">
-            {contextHints.length > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Show task context"
-                    className="inline-flex size-6 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:text-foreground"
-                    data-testid={`button-task-context-${task.id}`}
-                  >
-                    <HelpCircle className="size-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  <div className="space-y-1 text-xs">
-                    {contextHints.slice(0, 4).map((hint, index) => (
-                      <p key={`${task.id}-hint-${index}`}>{hint}</p>
-                    ))}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
-            <span className="ui-label whitespace-nowrap" data-testid={`text-task-urgency-${task.id}`}>
-              {urgencyLabel(task.urgency)}
-            </span>
-          </div>
-        </div>
-        {task.description && !isDone && (
-          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{task.description}</p>
+                <span className="text-[9px] font-bold leading-none">…</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              <div className="space-y-1 text-xs">
+                {task.description && <p>{task.description.slice(0, 140)}</p>}
+                {repeatLabel && <p className="font-medium">{repeatLabel}</p>}
+                {latestUpdateRequest && <p className="text-amber-600 dark:text-amber-400">Update requested</p>}
+              </div>
+            </TooltipContent>
+          </Tooltip>
         )}
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span
-            className="inline-flex items-center gap-1"
-            data-testid={`text-task-due-${task.id}`}
-          >
-            <CalendarClock className="size-3.5" />
-            {taskDueLabel(task)}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Clock3 className="size-3.5" />
-            {task.estimatedMinutes} min
-          </span>
-          {repeatLabel && (
-            <span className="inline-flex items-center gap-1 font-medium text-foreground" data-testid={`text-task-repeat-${task.id}`}>
-              <Repeat2 className="size-3.5" />
-              {repeatLabel}
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1">
-            <UserRoundCheck className="size-3.5" />
-            {assignee?.name ?? "Unassigned"}
-          </span>
-          {task.visibility !== "work" && (
-            <span className="inline-flex items-center gap-1 font-medium text-foreground">
-              <ShieldCheck className="size-3.5" />
-              {task.visibility === "confidential" ? "Confidential" : "Personal"}
-            </span>
-          )}
-          {delegate && (
-            <span className="inline-flex items-center gap-1">
-              <UserPlus className="size-3.5" />
-              Delegated to {delegate.name}
-            </span>
-          )}
-          {collaboratorCount > 0 && (
-            <span className="inline-flex items-center gap-1">
-              <Users className="size-3.5" />
-              {collaboratorCount} collaborator{collaboratorCount === 1 ? "" : "s"}
-            </span>
-          )}
-          {task.status !== "open" && task.status !== "completed" && (
-            <span className="ui-label">{statusLabels[task.status] ?? task.status}</span>
-          )}
-          {latestUpdateRequest && task.status !== "completed" && (
-            <span className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
-              <Send className="size-3.5" />
-              Update requested
-            </span>
-          )}
+        <span
+          className={`task-meta-badge badge-${task.urgency}`}
+          data-testid={`text-task-urgency-${task.id}`}
+        >
+          {urgencyLabel(task.urgency)}
+        </span>
+      </span>
+
+      {/* Col 5 — due date */}
+      <span
+        className={`task-due-cell ${dueClass}`}
+        data-testid={`text-task-due-${task.id}`}
+      >
+        {dueLabel}
+      </span>
+
+      {/* Col 6 — assignee avatar */}
+      <span
+        className="task-avatar"
+        title={assignee?.name ?? "Unassigned"}
+        aria-label={assignee?.name ?? "Unassigned"}
+      >
+        {initials}
+      </span>
+
+      {/* Col 7 — action buttons */}
+      <span className="inline-flex items-center gap-0.5">
+        {onPin && !isDone && (
           <button
             type="button"
-            onClick={onOpen}
-            className="inline-flex items-center gap-1 text-xs font-medium text-brand-green underline-offset-2 hover:underline"
-            data-testid={`button-open-task-${task.id}`}
+            onClick={onPin}
+            disabled={readOnly}
+            aria-label="Work on task"
+            className="inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            data-testid={`button-work-task-${task.id}`}
           >
-            <Eye className="size-3.5" />
-            Open
+            <Play className="size-3" strokeWidth={2} />
           </button>
-          {onPin && !isDone && (
-            <button
-              type="button"
-              onClick={onPin}
-              disabled={readOnly}
-              className="inline-flex items-center gap-1 text-xs font-medium text-brand-green underline-offset-2 hover:underline"
-              data-testid={`button-work-task-${task.id}`}
-            >
-              <Play className="size-3.5" />
-              Work
-            </button>
-          )}
-        </div>
-      </div>
+        )}
+      </span>
     </div>
   );
 }

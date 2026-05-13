@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { Check } from "lucide-react";
 import type { User, AppView } from "@/app/types";
-import Wordmark from "@/app/chrome/Wordmark";
 
 export default function AppShellNav({
   view,
@@ -15,6 +13,7 @@ export default function AppShellNav({
   currentUser: User | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+
   const groups = [
     { label: "Work", ids: ["home", "tasks", "agenda", "inbox"] as AppView[] },
     { label: "People", ids: ["team", "profiles", "reports"] as AppView[] },
@@ -22,106 +21,185 @@ export default function AppShellNav({
   ]
     .map((group) => ({
       ...group,
-      items: group.ids.map((id) => items.find((item) => item.id === id)).filter(Boolean) as typeof items,
+      items: group.ids
+        .map((id) => items.find((item) => item.id === id))
+        .filter(Boolean) as typeof items,
     }))
     .filter((group) => group.items.length > 0);
-  const renderButton = (item: (typeof items)[number], compact = false) => {
-    const Icon = item.icon;
-    const active = view === item.id;
-    const showLabel = compact || expanded;
-    return (
-      <button
-        key={item.id}
-        type="button"
-        title={item.label}
-        disabled={item.disabled}
-        onClick={() => onViewChange(item.id)}
-        className={`relative flex min-w-0 items-center rounded-md py-2 text-sm font-medium transition ${
-          active
-            ? "bg-brand-green text-white shadow-sm"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        } ${compact ? "h-9 shrink-0 gap-2 px-3" : expanded ? "w-full gap-2 px-3" : "mx-auto size-10 justify-center px-0"} disabled:pointer-events-none disabled:opacity-40`}
-        data-testid={`button-app-nav-${item.id}`}
-      >
-        <Icon className="size-4 shrink-0" />
-        {showLabel && <span className="truncate">{item.label}</span>}
-        {item.count ? (
-          <span
-            className={`${
-              showLabel ? "ml-auto" : "absolute -right-1 -top-1"
-            } rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-white/20 text-white" : "bg-background text-muted-foreground"}`}
-          >
-            {item.count > 99 ? "99+" : item.count}
-          </span>
-        ) : null}
-      </button>
-    );
-  };
+
+  const initials = (currentUser?.name ?? "D")
+    .split(" ")
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
   return (
     <>
+      {/* Desktop rail — collapses to icon-only, expands to 220px on hover */}
       <aside
-        className={`hidden shrink-0 border-r border-border bg-muted/20 px-3 py-4 transition-[width] duration-200 ease-out lg:flex lg:min-h-screen lg:flex-col ${
+        className={`hidden shrink-0 border-r border-border bg-muted/20 transition-[width] duration-[140ms] ease-out lg:flex lg:min-h-screen lg:flex-col ${
           expanded ? "w-[220px]" : "w-14"
         }`}
         onMouseEnter={() => setExpanded(true)}
         onMouseLeave={() => setExpanded(false)}
         onFocus={() => setExpanded(true)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false);
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setExpanded(false);
         }}
         aria-label="Donnit navigation"
+        data-testid="nav-rail"
       >
-        <div className={`mb-5 flex min-h-10 items-center ${expanded ? "justify-start px-1" : "justify-center"}`}>
-          {expanded ? (
-            <div>
-              <Wordmark onClick={() => onViewChange("home")} />
-              <p className="mt-2 text-xs text-muted-foreground">Work continuity command center</p>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onViewChange("home")}
-              className="flex size-10 items-center justify-center rounded-md border border-brand-green/30 bg-brand-green text-white shadow-sm"
-              aria-label="Home"
-              data-testid="button-app-nav-logo-collapsed"
-            >
-              <Check className="size-5" />
-            </button>
+        {/* Brand mark */}
+        <button
+          type="button"
+          onClick={() => onViewChange("home")}
+          aria-label="Home"
+          data-testid="button-app-nav-logo"
+          className={`flex shrink-0 items-center gap-2.5 border-b border-border px-3.5 transition-[height] duration-[140ms] ${
+            expanded ? "h-11 justify-start" : "h-11 justify-center"
+          }`}
+        >
+          <span className="flex size-[22px] shrink-0 items-center justify-center rounded-[5px] bg-brand-green text-white font-mono text-[11px] font-bold leading-none">
+            dn
+          </span>
+          {expanded && (
+            <span className="truncate text-sm font-semibold tracking-tight text-foreground">
+              donnit
+            </span>
           )}
-        </div>
-        <nav className="space-y-2" aria-label="Donnit navigation">
-          {groups.map((group, index) => (
-            <div key={group.label} className={index > 0 ? "border-t border-border pt-2" : ""}>
-              {expanded && (
-                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {group.label}
-                </p>
-              )}
-              <div className="space-y-1">{group.items.map((item) => renderButton(item))}</div>
+        </button>
+
+        {/* Nav groups */}
+        <nav className="flex flex-1 flex-col overflow-hidden py-2" aria-label="Donnit navigation">
+          {groups.map((group, gIdx) => (
+            <div key={group.label} className={gIdx > 0 ? "mt-1 border-t border-border pt-1" : ""}>
+              {/* Section label — fades in when rail is open */}
+              <p
+                className={`px-3.5 pb-0.5 pt-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground transition-opacity duration-[140ms] ${
+                  expanded ? "opacity-100" : "opacity-0"
+                }`}
+              >
+                {group.label}
+              </p>
+
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = view === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    title={item.label}
+                    disabled={item.disabled}
+                    onClick={() => onViewChange(item.id)}
+                    className={`relative flex h-[30px] w-full min-w-0 items-center gap-2.5 px-2.5 text-[13px] font-medium transition-colors duration-[140ms] disabled:pointer-events-none disabled:opacity-40 ${
+                      active
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    }`}
+                    data-testid={`button-app-nav-${item.id}`}
+                  >
+                    {/* Active accent stripe (left edge) */}
+                    {active && (
+                      <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-r bg-brand-green" />
+                    )}
+
+                    {/* Icon */}
+                    <span
+                      className={`flex size-[22px] shrink-0 items-center justify-center rounded-[4px] ${
+                        active ? "bg-brand-green text-white" : ""
+                      }`}
+                    >
+                      <Icon className="size-[14px]" />
+                    </span>
+
+                    {/* Label — fades in with rail */}
+                    <span
+                      className={`flex-1 truncate text-left transition-opacity duration-[140ms] ${
+                        expanded ? "opacity-100" : "opacity-0"
+                      }`}
+                    >
+                      {item.label}
+                    </span>
+
+                    {/* Count badge */}
+                    {item.count ? (
+                      <span
+                        className={`font-mono text-[10px] tabular-nums transition-opacity duration-[140ms] ${
+                          expanded ? "opacity-100" : "opacity-0"
+                        } ${
+                          active
+                            ? "text-brand-green"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {item.count > 99 ? "99+" : item.count}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           ))}
         </nav>
-        {expanded ? (
-          <div className="mt-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground">{currentUser?.name ?? "Donnit user"}</p>
-            <p className="mt-0.5 capitalize">{currentUser?.role ?? "member"}</p>
+
+        {/* User foot */}
+        <div className="shrink-0 border-t border-border p-2">
+          <div
+            className={`flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-muted/50 ${
+              expanded ? "justify-start" : "justify-center"
+            }`}
+            title={currentUser?.name ?? "Donnit user"}
+          >
+            <span className="flex size-[22px] shrink-0 items-center justify-center rounded-full bg-brand-green/15 font-mono text-[10px] font-bold text-brand-green">
+              {initials}
+            </span>
+            {expanded && (
+              <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                {currentUser?.name ?? "Donnit user"}
+              </span>
+            )}
           </div>
-        ) : (
-          <div className="mt-auto flex justify-center">
-            <div className="flex size-9 items-center justify-center rounded-full border border-border bg-background text-xs font-semibold text-foreground" title={currentUser?.name ?? "Donnit user"}>
-              {(currentUser?.name ?? "D").slice(0, 1).toUpperCase()}
-            </div>
-          </div>
-        )}
+        </div>
       </aside>
+
+      {/* Mobile top bar */}
       <div className="border-b border-border bg-background px-3 py-2 lg:hidden">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <Wordmark onClick={() => onViewChange("home")} />
-          <span className="text-xs text-muted-foreground capitalize">{currentUser?.role ?? "member"}</span>
+          <div className="flex items-center gap-2">
+            <span className="flex size-[22px] items-center justify-center rounded-[5px] bg-brand-green font-mono text-[11px] font-bold text-white">
+              dn
+            </span>
+            <span className="text-sm font-semibold tracking-tight">donnit</span>
+          </div>
+          <span className="font-mono text-[10px] text-muted-foreground capitalize">
+            {currentUser?.role ?? "member"}
+          </span>
         </div>
-        <nav className="flex gap-1 overflow-x-auto pb-1" aria-label="Donnit mobile navigation">
-          {items.map((item) => renderButton(item, true))}
+        <nav className="flex gap-0.5 overflow-x-auto pb-1" aria-label="Donnit mobile navigation">
+          {items.map((item) => {
+            const Icon = item.icon;
+            const active = view === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                title={item.label}
+                disabled={item.disabled}
+                onClick={() => onViewChange(item.id)}
+                className={`flex h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+                  active
+                    ? "bg-brand-green text-white"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+                data-testid={`button-app-nav-${item.id}`}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
       </div>
     </>

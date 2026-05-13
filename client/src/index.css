@@ -716,20 +716,19 @@
     color: hsl(var(--primary-foreground));
   }
 
-  /* Task row: flat surface, urgency communicated only by left border. */
+  /* Task row: flat dense single-line grid (proto-styles pattern).
+     7 columns: check | prio-icon | title | meta-badge | due | assignee | action */
   .task-row {
     position: relative;
-    display: flex;
-    gap: 0.75rem;
+    display: grid;
+    grid-template-columns: 28px 20px 1fr auto auto auto auto;
+    gap: 0.5rem;
     align-items: center;
-    background: hsl(var(--card));
-    border: 1px solid hsl(var(--card-border));
-    border-left-width: 2px;
-    border-left-color: hsl(var(--card-border));
-    border-radius: 0.375rem;
-    padding: 10px 12px;
-    min-width: 0;
-    transition: opacity 180ms ease, background 140ms ease, border-color 140ms ease;
+    height: 40px;
+    padding: 0 1rem;
+    border-bottom: 1px solid hsl(var(--border));
+    background: transparent;
+    transition: background 120ms ease;
   }
 
   .task-row-openable {
@@ -737,32 +736,105 @@
   }
 
   .task-row-openable:hover {
-    background: hsl(var(--muted) / 0.28);
-    border-color: hsl(var(--border));
+    background: hsl(var(--muted) / 0.25);
   }
 
-  .task-row.urgency-high {
-    border-left-color: hsl(var(--brand-alert));
+  .task-row.selected-row {
+    background: hsl(var(--brand-green-pale));
   }
 
-  .task-row.urgency-medium {
-    border-left-color: hsl(var(--brand-amber));
-  }
-
-  .task-row.urgency-low {
-    border-left-color: hsl(var(--brand-green));
+  .task-row.selected-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: hsl(var(--brand-green));
+    border-radius: 0 2px 2px 0;
   }
 
   .task-row.is-done {
     opacity: 0.5;
-    background: hsl(var(--brand-green-pale));
-    border-left-color: hsl(var(--brand-green));
   }
 
   .task-row.is-done .task-title {
     text-decoration: line-through;
-    text-decoration-thickness: 1.5px;
+    text-decoration-color: hsl(var(--muted-foreground));
+    text-decoration-thickness: 1px;
   }
+
+  /* Priority icon — urgency communicated by icon shape + color (not row fill) */
+  .task-prio {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    color: hsl(var(--border));
+    flex-shrink: 0;
+  }
+
+  .task-prio svg { width: 14px; height: 14px; stroke-width: 1.7; }
+
+  .task-prio.prio-critical,
+  .task-prio.prio-high    { color: hsl(var(--brand-alert)); }
+  .task-prio.prio-normal,
+  .task-prio.prio-medium  { color: hsl(var(--brand-amber)); }
+  .task-prio.prio-low     { color: hsl(var(--brand-green)); }
+
+  /* Meta badge — small mono label for urgency/status */
+  .task-meta-badge {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.45);
+    border: 1px solid hsl(var(--border));
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .task-meta-badge.badge-critical,
+  .task-meta-badge.badge-high   { color: hsl(var(--brand-alert)); border-color: hsl(var(--brand-alert) / 0.3); background: hsl(var(--brand-alert) / 0.07); }
+  .task-meta-badge.badge-medium,
+  .task-meta-badge.badge-normal { color: hsl(var(--brand-amber)); border-color: hsl(var(--brand-amber) / 0.3); background: hsl(var(--brand-amber) / 0.07); }
+  .task-meta-badge.badge-low    { color: hsl(var(--brand-green)); border-color: hsl(var(--brand-green) / 0.3); background: hsl(var(--brand-green) / 0.07); }
+
+  /* Due date cell */
+  .task-due-cell {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+    white-space: nowrap;
+    min-width: 52px;
+    text-align: right;
+  }
+
+  .task-due-cell.due-overdue { color: hsl(var(--brand-alert)); font-weight: 600; }
+  .task-due-cell.due-today   { color: hsl(var(--brand-amber)); font-weight: 600; }
+
+  /* Assignee avatar */
+  .task-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, hsl(var(--brand-green)), hsl(156 80% 28%));
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    font-weight: 600;
+    color: white;
+    flex-shrink: 0;
+  }
+
+  /* Legacy card-style urgency classes — kept for task-row-openable compatibility, now no-ops */
+  .task-row.urgency-high,
+  .task-row.urgency-medium,
+  .task-row.urgency-low { /* intentionally empty — urgency is now shown via prio icon */ }
 
   .tasks-split-layout {
     display: grid;
@@ -947,7 +1019,7 @@
 
   .home-hero {
     display: flex;
-    align-items: end;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
     border-bottom: 1px solid hsl(var(--border));
@@ -956,7 +1028,23 @@
 
   .home-hero .greet {
     font-family: var(--font-sans);
-    letter-spacing: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: hsl(var(--foreground));
+    margin: 0 0 4px;
+  }
+
+  .home-meta {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    line-height: 1.4;
+  }
+
+  .home-meta .sep {
+    color: hsl(var(--muted-foreground) / 0.35);
+    margin: 0 5px;
   }
 
   .status-strip {
