@@ -33,6 +33,7 @@ This prevents one customer's connected accounts, actions, or tool history from s
    - Add an authenticated admin/settings endpoint that lists available Composio tools for a workspace user.
    - Surface tool availability in Workspace Settings.
    - No external writes.
+   - Add an authenticated read-only execution route for safe Composio tools. Tools are allowed only when they are clearly read-only by slug or explicitly listed in `DONNIT_COMPOSIO_READ_TOOL_ALLOWLIST`.
 
 3. Gmail/Slack read actions
    - Register safe read tools for Gmail and Slack.

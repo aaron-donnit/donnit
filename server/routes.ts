@@ -45,7 +45,7 @@ import {
 } from "./donnit-store";
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
-import { isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
+import { executeDonnitComposioReadTool, isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
 
 const DEMO_USER_ID = 1;
 
@@ -3612,6 +3612,13 @@ const composioToolsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+const composioReadToolSchema = z.object({
+  toolSlug: z.string().trim().min(2).max(120),
+  arguments: z.record(z.unknown()).default({}),
+  connectedAccountId: z.string().trim().min(1).max(160).optional(),
+  version: z.string().trim().min(1).max(80).optional(),
+});
+
 const salesLeadSchema = z.object({
   intent: z.enum(["signup", "demo"]).default("signup"),
   name: z.string().trim().min(2).max(120),
@@ -5465,6 +5472,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: result.entityId,
         tools: result.tools,
       });
+    } catch (error) {
+      res.status(502).json({
+        ok: false,
+        configured: isComposioConfigured(),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post("/api/integrations/composio/read", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = composioReadToolSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Composio read tool request is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceMemberContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const result = await executeDonnitComposioReadTool({
+        orgId: context.orgId,
+        userId: auth.userId,
+        toolSlug: parsed.data.toolSlug,
+        arguments: parsed.data.arguments,
+        connectedAccountId: parsed.data.connectedAccountId,
+        version: parsed.data.version,
+      });
+      res.json({ ok: true, configured: isComposioConfigured(), result });
     } catch (error) {
       res.status(502).json({
         ok: false,

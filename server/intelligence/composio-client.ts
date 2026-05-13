@@ -22,6 +22,9 @@ export type DonnitComposioExecuteRequest = {
   allowWrites: boolean;
 };
 
+const WRITE_TOOL_PATTERN = /(?:^|_)(?:SEND|CREATE|UPDATE|DELETE|REMOVE|POST|REPLY|DRAFT|INSERT|PATCH|PUT|INVITE|ADD|ARCHIVE|MOVE)(?:_|$)/i;
+const READ_TOOL_PATTERN = /(?:^|_)(?:GET|LIST|SEARCH|FETCH|RETRIEVE|READ|QUERY|FIND)(?:_|$)/i;
+
 type ComposioLike = {
   tools: {
     get: (userId: string, filters: string | Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
@@ -42,6 +45,22 @@ export function getDonnitComposioEntityId(orgId: string, userId: string) {
     .replace(/^_+|_+$/g, "")
     .slice(0, 180);
   return `donnit_${clean}`;
+}
+
+export function getComposioReadToolAllowlist() {
+  return new Set(
+    (process.env.DONNIT_COMPOSIO_READ_TOOL_ALLOWLIST ?? "")
+      .split(",")
+      .map((tool) => tool.trim().toUpperCase())
+      .filter(Boolean),
+  );
+}
+
+export function isReadOnlyComposioToolAllowed(toolSlug: string, allowlist = getComposioReadToolAllowlist()) {
+  const normalized = toolSlug.trim().toUpperCase();
+  if (!normalized) return false;
+  if (allowlist.size > 0) return allowlist.has(normalized);
+  return READ_TOOL_PATTERN.test(normalized) && !WRITE_TOOL_PATTERN.test(normalized);
 }
 
 export function getDonnitComposioClient(): ComposioLike | null {
@@ -87,5 +106,18 @@ export async function executeDonnitComposioTool(input: DonnitComposioExecuteRequ
     arguments: input.arguments,
     ...(input.connectedAccountId ? { connectedAccountId: input.connectedAccountId } : {}),
     ...(input.version ? { version: input.version } : { dangerouslySkipVersionCheck: true }),
+  });
+}
+
+export async function executeDonnitComposioReadTool(
+  input: Omit<DonnitComposioExecuteRequest, "sideEffect" | "allowWrites">,
+) {
+  if (!isReadOnlyComposioToolAllowed(input.toolSlug)) {
+    throw new Error(`Composio tool ${input.toolSlug} is not approved for autonomous read execution.`);
+  }
+  return executeDonnitComposioTool({
+    ...input,
+    sideEffect: "read",
+    allowWrites: false,
   });
 }
