@@ -56,11 +56,11 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="relative isolate overflow-hidden px-4 pb-12 pt-16 lg:px-6 lg:pb-18 lg:pt-24">
+      <section className="landing-hero-section relative isolate overflow-hidden px-4 pb-12 pt-16 lg:px-6 lg:pb-18 lg:pt-24">
         <div className="relative mx-auto max-w-7xl">
           <div className="mx-auto max-w-4xl text-center">
-            <p className="ui-label">AI-powered work continuity</p>
-            <h1 className="mt-4 text-5xl font-semibold leading-[1.02] text-foreground md:text-7xl">
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />AI-powered work continuity</p>
+            <h1 className="mt-5 text-5xl leading-[1.02] text-foreground md:text-7xl">
               Work remembered.<span className="block text-brand-green">Handoffs handled.</span>
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">
@@ -110,7 +110,7 @@ export default function LandingPage() {
       <section id="continuity" className="px-4 py-10 lg:px-6 lg:py-16">
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
-            <p className="ui-label">Role handoffs</p>
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />Role handoffs</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Less scramble. Cleaner starts.</h2>
             <p className="mt-4 text-lg leading-8 text-muted-foreground">Donnit builds Position Profiles from real work, not stale job descriptions.</p>
           </div>
@@ -144,19 +144,19 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="how-it-works" className="px-4 py-10 lg:px-6 lg:py-14">
+      <section id="how-it-works" className="landing-dark px-4 py-10 lg:px-6 lg:py-16">
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
-            <p className="ui-label">How it works</p>
-            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Capture. Clarify. Carry forward.</h2>
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />How it works</p>
+            <h2 className="mt-4 text-3xl font-semibold leading-tight md:text-5xl">Capture. Clarify. Carry forward.</h2>
           </div>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
             {flow.map((item, index) => (
-              <div key={item.title} className="landing-flow-step rounded-md border border-border bg-card p-5 text-center">
-                <div className="mx-auto flex size-11 items-center justify-center rounded-md bg-brand-green/10 text-brand-green"><item.icon className="size-5" /></div>
-                <p className="ui-label mt-5">0{index + 1}</p>
-                <h3 className="mt-1 text-xl font-semibold">{item.title}</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.copy}</p>
+              <div key={item.title} className="landing-dark-card">
+                <div className="landing-dark-icon"><item.icon className="size-5" /></div>
+                <p className="landing-dark-card-num mt-2">0{index + 1}</p>
+                <h3>{item.title}</h3>
+                <p>{item.copy}</p>
               </div>
             ))}
           </div>
@@ -167,7 +167,7 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl">
           <div className="grid gap-8 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
             <div className="max-w-xl">
-              <p className="ui-label">Daily work</p>
+              <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />Daily work</p>
               <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Your day, already sorted.</h2>
               <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">Type it. Approve it. Schedule it. Donnit keeps the context close.</p>
             </div>
@@ -192,12 +192,16 @@ export default function LandingPage() {
       <section id="integrations" className="px-4 py-10 lg:px-6 lg:py-14">
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
-            <p className="ui-label">Works where work starts</p>
-            <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Slack, email, and calendar first. SMS next.</h2>
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />Works where work starts</p>
+            <h2 className="mt-4 text-3xl font-semibold leading-tight md:text-5xl">Slack, email, and calendar first.</h2>
+            <p className="mt-4 text-lg text-muted-foreground">SMS coming soon. No extra setup — connect once and Donnit listens.</p>
           </div>
-          <div className="mx-auto mt-8 grid max-w-4xl grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="mx-auto mt-10 flex max-w-4xl flex-wrap justify-center gap-3">
             {integrations.map((name) => (
-              <div key={name} className="rounded-md border border-border bg-card px-4 py-4 text-center text-sm font-medium">{name}</div>
+              <div key={name} className="landing-source-pill">
+                <span className="landing-source-pill-dot" />
+                {name}
+              </div>
             ))}
           </div>
         </div>
@@ -206,7 +210,7 @@ export default function LandingPage() {
       <section id="pricing" className="px-4 py-10 lg:px-6 lg:py-16">
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-3xl text-center">
-            <p className="ui-label">Pricing</p>
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />Pricing</p>
             <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Start small. Prove value.</h2>
             <p className="mx-auto mt-4 max-w-xl text-muted-foreground">Begin with one role or one team. Expand when the workflow is working.</p>
           </div>
@@ -232,12 +236,15 @@ export default function LandingPage() {
       </section>
 
       <section className="px-4 py-14 lg:px-6 lg:py-20">
-        <div className="mx-auto max-w-4xl text-center">
-          <p className="ui-label">Get started</p>
-          <h2 className="mt-3 text-3xl font-semibold leading-tight md:text-5xl">Try Donnit with one role.</h2>
-          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Button size="lg" className="landing-primary-cta" onClick={goToLogin}>Start free</Button>
-            <Button size="lg" variant="outline" asChild><a href={demoMailto}>Book demo</a></Button>
+        <div className="mx-auto max-w-5xl">
+          <div className="landing-cta-band">
+            <p className="landing-eyebrow"><span className="landing-eyebrow-dot" />Get started</p>
+            <h2 className="mt-5 text-3xl font-semibold leading-tight md:text-5xl">Try Donnit with one role.</h2>
+            <p className="mt-4 max-w-xl text-lg text-muted-foreground">Start in minutes. No card, no commitment. One role is all you need to see the difference.</p>
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+              <Button size="lg" className="landing-primary-cta" onClick={goToLogin}>Start free</Button>
+              <Button size="lg" variant="outline" asChild><a href={demoMailto}>Book demo</a></Button>
+            </div>
           </div>
         </div>
       </section>

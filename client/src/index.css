@@ -199,11 +199,9 @@
 
   .landing-page h1,
   .landing-page h2,
-  .landing-page h3,
-  .landing-page h4,
-  .landing-page .display-font {
-    font-family: var(--font-sans);
-    letter-spacing: 0;
+  .landing-page h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.022em;
   }
 
   .landing-primary-cta {
@@ -480,6 +478,133 @@
 
   .landing-profile-preview {
     animation: landing-profile-breathe 5s ease-in-out infinite;
+  }
+
+  /* Eyebrow pill */
+  .landing-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 12px;
+    border-radius: 99px;
+    background: hsl(var(--brand-green) / 0.12);
+    color: hsl(156 100% 28%);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border: 1px solid hsl(var(--brand-green) / 0.22);
+    text-transform: none;
+  }
+  .landing-eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: hsl(var(--brand-green));
+    flex-shrink: 0;
+  }
+
+  /* Hero radial gradient overlay */
+  .landing-hero-section {
+    background:
+      radial-gradient(60% 50% at 70% 0%, hsl(var(--brand-green) / 0.07), transparent 60%),
+      radial-gradient(40% 40% at 0% 30%, hsl(var(--brand-green) / 0.04), transparent 70%);
+  }
+
+  /* "How it works" dark strip */
+  .landing-dark {
+    background: hsl(222 18% 13%);
+    color: hsl(0 0% 92%);
+  }
+  .landing-dark .landing-eyebrow {
+    background: hsl(var(--brand-green) / 0.18);
+    color: hsl(var(--brand-green));
+    border-color: hsl(var(--brand-green) / 0.28);
+  }
+  .landing-dark h2 {
+    color: hsl(0 0% 93%);
+  }
+  .landing-dark-card {
+    background: hsl(0 0% 100% / 0.04);
+    border: 1px solid hsl(0 0% 100% / 0.1);
+    border-radius: 0.875rem;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 200ms ease, transform 200ms ease;
+  }
+  .landing-dark-card:hover {
+    border-color: hsl(var(--brand-green) / 0.35);
+    transform: translateY(-2px);
+  }
+  .landing-dark-card-num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: hsl(var(--brand-green));
+    letter-spacing: 0.06em;
+  }
+  .landing-dark-card h3 {
+    color: hsl(0 0% 93%);
+    font-size: 1.2rem;
+    margin-top: 4px;
+  }
+  .landing-dark-card p {
+    color: hsl(0 0% 62%);
+    font-size: 14px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  .landing-dark-card .landing-dark-icon {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: hsl(var(--brand-green) / 0.15);
+    color: hsl(var(--brand-green));
+  }
+
+  /* Integration source pills */
+  .landing-source-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-radius: 99px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--card));
+    font-size: 14px;
+    font-weight: 500;
+    transition: border-color 140ms ease, background 140ms ease;
+  }
+  .landing-source-pill:hover {
+    border-color: hsl(var(--brand-green) / 0.4);
+    background: hsl(var(--brand-green) / 0.05);
+  }
+  .landing-source-pill-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: hsl(var(--brand-green));
+    flex-shrink: 0;
+  }
+
+  /* CTA gradient band */
+  .landing-cta-band {
+    border: 1px solid hsl(var(--border));
+    border-radius: 18px;
+    background:
+      radial-gradient(80% 100% at 100% 0%, hsl(var(--brand-green) / 0.12), transparent 70%),
+      radial-gradient(60% 80% at 0% 100%, hsl(var(--brand-green) / 0.07), transparent 70%),
+      hsl(var(--card));
+    padding: 60px 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
   }
 
   @keyframes landing-nudge {

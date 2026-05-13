@@ -38,7 +38,7 @@ export default function AppShellNav({
     <>
       {/* Desktop rail — collapses to icon-only, expands to 220px on hover */}
       <aside
-        className={`hidden shrink-0 border-r border-border bg-muted/20 transition-[width] duration-[140ms] ease-out lg:flex lg:min-h-screen lg:flex-col ${
+        className={`hidden shrink-0 border-r border-border bg-muted/20 transition-[width] duration-[140ms] ease-out lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:overflow-y-auto ${
           expanded ? "w-[220px]" : "w-14"
         }`}
         onMouseEnter={() => setExpanded(true)}
