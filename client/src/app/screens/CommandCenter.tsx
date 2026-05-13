@@ -1031,7 +1031,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       done: orderedAgenda.length > 0 || agendaApproved,
       actionLabel: "Build",
       onAction: () => {
-        setSupportView("agenda");
+        openAppView("agenda");
         buildAgenda.mutate({});
       },
     },
@@ -1084,7 +1084,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       done: orderedAgenda.length > 0 || agendaApproved,
       actionLabel: "Build",
       onAction: () => {
-        setSupportView("agenda");
+        openAppView("agenda");
         buildAgenda.mutate({});
       },
     },
@@ -1219,7 +1219,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       label: "Build agenda",
       icon: Workflow,
       onClick: () => {
-        setSupportView("agenda");
+        openAppView("agenda");
         buildAgenda.mutate({});
       },
       loading: buildAgenda.isPending,
