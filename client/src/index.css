@@ -83,6 +83,15 @@
   --destructive-border: hsl(13 100% 50%);
   --sidebar-primary-border: hsl(156 100% 30%);
   --sidebar-accent-border: hsl(153 60% 80%);
+
+  /* Semantic tint fills — soft backgrounds for badges, pills, bucket headers */
+  --tint-danger:  13 90% 95%;   /* pale red   #fde8e0 */
+  --tint-warning: 46 90% 92%;   /* pale amber #fcf2d2 */
+  --tint-success: var(--brand-green-pale);
+  --tint-info:    217 75% 94%;  /* pale blue  #e6eef9 */
+
+  /* Info accent — used for top-border KPI accents */
+  --accent-info: 217 65% 55%;
 }
 
 .dark {
@@ -127,6 +136,12 @@
   --destructive-border: hsl(13 90% 50%);
   --sidebar-primary-border: hsl(156 70% 35%);
   --sidebar-accent-border: hsl(218 12% 24%);
+
+  --tint-danger:  13 50% 18%;
+  --tint-warning: 46 50% 18%;
+  --tint-success: 156 35% 18%;
+  --tint-info:    217 50% 22%;
+  --accent-info: 217 65% 62%;
 }
 
 @layer base {
@@ -764,23 +779,24 @@
     text-decoration-thickness: 1px;
   }
 
-  /* Priority icon — urgency communicated by icon shape + color (not row fill) */
+  /* Priority icon — icon shape + soft tinted fill pill */
   .task-prio {
     display: grid;
     place-items: center;
     width: 20px;
     height: 20px;
+    border-radius: 4px;
     color: hsl(var(--border));
     flex-shrink: 0;
   }
 
-  .task-prio svg { width: 14px; height: 14px; stroke-width: 1.7; }
+  .task-prio svg { width: 13px; height: 13px; stroke-width: 1.7; }
 
   .task-prio.prio-critical,
-  .task-prio.prio-high    { color: hsl(var(--brand-alert)); }
+  .task-prio.prio-high    { color: hsl(var(--brand-alert)); background: hsl(var(--tint-danger)); }
   .task-prio.prio-normal,
-  .task-prio.prio-medium  { color: hsl(var(--brand-amber)); }
-  .task-prio.prio-low     { color: hsl(var(--brand-green)); }
+  .task-prio.prio-medium  { color: hsl(var(--brand-amber)); background: hsl(var(--tint-warning)); }
+  .task-prio.prio-low     { color: hsl(var(--brand-green)); background: hsl(var(--tint-success)); }
 
   /* Meta badge — small mono label for urgency/status */
   .task-meta-badge {
@@ -1065,6 +1081,7 @@
     justify-content: center;
     gap: 0.25rem;
     border-right: 1px solid hsl(var(--border));
+    border-top: 2px solid transparent;
     padding: 0.75rem 1rem;
   }
 
@@ -1072,6 +1089,12 @@
   .status-strip > span:last-child {
     border-right: 0;
   }
+
+  /* 2px top accent per cell meaning */
+  .status-strip > .status-cell[data-accent="success"] { border-top-color: hsl(var(--brand-green)); }
+  .status-strip > .status-cell[data-accent="warning"] { border-top-color: hsl(var(--brand-amber)); }
+  .status-strip > .status-cell[data-accent="danger"]  { border-top-color: hsl(var(--brand-alert)); }
+  .status-strip > .status-cell[data-accent="info"]    { border-top-color: hsl(var(--accent-info)); }
 
   .status-strip .font-display {
     font-family: var(--font-mono);
@@ -1136,6 +1159,11 @@
   .task-group-head .task-group-dot.is-upcoming{ background: hsl(var(--brand-green)); }
   .task-group-head .task-group-dot.is-delegated{ background: hsl(var(--brand-mute-text)); }
   .task-group-head .task-group-dot.is-done    { background: hsl(var(--brand-green)); }
+
+  /* Tinted gradient sweep behind bucket headers */
+  .task-group-head[data-bucket="overdue"]  { background: linear-gradient(90deg, hsl(var(--tint-danger)) 0%, transparent 220px); }
+  .task-group-head[data-bucket="today"]    { background: linear-gradient(90deg, hsl(var(--tint-warning)) 0%, transparent 220px); }
+  .task-group-head[data-bucket="done"]     { background: linear-gradient(90deg, hsl(var(--tint-success)) 0%, transparent 220px); }
 
   .task-group-head .task-group-label {
     font-family: var(--font-mono);

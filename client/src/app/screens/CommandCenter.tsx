@@ -1418,30 +1418,35 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   value={metrics.open}
                   delta={metrics.dueToday > 0 ? `${metrics.dueToday} due today` : "Nothing dated today"}
                   tone={metrics.dueToday > 0 ? "down" : "neutral"}
+                  accent="info"
                 />
                 <Stat
                   label="Due today"
                   value={metrics.dueToday}
                   delta={metrics.dueToday > 0 ? "Focus list" : "All clear"}
                   tone={metrics.dueToday > 0 ? "down" : "up"}
+                  accent={metrics.dueToday > 0 ? "danger" : "success"}
+                />
+                <Stat
+                  label="Overdue"
+                  value={metrics.overdue}
+                  delta={metrics.overdue > 0 ? "Past due — act now" : "Nothing overdue"}
+                  tone={metrics.overdue > 0 ? "down" : "up"}
+                  accent={metrics.overdue > 0 ? "danger" : "success"}
                 />
                 <Stat
                   label="Needs acceptance"
                   value={metrics.needsAcceptance}
                   delta={metrics.needsAcceptance > 0 ? "Waiting on owner" : "No handoffs pending"}
                   tone={metrics.needsAcceptance > 0 ? "down" : "neutral"}
-                />
-                <Stat
-                  label="Approval queue"
-                  value={metrics.emailQueue}
-                  delta={metrics.emailQueue > 0 ? "Review inbox suggestions" : "Inbox clean"}
-                  tone={metrics.emailQueue > 0 ? "down" : "up"}
+                  accent="warning"
                 />
                 <Stat
                   label="Completed"
                   value={metrics.completed}
                   delta={metrics.completed > 0 ? "That's one less thing" : "Get the first done"}
                   tone={metrics.completed > 0 ? "up" : "neutral"}
+                  accent="success"
                 />
               </div>
               <div className="grid gap-4 lg:grid-cols-12">
@@ -1914,14 +1919,16 @@ function Stat({
   value,
   delta,
   tone = "neutral",
+  accent,
 }: {
   label: string;
   value: number | string;
   delta?: string;
   tone?: "up" | "down" | "neutral";
+  accent?: "success" | "warning" | "danger" | "info";
 }) {
   return (
-    <div className="status-cell" data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+    <div className="status-cell" data-accent={accent} data-testid={`stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
       <span className="status-cell-label">{label}</span>
       <span className="status-cell-value">{value}</span>
       {delta ? (

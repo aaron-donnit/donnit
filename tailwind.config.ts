@@ -89,6 +89,10 @@ export default {
           alert: "hsl(var(--brand-alert) / <alpha-value>)",
           amber: "hsl(var(--brand-amber) / <alpha-value>)",
         },
+        "tint-danger":  "hsl(var(--tint-danger) / <alpha-value>)",
+        "tint-warning": "hsl(var(--tint-warning) / <alpha-value>)",
+        "tint-success": "hsl(var(--tint-success) / <alpha-value>)",
+        "tint-info":    "hsl(var(--tint-info) / <alpha-value>)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
