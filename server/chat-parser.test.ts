@@ -88,4 +88,25 @@ describe("chat task parser", () => {
     expect(draft.toLowerCase()).not.toContain("please send a few times");
     expect(draft.toLowerCase()).not.toContain("availability");
   });
+
+  it("uses specific repeat details in chat task confirmations", () => {
+    const outcome = __chatParserTest.chatTaskOutcome(
+      {
+        title: "Update the company financial reports",
+        assigned_to: "user-nina",
+        due_date: "2026-06-01",
+        due_time: null,
+        start_time: null,
+        recurrence: "monthly",
+        description: "Repeat details: First Monday of every month",
+        urgency: "normal",
+        visibility: "work",
+      } as never,
+      [{ user_id: "user-nina", profile: { full_name: "Nina Patel", email: "nina@example.com" } }] as never,
+    );
+
+    expect(outcome).toBe(
+      "I assigned Nina Patel to update the company financial reports by June 1, 2026. It repeats First Monday of every month.",
+    );
+  });
 });

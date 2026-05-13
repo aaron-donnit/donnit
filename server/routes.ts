@@ -2956,7 +2956,10 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
   const action = taskActionForSentence(task.title);
   const timeText = formatChatTime(task.due_time ?? task.start_time);
   const dueText = task.due_date ? ` by ${formatChatDueDate(task.due_date)}${timeText ? ` at ${timeText}` : ""}` : "";
-  const recurrenceText = task.recurrence !== "none" ? ` It repeats ${task.recurrence}.` : "";
+  const repeatDetails = repeatDetailsFromDescription(task.description);
+  const recurrenceText = task.recurrence !== "none"
+    ? ` It repeats ${repeatDetails || task.recurrence}.`
+    : "";
   const urgencyText =
     task.urgency === "critical"
       ? " It is marked critical."
@@ -4575,7 +4578,9 @@ export const __chatParserTest = {
   parseEstimate,
   parseTaskTime,
   parseTaskRecurrence,
+  repeatDetailsFromDescription,
   rewriteRequesterReferencesInTitle,
+  chatTaskOutcome,
   titleFromMessage,
 };
 
