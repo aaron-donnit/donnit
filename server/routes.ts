@@ -1016,7 +1016,8 @@ function parseTaskRecurrence(message: string): DonnitTask["recurrence"] {
   if (/\b(?:every month|each month|monthly|month end|eom|(?:first|second|third|fourth|last)\s+\w+\s+(?:of\s+)?(?:every|each|the)?\s*month)\b/.test(text)) {
     return "monthly";
   }
-  if (/\b(?:every week|each week|weekly|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/.test(text)) {
+  if (/\b(?:every|each)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(text)) return "weekly";
+  if (/\b(?:every week|each week|weekly|mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays)\b/.test(text)) {
     return "weekly";
   }
   return "none";

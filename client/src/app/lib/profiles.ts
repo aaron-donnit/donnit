@@ -99,7 +99,7 @@ function profileWithLinkedTasks(
   if (linkedTasks.length === 0) return profile;
   const currentIncompleteTasks = linkedTasks.filter((task) => task.status !== "completed" && task.status !== "denied");
   const completedTasks = linkedTasks.filter((task) => task.status === "completed");
-  const recurringTasks = linkedTasks.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
+  const recurringTasks = linkedTasks.filter((task) => task.recurrence !== "none");
   const criticalDates = Array.from(
     new Set(
       linkedTasks
@@ -193,7 +193,7 @@ export function buildPositionProfiles(
     const owned = tasks.filter((task) => String(task.assignedToId) === String(user.id) && task.visibility !== "personal");
     const currentIncompleteTasks = owned.filter((task) => task.status !== "completed" && task.status !== "denied");
     const completedTasks = owned.filter((task) => task.status === "completed");
-    const recurringTasks = owned.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed");
+    const recurringTasks = owned.filter((task) => task.recurrence !== "none");
     const criticalDates = Array.from(
       new Set(
         owned
@@ -292,7 +292,7 @@ export function buildPositionProfiles(
       {
         ...profile,
         currentIncompleteTasks: profileTasks.filter((task) => task.status !== "completed" && task.status !== "denied"),
-        recurringTasks: profileTasks.filter((task) => task.recurrence !== "none" || inferTaskCadence(task) !== "As needed"),
+        recurringTasks: profileTasks.filter((task) => task.recurrence !== "none"),
         completedTasks: profileTasks.filter((task) => task.status === "completed"),
       },
       record,

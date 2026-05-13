@@ -52,6 +52,12 @@ describe("chat task parser", () => {
     expect(nextDue).toBe("2026-07-06");
   });
 
+  it("does not treat one-time weekday due dates as recurring", () => {
+    expect(__chatParserTest.parseTaskRecurrence("send the board packet by Monday")).toBe("none");
+    expect(__chatParserTest.parseTaskRecurrence("send the board packet every Monday")).toBe("weekly");
+    expect(__chatParserTest.parseTaskRecurrence("send the board packet Mondays")).toBe("weekly");
+  });
+
   it("rewrites requester pronouns when assigning work to someone else", () => {
     vi.setSystemTime(new Date("2026-05-12T16:00:00-04:00"));
     const prompt = "assign Nina to send me a payroll report by EOW";
