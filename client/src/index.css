@@ -1763,6 +1763,50 @@
       hsl(var(--card));
   }
 
+  .profile-disclosure {
+    overflow: hidden;
+  }
+
+  .profile-disclosure-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.75rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+
+  .profile-disclosure-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .profile-disclosure-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    background: hsl(var(--muted) / 0.7);
+    flex-shrink: 0;
+  }
+
+  .profile-disclosure-chevron {
+    flex-shrink: 0;
+    transition: transform 140ms ease;
+  }
+
+  .profile-disclosure[open] .profile-disclosure-chevron {
+    transform: rotate(180deg);
+  }
+
+  .profile-disclosure-body {
+    border-top: 1px solid hsl(var(--border));
+    padding: 0.75rem;
+    background: hsl(var(--muted) / 0.18);
+  }
+
   @media (max-width: 1023px) {
     .tasks-split-layout {
       grid-template-columns: 1fr;

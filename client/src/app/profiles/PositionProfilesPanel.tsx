@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BriefcaseBusiness, Check, Eye, HelpCircle, History, KeyRound, ListChecks, ListPlus, Loader2, Plus, Repeat2, Search, Shield, ShieldCheck, Sparkles, UserCog, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, BriefcaseBusiness, Check, ChevronDown, Eye, HelpCircle, History, KeyRound, ListChecks, ListPlus, Loader2, Plus, Repeat2, Search, Shield, ShieldCheck, Sparkles, UserCog, UserPlus, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,7 @@ export default function PositionProfilesPanel({
   const [delegateUntil, setDelegateUntil] = useState("");
   const [showProfileHistory, setShowProfileHistory] = useState(false);
   const [profileListSearch, setProfileListSearch] = useState("");
+  const [profileListFilter, setProfileListFilter] = useState<"current" | "vacant" | "delegated" | "archived" | "all">("current");
   const [profileTaskSearch, setProfileTaskSearch] = useState("");
   const [selectedProfileTaskId, setSelectedProfileTaskId] = useState<string | null>(null);
   const [accessDraft, setAccessDraft] = useState<{
@@ -357,6 +358,44 @@ export default function PositionProfilesPanel({
     setSelectedProfileId(repositoryProfiles.find((profile) => profile.id !== selectedProfile.id)?.id ?? "");
     setViewMode("list");
   };
+  const archiveProfile = () => {
+    if (!selectedProfile) return;
+    if (authenticated) {
+      if (!selectedProfile.persisted) {
+        toast({
+          title: "Save the Position Profile first",
+          description: "Generated profiles need to be saved before they can be archived.",
+        });
+        return;
+      }
+      updateProfile.mutate({
+        id: selectedProfile.id,
+        patch: {
+          institutionalMemory: {
+            ...selectedProfile.institutionalMemory,
+            archivedAt: new Date().toISOString(),
+            archivedBy: String(currentUserId),
+          },
+          riskSummary: "Archived by admin. Historical position data is retained for continuity review.",
+        },
+      });
+      return;
+    }
+    deleteProfile();
+  };
+  const restoreProfile = () => {
+    if (!selectedProfile || !selectedProfile.persisted) return;
+    const { archivedAt, archivedBy, ...memory } = selectedProfile.institutionalMemory;
+    void archivedAt;
+    void archivedBy;
+    updateProfile.mutate({
+      id: selectedProfile.id,
+      patch: {
+        institutionalMemory: memory,
+        riskSummary: "Restored by admin from archive.",
+      },
+    });
+  };
   const openProfile = (profileId: string) => {
     setSelectedProfileId(profileId);
     setShowProfileHistory(false);
@@ -491,8 +530,22 @@ export default function PositionProfilesPanel({
   });
   const normalizedProfileTaskSearch = profileTaskSearch.trim().toLowerCase();
   const normalizedProfileListSearch = profileListSearch.trim().toLowerCase();
+  const isProfileArchived = (profile: PositionProfile) => typeof profile.institutionalMemory.archivedAt === "string";
+  const archivedProfiles = repositoryProfiles.filter(isProfileArchived);
+  const activeRepositoryProfiles = repositoryProfiles.filter((profile) => !isProfileArchived(profile));
+  const vacantProfiles = activeRepositoryProfiles.filter((profile) => profile.status === "vacant" || !profile.currentOwnerId);
+  const delegatedProfiles = activeRepositoryProfiles.filter((profile) => profile.status === "covered" || profile.delegateUserId || profile.temporaryOwnerId);
+  const currentProfiles = activeRepositoryProfiles.filter((profile) => !vacantProfiles.includes(profile) && !delegatedProfiles.includes(profile));
+  const filteredRepositoryProfiles = repositoryProfiles.filter((profile) => {
+    if (profileListFilter === "all") return true;
+    if (profileListFilter === "archived") return isProfileArchived(profile);
+    if (isProfileArchived(profile)) return false;
+    if (profileListFilter === "vacant") return vacantProfiles.includes(profile);
+    if (profileListFilter === "delegated") return delegatedProfiles.includes(profile);
+    return currentProfiles.includes(profile);
+  });
   const visibleRepositoryProfiles = normalizedProfileListSearch
-    ? repositoryProfiles.filter((profile) => {
+    ? filteredRepositoryProfiles.filter((profile) => {
         const ownerLabel = profileAssignmentLabel(profile, users);
         const haystack = [
           profile.title,
@@ -504,7 +557,7 @@ export default function PositionProfilesPanel({
         ].join(" ").toLowerCase();
         return haystack.includes(normalizedProfileListSearch);
       })
-    : repositoryProfiles;
+    : filteredRepositoryProfiles;
   const allSelectedProfileTasks = selectedProfile
     ? [
         ...selectedProfile.currentIncompleteTasks,
@@ -677,6 +730,29 @@ export default function PositionProfilesPanel({
       <Eye className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
     </button>
   );
+  const renderProfileSection = (
+    title: string,
+    detail: string,
+    icon: ReactNode,
+    count: string | number | null,
+    children: ReactNode,
+    defaultOpen = false,
+  ) => (
+    <details className="profile-disclosure rounded-md border border-border bg-background" open={defaultOpen}>
+      <summary className="profile-disclosure-summary">
+        <span className="profile-disclosure-icon">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold text-foreground">{title}</span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{detail}</span>
+        </span>
+        {count !== null && (
+          <span className="rounded-md bg-muted px-2 py-1 text-[11px] tabular-nums text-muted-foreground">{count}</span>
+        )}
+        <ChevronDown className="profile-disclosure-chevron size-4 text-muted-foreground" />
+      </summary>
+      <div className="profile-disclosure-body">{children}</div>
+    </details>
+  );
 
   return (
     <div className="position-profiles-shell rounded-md border border-border" data-testid="panel-position-profiles">
@@ -771,8 +847,30 @@ export default function PositionProfilesPanel({
             <div>
               <h4 className="text-sm font-semibold text-foreground">Current Position Profiles</h4>
               <p className="text-xs text-muted-foreground">
-                Click a job title to view institutional memory, current work, and transition controls.
+                Start with the job-title repository, then click into a profile when you need assignments, memory, or transition controls.
               </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-5" data-testid="position-profile-status-filters">
+              {([
+                ["current", "Current", currentProfiles.length],
+                ["vacant", "Vacant", vacantProfiles.length],
+                ["delegated", "Delegated", delegatedProfiles.length],
+                ["archived", "Archived", archivedProfiles.length],
+                ["all", "All", repositoryProfiles.length],
+              ] as Array<[typeof profileListFilter, string, number]>).map(([id, label, count]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setProfileListFilter(id)}
+                  className={`rounded-md border px-3 py-2 text-left transition ${
+                    profileListFilter === id ? "border-brand-green bg-brand-green/10" : "border-border bg-background hover:bg-muted/40"
+                  }`}
+                  data-testid={`button-position-profile-filter-${id}`}
+                >
+                  <span className="block text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">{label}</span>
+                  <span className="mt-0.5 block text-lg font-semibold tabular-nums text-foreground">{count}</span>
+                </button>
+              ))}
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -810,6 +908,11 @@ export default function PositionProfilesPanel({
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
+                        {isProfileArchived(profile) && (
+                          <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
+                            Archived
+                          </span>
+                        )}
                         <span
                           className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase ${
                             profile.riskLevel === "high"
@@ -871,12 +974,18 @@ export default function PositionProfilesPanel({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={deleteProfile}
-                disabled={!canManageProfiles || deletePersistedProfile.isPending || (authenticated && !selectedProfile.persisted)}
-                data-testid="button-position-profile-delete"
+                onClick={isProfileArchived(selectedProfile) ? restoreProfile : archiveProfile}
+                disabled={!canManageProfiles || updateProfile.isPending || (authenticated && !selectedProfile.persisted)}
+                data-testid={isProfileArchived(selectedProfile) ? "button-position-profile-restore-top" : "button-position-profile-archive-top"}
               >
-                {deletePersistedProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
-                Delete
+                {updateProfile.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : isProfileArchived(selectedProfile) ? (
+                  <ArchiveRestore className="size-4" />
+                ) : (
+                  <Archive className="size-4" />
+                )}
+                {isProfileArchived(selectedProfile) ? "Restore" : "Archive"}
               </Button>
             </div>
 
@@ -923,7 +1032,18 @@ export default function PositionProfilesPanel({
                 </div>
               </div>
               {handoffReadiness && (
-                <div className="mt-3 rounded-md border border-brand-green/25 bg-brand-green/5 px-3 py-3">
+                <details className="profile-disclosure mt-3 rounded-md border border-border bg-background">
+                  <summary className="profile-disclosure-summary">
+                    <span className="profile-disclosure-icon"><ShieldCheck className="size-4 text-brand-green" /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-semibold text-foreground">Transition snapshot</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">{handoffReadiness.action}</span>
+                    </span>
+                    <ToolStatusBadge status={handoffReadiness.tone} label={handoffReadiness.label} />
+                    <ChevronDown className="profile-disclosure-chevron size-4 text-muted-foreground" />
+                  </summary>
+                  <div className="profile-disclosure-body">
+                <div className="rounded-md border border-brand-green/25 bg-brand-green/5 px-3 py-3">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1041,9 +1161,21 @@ export default function PositionProfilesPanel({
                     </div>
                   </div>
                 </div>
+                  </div>
+                </details>
               )}
               {canManageProfiles && (
-                <div className="mt-3 space-y-1.5">
+                <details className="profile-disclosure mt-3 rounded-md border border-border bg-background">
+                  <summary className="profile-disclosure-summary">
+                    <span className="profile-disclosure-icon"><UserCog className="size-4 text-muted-foreground" /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-semibold text-foreground">Profile actions</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">Rename, change status, transfer, delegate, or archive this profile.</span>
+                    </span>
+                    <ChevronDown className="profile-disclosure-chevron size-4 text-muted-foreground" />
+                  </summary>
+                  <div className="profile-disclosure-body space-y-3">
+                <div className="space-y-1.5">
                   <Label htmlFor="position-profile-rename" className="ui-label">
                     Admin name
                   </Label>
@@ -1064,8 +1196,7 @@ export default function PositionProfilesPanel({
                     data-testid="input-position-profile-rename"
                   />
                 </div>
-              )}
-              {canManageProfiles && authenticated && (
+              {authenticated && (
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {!selectedProfile.persisted ? (
                     <Button
@@ -1129,9 +1260,65 @@ export default function PositionProfilesPanel({
                   )}
                 </div>
               )}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openAssignment("delegate")}
+                  disabled={!canManageProfiles}
+                  data-testid="button-position-profile-action-delegate"
+                >
+                  <UserPlus className="size-4" />
+                  Delegate access
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => openAssignment("transfer")}
+                  disabled={!canManageProfiles}
+                  data-testid="button-position-profile-action-transfer"
+                >
+                  <UserCog className="size-4" />
+                  Transfer profile
+                </Button>
+                {isProfileArchived(selectedProfile) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={restoreProfile}
+                    disabled={!canManageProfiles || !selectedProfile.persisted || updateProfile.isPending}
+                    data-testid="button-position-profile-restore"
+                  >
+                    {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <ArchiveRestore className="size-4" />}
+                    Restore profile
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={archiveProfile}
+                    disabled={!canManageProfiles || updateProfile.isPending}
+                    data-testid="button-position-profile-archive"
+                  >
+                    {updateProfile.isPending ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
+                    Archive profile
+                  </Button>
+                )}
+              </div>
+                  </div>
+                </details>
+              )}
             </div>
 
-            <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-position-role-intelligence">
+            {renderProfileSection(
+              "Role intelligence",
+              "Learned recurring work, recent signals, how-to notes, and source mix.",
+              <Sparkles className="size-4 text-brand-green" />,
+              learnedRecurringCount + learnedHowToNotes.length,
+              <div className="rounded-md border border-border bg-background px-3 py-3" data-testid="panel-position-role-intelligence">
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
                   <p className="flex items-center gap-2 text-xs font-medium text-foreground">
@@ -1264,9 +1451,15 @@ export default function PositionProfilesPanel({
                   )}
                 </div>
               </div>
-            </div>
+              </div>,
+            )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-3">
+            {renderProfileSection(
+              "Search profile memory",
+              "Find current work, recurring responsibilities, history, owners, sources, and notes.",
+              <Search className="size-4 text-muted-foreground" />,
+              null,
+              <div className="rounded-md border border-border bg-background px-3 py-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-medium text-foreground">Profile memory search</p>
@@ -1283,10 +1476,17 @@ export default function PositionProfilesPanel({
                 className="h-9 text-xs"
                 data-testid="input-position-profile-task-search"
               />
-            </div>
+              </div>,
+              true,
+            )}
 
             {selectedProfile.riskReasons.length > 0 && (
-              <div className="rounded-md border border-border bg-background px-3 py-2">
+              renderProfileSection(
+                "Continuity risk",
+                "Issues Donnit sees before this role can be safely covered.",
+                <AlertTriangle className="size-4 text-muted-foreground" />,
+                selectedProfile.riskReasons.length,
+                <div className="rounded-md border border-border bg-background px-3 py-2">
                 <div className="mb-1 flex items-center gap-2">
                   <AlertTriangle className="size-4 text-muted-foreground" />
                   <p className="text-xs font-medium text-foreground">Continuity risk</p>
@@ -1296,10 +1496,16 @@ export default function PositionProfilesPanel({
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>
-              </div>
+                </div>,
+              )
             )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-2">
+            {renderProfileSection(
+              "Handoff readiness",
+              "Checklist of what this profile needs for a clean transition.",
+              <ListChecks className="size-4 text-muted-foreground" />,
+              `${profileReadinessDone}/${profileReadinessItems.length}`,
+              <div className="rounded-md border border-border bg-background px-3 py-2">
               <div className="mb-2 flex items-start justify-between gap-3">
                 <div>
                   <p className="flex items-center gap-2 text-xs font-medium text-foreground">
@@ -1342,9 +1548,15 @@ export default function PositionProfilesPanel({
                   </ul>
                 </div>
               )}
-            </div>
+              </div>,
+            )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-3">
+            {renderProfileSection(
+              "Access inventory",
+              "Role tools, accounts, billing context, and access reset status.",
+              <KeyRound className="size-4 text-muted-foreground" />,
+              selectedProfile.accessItems.length,
+              <div className="rounded-md border border-border bg-background px-3 py-3">
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
                   <p className="flex items-center gap-2 text-xs font-medium text-foreground">
@@ -1472,10 +1684,16 @@ export default function PositionProfilesPanel({
                   </Button>
                 </div>
               )}
-            </div>
+              </div>,
+            )}
 
             {selectedProfile.currentIncompleteTasks.length > 0 && (
-              <div className="rounded-md border border-border bg-background px-3 py-2">
+              renderProfileSection(
+                "Current work",
+                "Incomplete tasks currently tied to this role.",
+                <ListChecks className="size-4 text-muted-foreground" />,
+                selectedProfile.currentIncompleteTasks.length,
+                <div className="rounded-md border border-border bg-background px-3 py-2">
                 <p className="mb-2 text-xs font-medium text-foreground">Current incomplete work</p>
                 <div className="space-y-1">
                   {visibleProfileCurrentTasks.length === 0 ? (
@@ -1488,11 +1706,17 @@ export default function PositionProfilesPanel({
                       .map((task) => renderProfileTaskButton(task, `${task.dueDate ?? "No date"} / ${urgencyLabel(task.urgency)} / ${task.estimatedMinutes} min`))
                   )}
                 </div>
-              </div>
+                </div>,
+              )
             )}
 
             {selectedProfile.recurringTasks.length > 0 && (
-              <div className="rounded-md border border-border bg-background px-3 py-2">
+              renderProfileSection(
+                "Recurring responsibilities",
+                "Work that should come forward for the next profile owner when it is due.",
+                <Repeat2 className="size-4 text-muted-foreground" />,
+                selectedProfile.recurringTasks.length,
+                <div className="rounded-md border border-border bg-background px-3 py-2">
                 <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
                   <Repeat2 className="size-4 text-muted-foreground" />
                   Recurring responsibilities
@@ -1508,10 +1732,16 @@ export default function PositionProfilesPanel({
                       .map((task) => renderProfileTaskButton(task, `${inferTaskCadence(task)} / due ${task.dueDate ?? "not set"} / visible ${task.visibleFrom ?? "now"}`))
                   )}
                 </div>
-              </div>
+                </div>,
+              )
             )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-2">
+            {renderProfileSection(
+              "Historical task memory",
+              "Completed work and retained context for the next person in the role.",
+              <History className="size-4 text-muted-foreground" />,
+              selectedProfile.completedTasks.length,
+              <div className="rounded-md border border-border bg-background px-3 py-2">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="flex items-center gap-2 text-xs font-medium text-foreground">
                   <History className="size-4 text-muted-foreground" />
@@ -1564,9 +1794,15 @@ export default function PositionProfilesPanel({
                   )}
                 </div>
               )}
-            </div>
+              </div>,
+            )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-2">
+            {renderProfileSection(
+              "How-to memory",
+              "Instructions Donnit has learned from notes and completions.",
+              <HelpCircle className="size-4 text-muted-foreground" />,
+              selectedProfile.howTo.length,
+              <div className="rounded-md border border-border bg-background px-3 py-2">
               <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
                 <HelpCircle className="size-4 text-muted-foreground" />
                 How-to memory
@@ -1582,9 +1818,15 @@ export default function PositionProfilesPanel({
                   Donnit needs richer notes on recurring tasks for this profile.
                 </p>
               )}
-            </div>
+              </div>,
+            )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-2">
+            {renderProfileSection(
+              "Tool access summary",
+              "Quick view of known systems connected to this role.",
+              <KeyRound className="size-4 text-muted-foreground" />,
+              selectedProfile.tools.length,
+              <div className="rounded-md border border-border bg-background px-3 py-2">
               <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
                 <KeyRound className="size-4 text-muted-foreground" />
                 Tool access
@@ -1596,9 +1838,15 @@ export default function PositionProfilesPanel({
                   </span>
                 ))}
               </div>
-            </div>
+              </div>,
+            )}
 
-            <div className="rounded-md border border-border bg-background px-3 py-3">
+            {renderProfileSection(
+              "Assign or reassign",
+              "Choose coverage or transfer ownership to another employee.",
+              <UserCog className="size-4 text-muted-foreground" />,
+              null,
+              <div className="rounded-md border border-border bg-background px-3 py-3">
               <p className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
                 <UserCog className="size-4 text-muted-foreground" />
                 {assignmentFocus === "transfer"
@@ -1652,7 +1900,9 @@ export default function PositionProfilesPanel({
                   {mode === "transfer" ? "Transfer profile" : "Start coverage"}
                 </Button>
               </div>
-            </div>
+              </div>,
+              Boolean(assignmentFocus),
+            )}
           </>
         )}
       </div>
