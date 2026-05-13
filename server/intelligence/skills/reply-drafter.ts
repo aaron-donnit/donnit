@@ -3,6 +3,7 @@ import type { DonnitEmailSuggestion, DonnitStore } from "../../donnit-store";
 import { runOpenAiToolLoop, type CreateResponse } from "../openai-agent";
 import { AiObservability } from "../observability";
 import { ToolRegistry } from "../tool-registry";
+import { getDonnitModelPolicy } from "../model-policy";
 
 const getSuggestionInputSchema = z.object({
   suggestion_id: z.string().min(1),
@@ -177,18 +178,15 @@ export async function draftSuggestionReplyWithAgent(input: {
   replyScenario: (suggestion: Pick<DonnitEmailSuggestion, "subject" | "suggested_title" | "preview"> & { body?: string | null }) => string;
   createResponse?: CreateResponse;
 }): Promise<ReplyDraftResult> {
-  const model = process.env.DONNIT_AI_MODEL ?? "gpt-5-mini";
+  const modelPolicy = getDonnitModelPolicy("suggestion_reply_draft");
+  const model = modelPolicy.smallModel;
   const observability = await AiObservability.start({
     store: input.store,
     orgId: input.orgId,
     userId: input.userId,
     skillId: "suggestion_reply_drafter.v1",
     feature: "suggestion_reply_draft",
-    modelPolicy: {
-      provider: "openai",
-      smallModel: model,
-      reasoningModel: process.env.DONNIT_REASONING_MODEL ?? "gpt-5",
-    },
+    modelPolicy,
     metadata: {
       suggestionId: input.suggestionId,
       hasInstruction: Boolean(input.instruction?.trim()),

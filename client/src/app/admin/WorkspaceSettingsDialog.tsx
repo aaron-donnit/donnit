@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CalendarCheck, Check, Inbox, Loader2, MailPlus, Send, Settings, Users } from "lucide-react";
+import { CalendarCheck, Check, Inbox, Loader2, MailPlus, Send, Settings, Users, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,13 @@ type SmsIntegrationStatus = {
   };
 };
 
+type ComposioToolsStatus = {
+  ok: boolean;
+  configured: boolean;
+  entityId: string;
+  tools: unknown[];
+};
+
 export function useGmailOAuthStatus(authenticated: boolean) {
   return useQuery<GmailOAuthStatus>({
     queryKey: ["/api/integrations/gmail/oauth/status"],
@@ -86,6 +93,13 @@ export function useSlackIntegrationStatus(authenticated: boolean) {
 export function useSmsIntegrationStatus(authenticated: boolean) {
   return useQuery<SmsIntegrationStatus>({
     queryKey: ["/api/integrations/sms/status"],
+    enabled: authenticated,
+  });
+}
+
+function useComposioToolsStatus(authenticated: boolean) {
+  return useQuery<ComposioToolsStatus>({
+    queryKey: ["/api/integrations/composio/tools?toolkits=gmail,slack,googlecalendar&limit=12"],
     enabled: authenticated,
   });
 }
@@ -143,6 +157,8 @@ export default function WorkspaceSettingsDialog({
   const slackHealth: "ready" | "warning" | "setup" = slackEventsReady ? (slackBotReady ? "ready" : "warning") : "setup";
   const smsStatus = useSmsIntegrationStatus(authenticated);
   const smsData = smsStatus.data;
+  const composioStatus = useComposioToolsStatus(authenticated);
+  const composioToolCount = Array.isArray(composioStatus.data?.tools) ? composioStatus.data.tools.length : 0;
   const googleHealthLabel =
     oauthStatus?.health === "ready"
       ? "Ready"
@@ -392,6 +408,19 @@ export default function WorkspaceSettingsDialog({
                 actionLabel="Queue test"
                 action={() => testSlack.mutate()}
                 loading={testSlack.isPending}
+              />
+              <ConnectedToolRow
+                icon={Workflow}
+                name="Composio"
+                status={composioStatus.data?.configured ? "ready" : "setup"}
+                detail={
+                  composioStatus.data?.configured
+                    ? `${composioToolCount} external tool actions visible for this workspace user. Entity: ${composioStatus.data.entityId}.`
+                    : "Add COMPOSIO_API_KEY in Vercel to let Donnit route external tool actions through Composio."
+                }
+                actionLabel={composioStatus.isFetching ? "Checking" : "Check tools"}
+                action={() => composioStatus.refetch()}
+                loading={composioStatus.isFetching}
               />
               <ConnectedToolRow
                 icon={Send}

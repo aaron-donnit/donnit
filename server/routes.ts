@@ -45,6 +45,7 @@ import {
 } from "./donnit-store";
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
+import { isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
 
 const DEMO_USER_ID = 1;
 
@@ -3604,6 +3605,13 @@ const suggestionDraftReplySchema = z.object({
   instruction: z.string().trim().max(600).optional(),
 });
 
+const composioToolsQuerySchema = z.object({
+  toolkits: z.string().trim().max(300).optional(),
+  tools: z.string().trim().max(600).optional(),
+  search: z.string().trim().max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 const salesLeadSchema = z.object({
   intent: z.enum(["signup", "demo"]).default("signup"),
   name: z.string().trim().min(2).max(120),
@@ -5422,6 +5430,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const payload = serializeSupabaseError(error);
       console.error("[donnit] member remove access failed", { userId: req.donnitAuth?.userId, ...payload });
       res.status(500).json({ ok: false, ...payload });
+    }
+  });
+
+  app.get("/api/integrations/composio/tools", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = composioToolsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Composio tool filters are invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceMemberContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const splitList = (value?: string) =>
+        value
+          ?.split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      const result = await listDonnitComposioTools({
+        orgId: context.orgId,
+        userId: auth.userId,
+        toolkits: splitList(parsed.data.toolkits),
+        tools: splitList(parsed.data.tools),
+        search: parsed.data.search,
+        limit: parsed.data.limit,
+      });
+      res.json({
+        ok: true,
+        configured: isComposioConfigured(),
+        entityId: result.entityId,
+        tools: result.tools,
+      });
+    } catch (error) {
+      res.status(502).json({
+        ok: false,
+        configured: isComposioConfigured(),
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 
