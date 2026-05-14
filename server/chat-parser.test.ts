@@ -124,6 +124,16 @@ describe("chat task parser", () => {
     expect(__chatParserTest.normalizeCommonTaskTypos("complete all of our wok")).toBe("complete all of our work");
   });
 
+  it("normalizes basic grammar typos and flags vague deck work", () => {
+    const prompt = "assign Nina to work on tha client deck for our processing call by May 21";
+
+    expect(__chatParserTest.normalizeCommonTaskTypos(prompt)).toContain("work on the client deck");
+    expect(__chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina", "nina@example.com"])).toBe(
+      "Work on the client deck for our processing call",
+    );
+    expect(__chatParserTest.needsSpecificActionClarification("Work on the client deck for our processing call", prompt)).toBe(true);
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",

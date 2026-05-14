@@ -607,6 +607,10 @@ const donnitTaskExtractionPolicy = [
   "Return only schema fields. Use null dueDate when no date is clear.",
   "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
   "Ask-don't-guess policy: when the source is ambiguous, context-only, or missing a clear action, set shouldCreateTask=false or confidence=low so Donnit can ask a clarifying question.",
+  "Before extracting fields, produce correctedText: fix obvious spelling, grammar, and sentence-structure errors while preserving names, companies, acronyms, project names, and the user's intent.",
+  "Do not allow misspellings like tha/the, nect/next, frday/Friday, reprot/report, or revieew/review to survive into title, description, date parsing, or confirmations.",
+  "If a phrase could be a real company/project/internal term and you cannot safely correct it, preserve it and list it in uncertainTerms.",
+  "If the work item uses a vague action like 'work on' and the intended action could be draft, review, revise, finalize, send, or prepare, set confidence=low, add a missingFields entry like specific_action, and provide one concise clarificationQuestion.",
   "Ownership rule: only set assigneeHint when the user clearly assigns ownership using language like assign, delegate, reassign, route to, hand off, put on someone's plate, have/get/ask someone to do the work. If the user says call Maya, email Maya, ping Maya, meet with Maya, ask Maya about something, or follow up with Maya, Maya is the object/contact, not the task owner.",
   "If the text clearly assigns someone, put that person in assigneeHint and make the title the work itself.",
   "If multiple assignees could match a first name, keep the assigneeHint exactly as written and use medium confidence so the application can ask which teammate.",
@@ -1250,6 +1254,7 @@ function languageClarificationFromMessage(message: string) {
 
 function normalizeCommonTaskTypos(value: string) {
   const normalized = value
+    .replace(/\btha\b/gi, "the")
     .replace(/\bcompet\b/gi, "complete")
     .replace(/\bcompelte\b/gi, "complete")
     .replace(/\bcompelete\b/gi, "complete")
@@ -3696,7 +3701,8 @@ type PendingChatMissingField =
   | "urgency"
   | "positionProfile"
   | "timeMeridiem"
-  | "language";
+  | "language"
+  | "aiClarification";
 
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
@@ -3722,6 +3728,20 @@ function isGenericAssignmentTitle(title: string) {
     /^(?:untitled task|task|todo|to do|to-do|work|item|something|thing|it|this)$/.test(normalized) ||
     /^(?:task|todo|to do|to-do|work|item)\s+(?:to|for)\s+[a-z][a-z'-]*$/.test(normalized)
   );
+}
+
+function needsSpecificActionClarification(title: string, message: string) {
+  const normalized = normalizeTaskTitleForIntent(normalizeCommonTaskTypos(`${title} ${message}`));
+  return (
+    /\bwork\s+on\s+(?:the\s+)?(?:client\s+)?(?:deck|presentation|slides|report|packet|document|doc|proposal|brief|briefing)\b/.test(normalized) ||
+    /\b(?:handle|take\s+care\s+of|deal\s+with)\s+(?:the\s+)?(?:client\s+)?(?:deck|presentation|slides|report|packet|document|doc|proposal|brief|briefing)\b/.test(normalized)
+  );
+}
+
+function specificActionClarificationQuestion(title: string) {
+  const normalized = normalizeTaskTitleGrammar(title).replace(/^Work on\s+/i, "").trim();
+  const target = normalized ? lowercaseFirst(normalized) : "this";
+  return `What should they do with ${target}: draft, review, revise, finalize, or send it?`;
 }
 
 function needsTaskScopeClarification(title: string, message: string) {
@@ -4368,6 +4388,9 @@ function missingChatQuestion(
   const needsMeetingScope = needsTaskScopeClarification(task.title, task.description || task.title);
   const vagueDate = underspecifiedRelativeDatePhrase(task.clarificationHint || task.description || task.title);
   const languageClarification = languageClarificationFromMessage(task.clarificationHint || task.description || task.title);
+  if (missing.includes("aiClarification") && task.aiClarificationQuestion) {
+    return `${intro} ${task.aiClarificationQuestion}`;
+  }
   if (missing.includes("language") && languageClarification) {
     return `${intro} ${languageClarification.question}`;
   }
@@ -4541,6 +4564,7 @@ function buildPendingFromTaskInput(input: {
   positionProfileId?: string | null;
   assistantInstruction?: string | null;
   clarificationHint?: string | null;
+  aiClarificationQuestion?: string | null;
 }, missing: PendingChatMissingField[]): PendingChatTask {
   return {
     title: input.title,
@@ -4562,6 +4586,7 @@ function buildPendingFromTaskInput(input: {
     positionProfileId: input.visibility === "personal" ? null : input.positionProfileId ?? null,
     assistantInstruction: input.assistantInstruction ?? null,
     clarificationHint: input.clarificationHint ?? null,
+    aiClarificationQuestion: input.aiClarificationQuestion ?? null,
     missing,
     createdAt: new Date().toISOString(),
   };
@@ -4671,6 +4696,7 @@ function mergePendingChatTask(
     if (item === "dueDate") return !dueDate;
     if (item === "dueDatePrecision") return !parseDueDate(message);
     if (item === "language") return Boolean(languageClarificationFromMessage(message));
+    if (item === "aiClarification") return false;
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
     if (item === "timeMeridiem") return !resolvedCompactTime;
@@ -4794,7 +4820,8 @@ const pendingChatTaskSchema = z.object({
   positionProfileId: z.string().nullable().optional(),
   assistantInstruction: z.string().trim().max(1200).nullable().optional(),
   clarificationHint: z.string().trim().max(1200).nullable().optional(),
-  missing: z.array(z.enum(["title", "assignee", "dueDate", "dueDatePrecision", "urgency", "positionProfile", "timeMeridiem", "language"])).default([]),
+  aiClarificationQuestion: z.string().trim().max(240).nullable().optional(),
+  missing: z.array(z.enum(["title", "assignee", "dueDate", "dueDatePrecision", "urgency", "positionProfile", "timeMeridiem", "language", "aiClarification"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -5250,6 +5277,7 @@ type ExternalTaskSuggestionInput = z.infer<typeof externalTaskSuggestionSchema>;
 
 type AiTaskExtraction = {
   shouldCreateTask: boolean;
+  correctedText: string;
   taskType:
     | "assignment"
     | "follow_up"
@@ -5278,12 +5306,16 @@ type AiTaskExtraction = {
   replyNeeded: boolean;
   replyIntent: string | null;
   confidence: "low" | "medium" | "high";
+  uncertainTerms: string[];
+  missingFields: string[];
+  clarificationQuestion: string | null;
   rationale: string;
   sourceExcerpt: string;
 };
 
 const aiTaskExtractionSchema = z.object({
   shouldCreateTask: z.boolean(),
+  correctedText: z.string().trim().min(2).max(1200),
   taskType: z.enum([
     "assignment",
     "follow_up",
@@ -5313,6 +5345,9 @@ const aiTaskExtractionSchema = z.object({
   replyNeeded: z.boolean(),
   replyIntent: z.string().trim().max(300).nullable(),
   confidence: z.enum(["low", "medium", "high"]),
+  uncertainTerms: z.array(z.string().trim().min(1).max(80)).max(8).default([]),
+  missingFields: z.array(z.string().trim().min(1).max(80)).max(8).default([]),
+  clarificationQuestion: z.string().trim().min(2).max(240).nullable(),
   rationale: z.string().trim().max(400),
   sourceExcerpt: z.string().trim().max(300),
 });
@@ -5493,6 +5528,7 @@ async function extractTaskWithAi(input: {
               additionalProperties: false,
               properties: {
                 shouldCreateTask: { type: "boolean" },
+                correctedText: { type: "string" },
                 taskType: {
                   type: "string",
                   enum: [
@@ -5525,11 +5561,15 @@ async function extractTaskWithAi(input: {
                 replyNeeded: { type: "boolean" },
                 replyIntent: { anyOf: [{ type: "string" }, { type: "null" }] },
                 confidence: { type: "string", enum: ["low", "medium", "high"] },
+                uncertainTerms: { type: "array", items: { type: "string" } },
+                missingFields: { type: "array", items: { type: "string" } },
+                clarificationQuestion: { anyOf: [{ type: "string" }, { type: "null" }] },
                 rationale: { type: "string" },
                 sourceExcerpt: { type: "string" },
               },
               required: [
                 "shouldCreateTask",
+                "correctedText",
                 "taskType",
                 "title",
                 "description",
@@ -5547,6 +5587,9 @@ async function extractTaskWithAi(input: {
                 "replyNeeded",
                 "replyIntent",
                 "confidence",
+                "uncertainTerms",
+                "missingFields",
+                "clarificationQuestion",
                 "rationale",
                 "sourceExcerpt",
               ],
@@ -6323,6 +6366,7 @@ function evaluateDeterministicChatTask(input: {
   if (explicitAssignment && isGenericAssignmentTitle(finalTitle)) missing.push("title");
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
   if (explicitAssignment && needsTaskScopeClarification(finalTitle, input.message)) missing.push("title");
+  if (explicitAssignment && needsSpecificActionClarification(finalTitle, input.message)) missing.push("aiClarification");
   if (explicitAssignment && vagueDate) missing.push("dueDatePrecision");
   if (explicitAssignment && !fallback.dueDate && !vagueDate) missing.push("dueDate");
   if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1 || profileResolution.needsChoice) {
@@ -6568,6 +6612,7 @@ export const __chatParserTest = {
   underspecifiedRelativeDatePhrase,
   languageClarificationFromMessage,
   normalizeCommonTaskTypos,
+  needsSpecificActionClarification,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
   titleFromMessage,
@@ -7848,12 +7893,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           taskMessage,
           members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
         );
-        const fallbackInput = parseChatTaskAuthenticated(taskMessage, members, auth.userId);
-        const explicitAssignment = hasExplicitAssignmentIntent(taskMessage);
+        const correctedTaskMessage = ai?.correctedText?.trim() || normalizeCommonTaskTypos(taskMessage);
+        const interpretationMessage = correctedTaskMessage && correctedTaskMessage !== taskMessage
+          ? `${taskMessage}\n${correctedTaskMessage}`
+          : correctedTaskMessage || taskMessage;
+        const fallbackInput = parseChatTaskAuthenticated(correctedTaskMessage, members, auth.userId);
+        const explicitAssignment = hasExplicitAssignmentIntent(interpretationMessage);
         const positionProfilesForRouting = await store.listPositionProfiles(orgId);
         const workspaceAliases = await store.listWorkspaceMemoryAliases(orgId);
         const workspaceResolution = resolveChatAssigneeFromWorkspace({
-          message: taskMessage,
+          message: interpretationMessage,
           members,
           profiles: positionProfilesForRouting,
           aliases: workspaceAliases,
@@ -7861,7 +7910,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         const mentionedProfiles = workspaceResolution.missingAssignee
           ? []
-          : findMentionedPositionProfileCandidates(taskMessage, positionProfilesForRouting, workspaceAliases, { requesterId: auth.userId });
+          : findMentionedPositionProfileCandidates(interpretationMessage, positionProfilesForRouting, workspaceAliases, { requesterId: auth.userId });
         const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
         const aiAssignee = ai && explicitAssignment && !workspaceResolution.missingAssignee
           ? members.find((member) => {
@@ -7895,7 +7944,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               : "none") as DonnitTask["recurrence"];
         const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
         const resolvedTitle = ai
-          ? normalizeAiTitle(ai.title, fallbackInput.title, [
+          ? normalizeAiTitle(ai.title, correctedTaskMessage || fallbackInput.title, [
               ...assigneeAliases(aiAssignee?.profile?.full_name, aiAssignee?.profile?.email),
               ...workspaceResolution.labelsToStrip,
               ...(mentionedProfile ? roleAliasesForProfile(mentionedProfile) : []),
@@ -7915,12 +7964,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             workspaceResolution.matchedPhrase,
           ),
         );
-        const repeatDetails = recurrenceDetailsFromMessage(taskMessage, resolvedRecurrence, resolvedDueDate);
+        const repeatDetails = recurrenceDetailsFromMessage(correctedTaskMessage, resolvedRecurrence, resolvedDueDate);
         const taskInput = ai
           ? {
               title: finalTitle,
               description: descriptionWithServerRepeatDetails(
-                `${normalizeAiDescription(ai.description, taskMessage)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+                `${normalizeAiDescription(ai.description, correctedTaskMessage)}\n\nDonnit corrected input: ${correctedTaskMessage}\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
                 repeatDetails,
               ),
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
@@ -7951,22 +8000,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const profileResolution = resolveChatPositionProfile({
           profiles: positionProfiles,
           assignedToId: String(taskInput.assignedToId),
-          message: taskMessage,
+          message: interpretationMessage,
           visibility: taskInput.visibility ?? "work",
           aliases: workspaceAliases,
           requesterId: auth.userId,
         });
         const missing: PendingChatMissingField[] = [];
-        const vagueDate = underspecifiedRelativeDatePhrase(taskMessage);
-        if (languageClarificationFromMessage(taskMessage)) missing.push("language");
+        const vagueDate = underspecifiedRelativeDatePhrase(correctedTaskMessage);
+        const aiClarificationQuestion = ai?.clarificationQuestion?.trim() || null;
+        if (languageClarificationFromMessage(correctedTaskMessage)) missing.push("language");
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
-        if (explicitAssignment && needsTaskScopeClarification(taskInput.title, taskMessage)) missing.push("title");
+        if (explicitAssignment && needsTaskScopeClarification(taskInput.title, correctedTaskMessage)) missing.push("title");
+        if (explicitAssignment && (needsSpecificActionClarification(taskInput.title, correctedTaskMessage) || aiClarificationQuestion)) missing.push("aiClarification");
         if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
         if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1) missing.push("positionProfile");
         if (vagueDate) missing.push("dueDatePrecision");
         if (!taskInput.dueDate && !vagueDate) missing.push("dueDate");
-        if (ambiguousCompactClockTime(taskMessage)) missing.push("timeMeridiem");
+        if (ambiguousCompactClockTime(correctedTaskMessage)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
           const pendingTask = buildPendingFromTaskInput(
@@ -7976,7 +8027,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               assignedById: String(taskInput.assignedById),
               positionProfileId: profileResolution.positionProfileId,
               assistantInstruction: automationInstruction,
-              clarificationHint: taskMessage,
+              clarificationHint: correctedTaskMessage,
+              aiClarificationQuestion: aiClarificationQuestion ?? specificActionClarificationQuestion(taskInput.title),
             },
             missing,
           );
@@ -8081,10 +8133,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       parsed.data.message,
       users.map((user) => `${user.name} ${user.email}`),
     );
-    const fallbackInput = parseChatTask(parsed.data.message, users);
-    const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
+    const correctedTaskMessage = ai?.correctedText?.trim() || normalizeCommonTaskTypos(parsed.data.message);
+    const interpretationMessage = correctedTaskMessage && correctedTaskMessage !== parsed.data.message
+      ? `${parsed.data.message}\n${correctedTaskMessage}`
+      : correctedTaskMessage || parsed.data.message;
+    const fallbackInput = parseChatTask(correctedTaskMessage, users);
+    const explicitAssignment = hasExplicitAssignmentIntent(interpretationMessage);
     const explicitMentionedUsers = explicitAssignment
-      ? findBestMentionedCandidates(parsed.data.message, users, (user) => user.name, (user) => user.email)
+      ? findBestMentionedCandidates(interpretationMessage, users, (user) => user.name, (user) => user.email)
       : [];
     const ambiguousMentionedAssignee = explicitMentionedUsers.length > 1;
     const explicitMentionedUser = explicitMentionedUsers.length === 1 ? explicitMentionedUsers[0] : null;
@@ -8107,7 +8163,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           : "none") as DonnitTask["recurrence"];
     const resolvedReminderDaysBefore = Math.max(ai?.reminderDaysBefore ?? 0, fallbackInput.reminderDaysBefore ?? 0);
     const resolvedTitle = ai
-      ? normalizeAiTitle(ai.title, fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
+      ? normalizeAiTitle(ai.title, correctedTaskMessage || fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
       : fallbackInput.title;
     const requester = users.find((user) => user.id === DEMO_USER_ID);
     const finalTitle = normalizeTaskTitleGrammar(
@@ -8117,12 +8173,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         String(assignedToId) !== String(DEMO_USER_ID),
       ),
     );
-    const repeatDetails = recurrenceDetailsFromMessage(parsed.data.message, resolvedRecurrence, resolvedDueDate);
+    const repeatDetails = recurrenceDetailsFromMessage(correctedTaskMessage, resolvedRecurrence, resolvedDueDate);
     const taskInput = ai
       ? {
           title: finalTitle,
           description: descriptionWithServerRepeatDetails(
-            `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+            `${normalizeAiDescription(ai.description, correctedTaskMessage)}\n\nDonnit corrected input: ${correctedTaskMessage}\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
             repeatDetails,
           ),
           status: assignedToId === DEMO_USER_ID ? "open" : "pending_acceptance",
@@ -8147,7 +8203,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           recurrence: resolvedRecurrence,
           reminderDaysBefore: resolvedReminderDaysBefore,
         };
-    const ambiguousTime = ambiguousCompactClockTime(parsed.data.message);
+    const ambiguousTime = ambiguousCompactClockTime(correctedTaskMessage);
     if (ambiguousTime) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assistant = await storage.createChatMessage({
@@ -8158,15 +8214,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ assistant, pending: true });
       return;
     }
-    const needsScope = explicitAssignment && needsTaskScopeClarification(taskInput.title, parsed.data.message);
+    const needsScope = explicitAssignment && needsTaskScopeClarification(taskInput.title, correctedTaskMessage);
+    const needsSpecificAction = explicitAssignment && needsSpecificActionClarification(taskInput.title, correctedTaskMessage);
+    const aiClarificationQuestion = ai?.clarificationQuestion?.trim() || null;
     const needsAssigneeChoice = explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedUser && !aiAssignee));
-    if (!needsAssigneeChoice && (needsScope || (explicitAssignment && !taskInput.dueDate))) {
+    if (!needsAssigneeChoice && (needsSpecificAction || aiClarificationQuestion || needsScope || (explicitAssignment && !taskInput.dueDate))) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assignee = users.find((user) => user.id === taskInput.assignedToId);
       const intro = `I can assign ${assignee?.name ?? "the assignee"} to ${lowercaseFirst(taskInput.title)}.`;
       const assistant = await storage.createChatMessage({
         role: "assistant",
-        content: needsScope && !taskInput.dueDate
+        content: aiClarificationQuestion
+          ? `${intro} ${aiClarificationQuestion}`
+          : needsSpecificAction
+            ? `${intro} ${specificActionClarificationQuestion(taskInput.title)}`
+            : needsScope && !taskInput.dueDate
           ? `${intro} Which meeting or action items should they complete, and when is it due?`
           : needsScope
             ? `${intro} Which meeting or action items should they complete?`

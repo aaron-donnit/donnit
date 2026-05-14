@@ -266,6 +266,17 @@ const evalCases: Array<{
     },
   },
   {
+    name: "cleans basic typo and asks for specific action on vague deck work",
+    message: "assign Nina to work on tha client deck for our processing call by May 21",
+    expected: {
+      assignedToId: "user-nina",
+      title: "Work on the client deck for our processing call",
+      dueDate: "2026-05-21",
+      missing: ["aiClarification"],
+      titleExcludes: ["tha"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {
