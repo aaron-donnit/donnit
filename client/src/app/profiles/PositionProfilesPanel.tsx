@@ -892,6 +892,7 @@ export default function PositionProfilesPanel({
                             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">Manage this profile</p>
                             <div className="flex flex-wrap gap-2">
                               <ActionButton icon={<Eye className="size-4" />} label="View profile" onClick={() => openProfileSheet(profile.id)} testId={`button-position-profile-view-${profile.id}`} />
+                              <ActionButton icon={<ShieldCheck className="size-4" />} label="Task Memory" onClick={() => openProfileSheet(profile.id, "recurring")} testId={`button-position-profile-task-memory-${profile.id}`} />
                               <ActionButton icon={<UserCog className="size-4" />} label="Transfer ownership" primary onClick={() => openAssignment("transfer", profile)} disabled={!canManageProfiles} />
                               <ActionButton icon={<Edit3 className="size-4" />} label="Edit details" onClick={() => { setSelectedProfileId(profile.id); setEditTitle(profile.title); setEditStatus(profile.status); setEditOpen(true); }} disabled={!canManageProfiles} />
                               <ActionButton icon={<KeyRound className="size-4" />} label="Assign tools" onClick={() => { setSelectedProfileId(profile.id); setToolsOpen(true); }} disabled={!canManageProfiles} />
@@ -901,7 +902,8 @@ export default function PositionProfilesPanel({
                               <ActionButton icon={<Archive className="size-4" />} label={isProfileArchived(profile) ? "Restore" : "Archive"} danger onClick={() => { setSelectedProfileId(profile.id); isProfileArchived(profile) ? restoreProfile(profile) : setConfirmAction("archive"); }} disabled={!canManageProfiles} />
                               <ActionButton icon={<Trash2 className="size-4" />} label="Delete" danger onClick={() => { setSelectedProfileId(profile.id); setConfirmAction("delete"); }} disabled={!canManageProfiles} />
                             </div>
-                            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                            <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                              <TaskMemorySummaryCard profile={profile} onOpen={() => openProfileSheet(profile.id, "recurring")} />
                               <MiniWorkCard title="Current tasks" icon={<ListChecks className="size-4" />} tasks={profile.currentIncompleteTasks} empty="No current work captured." onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))} />
                               <MiniWorkCard title="Recurring" icon={<Repeat2 className="size-4" />} tasks={profile.recurringTasks} empty="No recurring work mapped yet." onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))} />
                             </div>
@@ -1822,6 +1824,44 @@ function MiniWorkCard({
         </div>
       )}
     </div>
+  );
+}
+
+function TaskMemorySummaryCard({ profile, onOpen }: { profile: PositionProfile; onOpen: () => void }) {
+  const sequenceCount = profile.recurringTasks.length;
+  const historicalCount = profile.completedTasks.length;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="rounded-md border border-brand-green/40 bg-brand-green/5 p-3 text-left transition hover:border-brand-green hover:bg-brand-green/10"
+      data-testid={`button-position-profile-task-memory-card-${profile.id}`}
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-xs font-semibold text-foreground">
+          <ShieldCheck className="size-4 text-brand-green" />
+          Task Memory
+        </p>
+        <span className="rounded-md bg-background px-2 py-1 text-[11px] text-muted-foreground">
+          {sequenceCount} source{sequenceCount === 1 ? "" : "s"}
+        </span>
+      </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        Store recurring work as step-by-step sequences a new holder can inherit and follow.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+        <span className="rounded-md bg-background/80 px-2 py-1">
+          {sequenceCount} recurring
+        </span>
+        <span className="rounded-md bg-background/80 px-2 py-1">
+          {historicalCount} historical
+        </span>
+      </div>
+      <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-brand-green">
+        Open memory
+        <ChevronDown className="-rotate-90 size-3.5" />
+      </span>
+    </button>
   );
 }
 
