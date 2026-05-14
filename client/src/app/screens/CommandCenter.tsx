@@ -106,6 +106,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
+  const [focusedProfileAction, setFocusedProfileAction] = useState<"task-memory" | null>(null);
+  const [focusedProfileMemoryPrompt, setFocusedProfileMemoryPrompt] = useState("");
+  const [focusedProfileRequestKey, setFocusedProfileRequestKey] = useState(0);
   const [focusedTeamUserId, setFocusedTeamUserId] = useState<string | null>(null);
   const [notificationTaskId, setNotificationTaskId] = useState<string | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatusFilter | null>(null);
@@ -1155,6 +1158,8 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setAppView(view);
     setViewResetKeys((current) => ({ ...current, [view]: current[view] + 1 }));
     setFocusedProfileId(null);
+    setFocusedProfileAction(null);
+    setFocusedProfileMemoryPrompt("");
     setFocusedTeamUserId(null);
     setNotificationTaskId(null);
     setTaskStatusFilter(null);
@@ -1170,6 +1175,38 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       window.location.hash = "/app";
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
+  };
+  const handleChatSlashCommand = (command: { command: "memory"; text: string }) => {
+    if (command.command !== "memory") return;
+    if (!canManagePositionProfiles) {
+      toast({
+        title: "Position Profiles are admin-only right now",
+        description: "Task Memory workflows currently open from the Position Profiles workspace.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const preferredProfile =
+      positionProfiles.find((profile) => String(profile.currentOwnerId ?? "") === String(data.currentUserId)) ??
+      positionProfiles.find((profile) => profile.status === "active") ??
+      positionProfiles[0];
+    if (!preferredProfile) {
+      toast({
+        title: "Create a Position Profile first",
+        description: "Task Memory needs a profile to store the workflow under.",
+        variant: "destructive",
+      });
+      return;
+    }
+    openAppView("profiles");
+    setFocusedProfileId(preferredProfile.id);
+    setFocusedProfileAction("task-memory");
+    setFocusedProfileMemoryPrompt(command.text);
+    setFocusedProfileRequestKey((current) => current + 1);
+    toast({
+      title: "/memory",
+      description: command.text ? "Opening Task Memory with your prompt as context." : "Opening the Task Memory workflow builder.",
+    });
   };
   const goHome = () => {
     setManualImportOpen(false);
@@ -1726,7 +1763,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   onClick={() => setTaskStatusFilter((current) => current === "completed" ? null : "completed")}
                 />
               </div>
-              <ChatPanel messages={data.messages} />
+              <ChatPanel messages={data.messages} onSlashCommand={handleChatSlashCommand} />
               <TaskList
                 key={`home-tasks-${viewResetKeys.home}`}
                 tasks={scopedDisplayTasks}
@@ -1900,6 +1937,9 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   subtasks={data.subtasks ?? []}
                   events={data.events}
                   focusProfileId={focusedProfileId}
+                  focusAction={focusedProfileAction}
+                  focusMemoryPrompt={focusedProfileMemoryPrompt}
+                  focusRequestKey={focusedProfileRequestKey}
                 />
               ) : (
                 <RestrictedView title="Position Profiles are admin-only" detail="Admins can assign, transfer, and inspect role memory from this workspace area." />

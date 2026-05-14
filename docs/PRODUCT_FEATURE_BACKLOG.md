@@ -85,6 +85,19 @@ Product requirements:
 - Must be observable. Log model, cost, tool calls, inputs/outputs summary, latency, and correlation ID.
 - Must have a kill switch or feature flag per workspace.
 
+### Position Profile Switching
+
+Status: Open
+
+Goal: Each person must have exactly one primary Position Profile, but may receive delegated or temporary access to multiple additional profiles. Donnit should provide a clear profile switcher so users can choose which profile context they are viewing, assigning work under, or adding Task Memory to.
+
+Notes:
+
+- Add after the first Task Memory quick-key workflow is validated.
+- The switcher should default to the user's primary profile.
+- Delegated profiles should be visibly separate from the user's primary profile.
+- Chat/task creation should use the primary profile unless the user explicitly switches context or the task is clearly tied to a delegated profile.
+
 Open questions:
 
 - Which first assistant skill should ship first for customer value: draft task update, draft handover packet, research from email/task history, or agenda repair?

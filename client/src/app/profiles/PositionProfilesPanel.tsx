@@ -123,6 +123,9 @@ export default function PositionProfilesPanel({
   subtasks = [],
   events = [],
   focusProfileId = null,
+  focusAction = null,
+  focusMemoryPrompt = "",
+  focusRequestKey = 0,
 }: {
   profiles: PositionProfile[];
   users: User[];
@@ -131,6 +134,9 @@ export default function PositionProfilesPanel({
   subtasks?: TaskSubtask[];
   events?: TaskEvent[];
   focusProfileId?: string | null;
+  focusAction?: "task-memory" | null;
+  focusMemoryPrompt?: string;
+  focusRequestKey?: number;
 }) {
   const currentUser = users.find((user) => String(user.id) === String(currentUserId));
   const canManageProfiles = canAdministerProfiles(currentUser);
@@ -570,8 +576,12 @@ export default function PositionProfilesPanel({
     if (!focusProfileId) return;
     const profile = repositoryProfiles.find((item) => String(item.id) === String(focusProfileId));
     if (!profile) return;
+    if (focusAction === "task-memory") {
+      openTaskMemoryBuilder(profile, focusMemoryPrompt);
+      return;
+    }
     openProfileSheet(profile.id);
-  }, [focusProfileId, repositoryProfiles]);
+  }, [focusProfileId, focusAction, focusMemoryPrompt, focusRequestKey, repositoryProfiles]);
 
   useEffect(() => {
     if (!selectedProfile) {
@@ -760,9 +770,14 @@ export default function PositionProfilesPanel({
     setSheetOpen(true);
   }
 
-  function openTaskMemoryBuilder(profile: PositionProfile) {
+  function openTaskMemoryBuilder(profile: PositionProfile, prompt = "") {
+    const nextDraft = emptyTaskMemoryDraft();
+    if (prompt.trim()) {
+      nextDraft.title = prompt.trim().slice(0, 160);
+      nextDraft.objective = prompt.trim().slice(0, 1500);
+    }
     setSelectedProfileId(profile.id);
-    setTaskMemoryDraft(emptyTaskMemoryDraft());
+    setTaskMemoryDraft(nextDraft);
     setTaskMemoryOpen(true);
   }
 
@@ -1370,6 +1385,22 @@ export default function PositionProfilesPanel({
               createTaskMemory.mutate(taskMemoryDraft);
             }}
           >
+            <div className="space-y-1.5">
+              <Label htmlFor="task-memory-profile">Position Profile</Label>
+              <select
+                id="task-memory-profile"
+                value={selectedProfile?.id ?? ""}
+                onChange={(event) => setSelectedProfileId(event.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                data-testid="select-task-memory-profile"
+              >
+                {repositoryProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.title} / {profileAssignmentLabel(profile, users)}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="space-y-3">
                 <div className="space-y-1.5">

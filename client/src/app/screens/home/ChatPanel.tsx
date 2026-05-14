@@ -6,7 +6,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import type { ChatMessage } from "@/app/types";
 
-export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
+type SlashCommand = {
+  command: "memory";
+  text: string;
+};
+
+export default function ChatPanel({ messages, onSlashCommand }: { messages: ChatMessage[]; onSlashCommand?: (command: SlashCommand) => void }) {
   const [message, setMessage] = useState("");
   const [localAssistantMessage, setLocalAssistantMessage] = useState<ChatMessage | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -14,6 +19,18 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const parsedPreview = useMemo(() => {
     const rawText = message.trim();
     if (!rawText) return null;
+    if (/^\/memory\b/i.test(rawText)) {
+      const text = rawText.replace(/^\/memory\b\s*/i, "").trim();
+      return {
+        title: text || "Create Task Memory workflow",
+        urgency: "Workflow",
+        due: "Profile",
+        recurrence: "Task Memory",
+        assignee: "Position Profile",
+        isDonnitCommand: false,
+        isMemoryCommand: true,
+      };
+    }
     const isDonnitCommand = /^\/donnit\b/i.test(rawText);
     const text = rawText.replace(/^\/donnit\b\s*/i, "").trim() || rawText;
     const lower = text.toLowerCase();
@@ -44,7 +61,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       .replace(/\b(assign|send|give)\s+[A-Z][a-z]+\s+(to|a task to)?/i, "")
       .replace(/\s+/g, " ")
       .trim();
-    return { title, urgency, due, recurrence, assignee, isDonnitCommand };
+    return { title, urgency, due, recurrence, assignee, isDonnitCommand, isMemoryCommand: false };
   }, [message]);
 
   const latestPersistedAssistant = useMemo(
@@ -87,9 +104,18 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
 
   const send = () => {
     const text = message.trim();
-    if (text.length >= 2 && !chat.isPending) chat.mutate(text);
+    if (text.length < 2 || chat.isPending) return;
+    const memoryMatch = text.match(/^\/memory\b\s*/i);
+    if (memoryMatch) {
+      onSlashCommand?.({ command: "memory", text: text.slice(memoryMatch[0].length).trim() });
+      setMessage("");
+      return;
+    }
+    chat.mutate(text);
   };
   const isDonnitCommand = /^\/donnit\b/i.test(message.trim());
+  const isMemoryCommand = /^\/memory\b/i.test(message.trim());
+  const showSlashHelp = message.trim().startsWith("/");
 
   const chips: Array<[string, string | undefined]> = [
     ["Assignee", parsedPreview?.assignee],
@@ -113,7 +139,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
               send();
             }
           }}
-          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent" or "/donnit prep an update for the vendor review"'
+          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent", "/memory", or "/donnit prep an update"'
           className="composer-input"
           data-testid="input-chat-message"
         />
@@ -139,10 +165,23 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
               ? <Loader2 className="size-3.5 animate-spin" />
               : <Send className="size-3.5" />
             }
-            {isDonnitCommand ? "Run Donnit" : "Add task"}
+            {isMemoryCommand ? "Open memory" : isDonnitCommand ? "Run Donnit" : "Add task"}
           </button>
         </div>
       </div>
+
+      {showSlashHelp && (
+        <div className="mt-2 grid gap-2 rounded-md border border-border bg-card p-2 text-sm sm:grid-cols-2" data-testid="chat-slash-command-menu">
+          <button type="button" className="rounded-md px-3 py-2 text-left hover:bg-muted" onClick={() => setMessage("/memory ")}>
+            <span className="block font-medium text-foreground">/memory</span>
+            <span className="text-xs text-muted-foreground">Create a Task Memory workflow for a Position Profile.</span>
+          </button>
+          <button type="button" className="rounded-md px-3 py-2 text-left hover:bg-muted" onClick={() => setMessage("/donnit ")}>
+            <span className="block font-medium text-foreground">/donnit</span>
+            <span className="text-xs text-muted-foreground">Assign Donnit AI to review or draft an update.</span>
+          </button>
+        </div>
+      )}
 
       {latestAssistant && (
         <div
