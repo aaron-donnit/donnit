@@ -590,10 +590,8 @@ export default function PositionProfilesPanel({
 
   function toggleExpanded(profileId: string) {
     setExpandedProfileIds((current) => {
-      const next = new Set(current);
-      if (next.has(profileId)) next.delete(profileId);
-      else next.add(profileId);
-      return next;
+      if (current.has(profileId)) return new Set();
+      return new Set([profileId]);
     });
   }
 
@@ -743,9 +741,9 @@ export default function PositionProfilesPanel({
         )}
 
         <div className="overflow-hidden rounded-md border border-border bg-background">
-          <div className="overflow-x-auto">
-            <div className="min-w-[940px]">
-              <div className="grid grid-cols-[44px_minmax(230px,1.4fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_110px_90px_120px_120px_116px] border-b border-border bg-muted/35 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
+          <div>
+            <div className="w-full">
+              <div className="grid grid-cols-[36px_minmax(130px,1.6fr)_minmax(108px,1fr)_minmax(88px,0.8fr)_86px_64px_90px_82px_44px] border-b border-border bg-muted/35 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
                 <label className="flex items-center">
                   <input type="checkbox" checked={allVisibleSelected} onChange={selectAllVisible} aria-label="Select all visible Position Profiles" />
                 </label>
@@ -756,10 +754,10 @@ export default function PositionProfilesPanel({
                 <span>Open work</span>
                 <span>Readiness</span>
                 <span>Last updated</span>
-                <span>Actions</span>
+                <span className="sr-only">Expand</span>
               </div>
             </div>
-            <div className="min-w-[940px]" data-testid="position-profile-list">
+            <div className="w-full" data-testid="position-profile-list">
               {repositoryProfiles.length === 0 ? (
                 <EmptyState>No role memory yet. Create a profile or let Donnit build one as tasks are assigned and completed.</EmptyState>
               ) : visibleRepositoryProfiles.length === 0 ? (
@@ -773,11 +771,12 @@ export default function PositionProfilesPanel({
                       <div
                         role="button"
                         tabIndex={0}
-                        onClick={() => openProfileSheet(profile.id)}
+                        aria-expanded={expanded}
+                        onClick={() => toggleExpanded(profile.id)}
                         onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") openProfileSheet(profile.id);
+                          if (event.key === "Enter" || event.key === " ") toggleExpanded(profile.id);
                         }}
-                        className="grid grid-cols-[44px_minmax(230px,1.4fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_110px_90px_120px_120px_116px] items-center border-b border-border px-3 py-3 text-sm transition hover:bg-muted/25"
+                        className="grid grid-cols-[36px_minmax(130px,1.6fr)_minmax(108px,1fr)_minmax(88px,0.8fr)_86px_64px_90px_82px_44px] items-center border-b border-border px-3 py-3 text-sm transition hover:bg-muted/25"
                       >
                         <label className="flex items-center" onClick={(event) => event.stopPropagation()}>
                           <input
@@ -808,22 +807,23 @@ export default function PositionProfilesPanel({
                           type="button"
                           variant="outline"
                           size="sm"
+                          className="h-8 w-8 p-0"
                           onClick={(event) => {
                             event.stopPropagation();
                             toggleExpanded(profile.id);
                           }}
+                          aria-label={expanded ? `Collapse ${profile.title}` : `Expand ${profile.title}`}
                           data-testid={`button-position-profile-row-actions-${profile.id}`}
                         >
-                          Actions
                           <ChevronDown className={`size-4 transition ${expanded ? "rotate-180" : ""}`} />
                         </Button>
                       </div>
                       {expanded && (
-                        <div className="border-b border-border bg-muted/15 py-4 pl-[88px] pr-4">
+                        <div className="border-b border-border bg-muted/15 py-4 pl-[72px] pr-4">
                           <div className="border-l-2 border-brand-green/70 pl-4">
                             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">Manage this profile</p>
                             <div className="flex flex-wrap gap-2">
-                              <ActionButton icon={<Eye className="size-4" />} label="View profile" onClick={() => openProfileSheet(profile.id)} />
+                              <ActionButton icon={<Eye className="size-4" />} label="View profile" onClick={() => openProfileSheet(profile.id)} testId={`button-position-profile-view-${profile.id}`} />
                               <ActionButton icon={<UserCog className="size-4" />} label="Transfer ownership" primary onClick={() => openAssignment("transfer", profile)} disabled={!canManageProfiles} />
                               <ActionButton icon={<Edit3 className="size-4" />} label="Edit details" onClick={() => { setSelectedProfileId(profile.id); setEditTitle(profile.title); setEditStatus(profile.status); setEditOpen(true); }} disabled={!canManageProfiles} />
                               <ActionButton icon={<KeyRound className="size-4" />} label="Assign tools" onClick={() => { setSelectedProfileId(profile.id); setToolsOpen(true); }} disabled={!canManageProfiles} />
@@ -1652,6 +1652,7 @@ function ActionButton({
   disabled = false,
   primary = false,
   danger = false,
+  testId,
 }: {
   icon: ReactNode;
   label: string;
@@ -1659,6 +1660,7 @@ function ActionButton({
   disabled?: boolean;
   primary?: boolean;
   danger?: boolean;
+  testId?: string;
 }) {
   return (
     <Button
@@ -1668,6 +1670,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       className={danger ? "border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950" : ""}
+      data-testid={testId}
     >
       {icon}
       {label}
