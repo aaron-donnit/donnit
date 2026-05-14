@@ -188,4 +188,33 @@ describe("chat task parser", () => {
       }),
     ).toMatchObject({ positionProfileId: "profile-payroll", needsChoice: false });
   });
+
+  it("treats assistant as an Executive Assistant profile alias and cleans role wording from the title", () => {
+    const profiles = [
+      {
+        id: "profile-ea",
+        title: "Executive Assistant to the CEO",
+        current_owner_id: "user-jordan",
+        temporary_owner_id: null,
+        delegate_user_id: null,
+      },
+    ];
+
+    expect(
+      __chatParserTest.resolveChatPositionProfile({
+        profiles: profiles as never,
+        assignedToId: "user-aaron",
+        message: "assign the assistant with preparing the board packet by eod friday",
+        visibility: "work",
+      }),
+    ).toMatchObject({ positionProfileId: "profile-ea", needsChoice: false });
+
+    expect(
+      __chatParserTest.titleFromMessage(
+        "assign the assistant with preparing the board packet by eod friday",
+        [],
+        ["Executive Assistant to the CEO", "assistant"],
+      ),
+    ).toBe("Preparing the board packet");
+  });
 });
