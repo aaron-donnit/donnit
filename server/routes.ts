@@ -976,11 +976,26 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
       .replace(new RegExp(`\\b(?:route|transfer|hand\\s*off|handoff)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\b(?:give|send)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bput\\s+(?:this|it)?\\s*(?:on\\s+)?${safe}(?:'s)?\\s+plate\\b`, "gi"), "")
+      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+(?=(?:go\\s+through|handle|own|complete|compet|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take\\s+care\\s+of|work\\s+on)\\b)`, "gi"), "")
       .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+to\\s+(?:urgently\\s+|quickly\\s+|please\\s+)?(?:take\\s+care\\s+of|handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)?\\s*`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
   }
   return cleaned;
+}
+
+function normalizeCommonTaskTypos(value: string) {
+  return value
+    .replace(/\bcompet\b/gi, "complete")
+    .replace(/\bcompelte\b/gi, "complete")
+    .replace(/\bcompelete\b/gi, "complete")
+    .replace(/\bwok\b/gi, "work")
+    .replace(/\bteh\b/gi, "the")
+    .replace(/\bfrm\b/gi, "from")
+    .replace(/\bmtg\b/gi, "meeting")
+    .replace(/\breouccring\b/gi, "recurring")
+    .replace(/\breoccuring\b/gi, "recurring")
+    .replace(/\breoccur\b/gi, "recur");
 }
 
 function stripRoleAssignmentPhrases(message: string, roleLabels: string[]) {
@@ -1003,6 +1018,12 @@ function stripLeadingUnknownAssignee(message: string) {
   const words = message.trim().split(/\s+/);
   if (words.length < 4) return message;
   const command = words[0]?.toLowerCase();
+  if (["have", "get", "ask"].includes(command) && words[1]?.toLowerCase() !== "to") {
+    const rest = words.slice(2).join(" ");
+    if (/^(?:go\s+through|handle|own|complete|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take\s+care\s+of|work\s+on)\b/i.test(rest)) {
+      return rest;
+    }
+  }
   if (!["assign", "delegate", "reassign"].includes(command)) return message;
   if (words[1]?.toLowerCase() === "to") return message;
 
@@ -1035,6 +1056,7 @@ function stripLeadingUnknownAssignee(message: string) {
 }
 
 function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLabels: string[] = []) {
+  const normalizedMessage = normalizeCommonTaskTypos(message);
   const naturalDate = new RegExp(
     `\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?(?:${monthNamePattern})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*(?:20\\d{2}|\\d{2}))?\\b`,
     "gi",
@@ -1043,7 +1065,7 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
     `\\b(?:due\\s+(?:on\\s+)?|by\\s+|before\\s+|on\\s+)?\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${monthNamePattern})\\.?(?:,?\\s*(?:20\\d{2}|\\d{2}))?\\b`,
     "gi",
   );
-  const cleaned = message
+  const cleaned = normalizedMessage
     .replace(/\b(?:confidential|sensitive|privileged|restricted|personal|private|non-work|non work)\b/gi, "")
     .replace(/\bfor me (?:thats|that's|that is)\b/gi, "")
     .replace(/^(?:for me|me)\b[,\s:]*/gi, "")
@@ -1091,7 +1113,15 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
 }
 
 function normalizeTaskTitleGrammar(title: string) {
-  const cleaned = title.replace(/\s+/g, " ").trim();
+  const cleaned = normalizeCommonTaskTypos(title).replace(/\s+/g, " ").trim();
+  if (/^go\s+through\s+and\s+complete\b/i.test(cleaned)) {
+    const normalized = cleaned.replace(/^go\s+through\s+and\s+complete\b/i, "Complete");
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+  if (/^go\s+through\b/i.test(cleaned)) {
+    const normalized = cleaned.replace(/^go\s+through\b/i, "Review");
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
   const gerundMap: Record<string, string> = {
     preparing: "Prepare",
     reviewing: "Review",
@@ -3410,13 +3440,23 @@ function isGenericAssignmentTitle(title: string) {
   );
 }
 
+function needsTaskScopeClarification(title: string, message: string) {
+  const normalized = normalizeTaskTitleForIntent(normalizeCommonTaskTypos(`${title} ${message}`));
+  return (
+    /\b(?:all|everything)\s+(?:of\s+our\s+|the\s+)?(?:work|stuff|things|items)\s+from\s+(?:the\s+)?meeting\b/.test(normalized) ||
+    /\b(?:meeting|mtg)\s+(?:work|stuff|things|items)\b/.test(normalized) ||
+    /\b(?:go through|review|complete)\s+(?:it|that|this|everything)\b/.test(normalized)
+  );
+}
+
 function hasExplicitAssignmentIntent(message: string) {
   return (
     /\b(?:assign|delegate|reassign|route|transfer|handoff|hand\s*off)\b/i.test(message) ||
     /\b(?:give|send)\s+(?:this|it|the task|that)?\s*(?:to\s+)?[a-z][a-z' -]{1,80}\s+(?:to\s+)?(?:handle|own|complete|review|finish|do)\b/i.test(message) ||
     /\bput\s+(?:this|it|the task)?\s*(?:on\s+)?[a-z][a-z' -]{1,80}(?:'s)?\s+plate\b/i.test(message) ||
     /\bget\s+[a-z][a-z' -]{1,80}\s+to\s+(?:urgently\s+|quickly\s+|please\s+)?(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|take care of)\b/i.test(message) ||
-    /\b(?:have|get|ask)\s+[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i.test(message)
+    /\b(?:have|get|ask)\s+(?!to\b)[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i.test(message) ||
+    /\b(?:have|get|ask)\s+(?!to\b)[a-z][a-z' -]{1,80}\s+(?:go\s+through|handle|own|complete|compet|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i.test(message)
   );
 }
 
@@ -3501,6 +3541,7 @@ function extractAssignmentTargetPhrases(message: string) {
   [
     /\b(?:assign|delegate|reassign|route)\s+(?:a\s+)?(?:task|todo|to-do|item)\s+to\s+(.+?)\s+(?:to|with|for)\s+\w+/i,
     /\b(?:have|get|ask)\s+(.+?)\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i,
+    /\b(?:have|get|ask)\s+(.+?)\s+(?:go\s+through|handle|own|complete|compet|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i,
     /\b(?:put)\s+(?:this|it|the task)?\s*(?:on\s+)?(.+?)(?:'s)?\s+plate\b/i,
   ].forEach((pattern) => add(normalized.match(pattern)?.[1]));
   return Array.from(new Set(phrases));
@@ -3896,6 +3937,7 @@ function missingChatQuestion(
   const missing = pendingChatMissing(task);
   const needsTitle = missing.includes("title");
   const ambiguousTime = ambiguousCompactClockTime(task.description || task.title);
+  const needsMeetingScope = needsTaskScopeClarification(task.title, task.description || task.title);
   if (missing.includes("timeMeridiem")) {
     const timeText = ambiguousTime?.display ?? "that time";
     if (missing.includes("dueDate")) {
@@ -3912,6 +3954,12 @@ function missingChatQuestion(
   }
   if (needsTitle && missing.includes("dueDate") && missing.includes("urgency")) {
     return `What should ${assigneeName} do, when is it due, and how urgent is it?`;
+  }
+  if (needsTitle && needsMeetingScope && missing.includes("dueDate")) {
+    return `Which meeting or action items should ${assigneeName} complete, and when is it due?`;
+  }
+  if (needsTitle && needsMeetingScope) {
+    return `Which meeting or action items should ${assigneeName} complete?`;
   }
   if (needsTitle && missing.includes("dueDate")) {
     return `What should ${assigneeName} do, and when is it due?`;
@@ -5826,6 +5874,8 @@ function evaluateDeterministicChatTask(input: {
   });
   const missing: PendingChatMissingField[] = [];
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
+  if (explicitAssignment && needsTaskScopeClarification(finalTitle, input.message)) missing.push("title");
+  if (explicitAssignment && !fallback.dueDate) missing.push("dueDate");
   if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1 || profileResolution.needsChoice) {
     missing.push("positionProfile");
   }
@@ -7456,6 +7506,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const missing: PendingChatMissingField[] = [];
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
+        if (explicitAssignment && needsTaskScopeClarification(taskInput.title, taskMessage)) missing.push("title");
         if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
         if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1) missing.push("positionProfile");
         if (!taskInput.dueDate) missing.push("dueDate");
@@ -7650,7 +7701,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ assistant, pending: true });
       return;
     }
-    if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedUser && !aiAssignee))) {
+    const needsScope = explicitAssignment && needsTaskScopeClarification(taskInput.title, parsed.data.message);
+    const needsAssigneeChoice = explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedUser && !aiAssignee));
+    if (!needsAssigneeChoice && (needsScope || (explicitAssignment && !taskInput.dueDate))) {
+      await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
+      const assignee = users.find((user) => user.id === taskInput.assignedToId);
+      const intro = `I can assign ${assignee?.name ?? "the assignee"} to ${lowercaseFirst(taskInput.title)}.`;
+      const assistant = await storage.createChatMessage({
+        role: "assistant",
+        content: needsScope && !taskInput.dueDate
+          ? `${intro} Which meeting or action items should they complete, and when is it due?`
+          : needsScope
+            ? `${intro} Which meeting or action items should they complete?`
+            : `${intro} When is this due?`,
+        taskId: null,
+      });
+      res.json({ assistant, pending: true });
+      return;
+    }
+    if (needsAssigneeChoice) {
       await storage.createChatMessage({ role: "user", content: parsed.data.message, taskId: null });
       const assistant = await storage.createChatMessage({
         role: "assistant",

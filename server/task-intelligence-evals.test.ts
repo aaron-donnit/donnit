@@ -149,6 +149,16 @@ const evalCases: Array<{
     },
   },
   {
+    name: "asks for scope and due date on typo-heavy vague meeting assignment",
+    message: "have nina go through and compet all of our wok from the meeting",
+    expected: {
+      assignedToId: "user-nina",
+      title: "Complete all of our work from the meeting",
+      missing: ["title", "dueDate"],
+      titleExcludes: ["compet", "wok"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {

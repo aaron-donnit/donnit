@@ -58,6 +58,7 @@ The backend seed in `server/intelligence/donnit-starter-memory.ts` covers:
 - `intent.multi_action_map`
 - `task_interpretation.clean_action`
 - `task_interpretation.business_language`
+- `task_interpretation.typo_tolerance`
 - `language.global_phrase_patterns`
 - `task_interpretation.no_task_cases`
 - `roles.business_title_interpretation`

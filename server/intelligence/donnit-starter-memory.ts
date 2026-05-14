@@ -108,6 +108,20 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     ],
   },
   {
+    key: "task_interpretation.typo_tolerance",
+    category: "task_interpretation",
+    title: "Correct obvious typos before creating task titles",
+    body: "Users will type quickly and imperfectly. Correct obvious spelling mistakes and shorthand in the task title when the intended word is clear. Do not preserve typos in titles. If a typo creates real ambiguity, ask a clarification instead of guessing.",
+    examples: [
+      "compet -> complete",
+      "wok -> work",
+      "teh -> the",
+      "frm -> from",
+      "mtg -> meeting",
+      "have Nina go through and compet all of our wok from the meeting -> ask which meeting/action items, and use complete/work in the draft title",
+    ],
+  },
+  {
     key: "language.global_phrase_patterns",
     category: "language",
     title: "Understand common workplace phrase families",

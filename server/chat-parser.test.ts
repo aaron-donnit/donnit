@@ -81,6 +81,15 @@ describe("chat task parser", () => {
     });
   });
 
+  it("recognizes casual assignment phrasing and repairs obvious title typos", () => {
+    const prompt = "have nina go through and compet all of our wok from the meeting";
+    expect(__chatParserTest.hasExplicitAssignmentIntent(prompt)).toBe(true);
+    expect(__chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina", "nina@example.com"])).toBe(
+      "Complete all of our work from the meeting",
+    );
+    expect(__chatParserTest.titleFromMessage(prompt)).toBe("Complete all of our work from the meeting");
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",
