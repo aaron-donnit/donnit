@@ -8,14 +8,30 @@ This is the global operating memory Donnit should load for every workspace befor
 
 Donnit now treats starter memory as layer zero of a broader task-resolution memory architecture. See `docs/intelligence/task-resolution-memory-architecture.md`.
 
-Donnit has four practical memory layers today:
+Donnit should reason through six practical memory layers:
 
 - **Starter memory**: global product behavior. It teaches Donnit how to interpret work, route tasks, speak naturally, use agenda, use notifications, and protect privacy.
 - **Workspace memory**: customer-specific behavior. It teaches Donnit local vocabulary, people aliases, profile nicknames, department shorthand, recurring workflows, and company preferences.
+- **User memory**: user-specific preferences. It teaches Donnit how an individual likes timing, reminders, agenda blocks, and confirmations handled.
 - **Position Profile memory**: role-specific institutional knowledge. It preserves recurring responsibilities, how-to notes, tools, stakeholders, critical dates, risks, and historical task evidence.
 - **Session memory**: short-term conversation context. It stores pending task drafts, unresolved clarifying questions, recent entities, and user replies so Donnit does not lose the thread between turns.
+- **Action memory**: task/event history. It stores what was created, changed, accepted, rejected, completed, corrected, or deferred so future routing can improve from actual behavior.
 
 Starter memory should never be asked to do the whole job alone. It should guide behavior, but task creation needs a resolution pipeline that retrieves actual workspace candidates, scores confidence, asks when the answer is unclear, and writes corrections back into memory.
+
+## Perplexity Memory Review Takeaways
+
+The Perplexity review reinforced the correct product architecture: Donnit needs a global baseline plus isolated workspace learning. The useful additions are:
+
+- a clear memory precedence order: conversation, user, workspace, Position Profile, global;
+- an intent map that can split one message into multiple actions;
+- universal phrase families for assignment, delegation, scheduling, follow-up, recording, escalation, and status updates;
+- business title interpretation so role words become routing clues without inventing people;
+- scheduling constraint language such as "after lunch", "not before noon", "quick sync", and "working session";
+- watcher/information-only signals such as FYI, CC, and loop in;
+- scoped write-back rules so learned people, aliases, policies, and workflows stay inside the customer workspace.
+
+What Donnit should avoid: turning every possible phrase into a giant static prompt. Starter memory should hold compact universal rules. Workspace memory should hold customer-specific facts and corrections. Position Profile memory should hold role procedures and task memory.
 
 ## Core Workflow Audit
 
@@ -37,10 +53,16 @@ The backend seed in `server/intelligence/donnit-starter-memory.ts` covers:
 
 - `workflow.input_to_output_loop`
 - `workflow.review_before_commit`
+- `memory_layers.scope_precedence`
+- `memory_layers.write_to_correct_scope`
+- `intent.multi_action_map`
 - `task_interpretation.clean_action`
 - `task_interpretation.business_language`
+- `language.global_phrase_patterns`
 - `task_interpretation.no_task_cases`
+- `roles.business_title_interpretation`
 - `assignment.explicit_owner`
+- `assignment.watchers_and_information_only`
 - `assignment.ambiguous_people`
 - `assignment.delegation_collaboration_reassignment`
 - `sources.email_to_task`
@@ -48,10 +70,13 @@ The backend seed in `server/intelligence/donnit-starter-memory.ts` covers:
 - `task_fields.baseline_required_fields`
 - `task_fields.urgency_priority`
 - `task_fields.time_and_recurrence`
+- `scheduling.language_and_constraints`
+- `status.status_update_language`
 - `task_fields.privacy`
 - `agenda.create_approve_export`
 - `notifications.lifecycle`
 - `position_profiles.role_routing`
+- `position_profiles.active_profile_tags`
 - `position_profiles.memory_capture`
 - `position_profiles.transition_output`
 - `conversation.ask_dont_guess`

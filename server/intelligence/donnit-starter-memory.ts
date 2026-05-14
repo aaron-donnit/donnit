@@ -1,9 +1,15 @@
 export type DonnitStarterMemoryCategory =
   | "workflow"
+  | "memory_layers"
+  | "intent"
   | "task_interpretation"
   | "assignment"
+  | "language"
+  | "roles"
   | "sources"
   | "task_fields"
+  | "scheduling"
+  | "status"
   | "agenda"
   | "notifications"
   | "position_profiles"
@@ -43,6 +49,42 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     ],
   },
   {
+    key: "memory_layers.scope_precedence",
+    category: "memory_layers",
+    title: "Resolve memory from narrowest scope to broadest scope",
+    body: "Donnit should interpret work using this precedence: current conversation first, then user preference, then workspace memory, then Position Profile memory when a role is involved, then global starter memory. Global starter memory teaches universal behavior only. Workspace-specific names, aliases, shorthand, policies, and recurring workflows must stay tenant-scoped.",
+    examples: [
+      "Alex is OOO Friday in the current thread -> use as conversation memory for this exchange",
+      "Jamie prefers meetings after 2 PM -> user memory",
+      "Ops owns vendor intake in this company -> workspace memory",
+      "EOD means end of business day -> global starter memory",
+    ],
+  },
+  {
+    key: "memory_layers.write_to_correct_scope",
+    category: "memory_layers",
+    title: "Write learned memory to the correct layer",
+    body: "When Donnit learns something new, store it only where it belongs. Universal business language belongs in starter memory through product updates. Customer people, departments, aliases, local acronyms, approvals, and routing rules belong in workspace memory. Role procedures, recurring responsibilities, how-to steps, attachments, and historical evidence belong in Position Profile memory. One-user preferences belong in user memory.",
+    examples: [
+      "EA means Executive Assistant in this workspace -> workspace memory",
+      "Board packet workflow has five recurring steps -> Position Profile task memory",
+      "Aaron likes agenda blocks in the morning -> user memory",
+      "ASAP usually means high urgency -> global starter memory",
+    ],
+    missingMemoryBehavior: "If the new fact is reusable but not obviously safe to store, ask whether to remember it for this workspace.",
+  },
+  {
+    key: "intent.multi_action_map",
+    category: "intent",
+    title: "Classify one message into one or more work intents",
+    body: "A user message can contain more than one intent. Detect assignment, delegation, scheduling, availability, reminder, follow-up, record/log, escalation, reassignment, status update, information request, approval, and summary intents before deciding whether to create, update, or ask. Split multi-intent messages into separate actions when needed.",
+    examples: [
+      "Assign this to Alex and schedule a check-in Friday -> create task plus meeting/check-in action",
+      "Follow up with legal and flag me if blocked -> follow-up task plus escalation rule",
+      "Done with the payroll report -> update existing task status, not a new task",
+    ],
+  },
+  {
     key: "task_interpretation.clean_action",
     category: "task_interpretation",
     title: "Turn messy input into a clean work action",
@@ -66,6 +108,18 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     ],
   },
   {
+    key: "language.global_phrase_patterns",
+    category: "language",
+    title: "Understand common workplace phrase families",
+    body: "Map common workplace phrases to intent before routing. Assignment phrases include assign, put on this, own this, take point, run point, give to, route to, and put on someone's plate. Delegation phrases include handle this, run with it, coordinate this, and take the lead. Scheduling phrases include book, schedule, put on calendar, find time, sync, check-in, 1:1, kickoff, retro, and working session. Follow-up phrases include circle back, ping, nudge, touch base, check in, and send a reminder. Record phrases include log, track, document, register, note, and mark down. Escalation phrases include flag if blocked, bring me in, escalate, and let me know if this slips.",
+    examples: [
+      "Can Priya take point on this? -> assignment/delegation depending on ownership wording",
+      "Put this on the calendar -> scheduling intent",
+      "Circle back with vendor next week -> follow-up task",
+      "Flag me if legal blocks it -> escalation/update rule",
+    ],
+  },
+  {
     key: "task_interpretation.no_task_cases",
     category: "task_interpretation",
     title: "Recognize when no task should be created",
@@ -77,6 +131,18 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     ],
   },
   {
+    key: "roles.business_title_interpretation",
+    category: "roles",
+    title: "Use business titles and role families as routing clues",
+    body: "Understand broad title families without inventing people. CEO, COO, CFO, CMO, CIO, CTO, CPO, VP, SVP, Director, Head of, Lead, and Manager signal leadership or functional ownership. Coordinator, Associate, Specialist, Assistant, Executive Assistant, Admin, Recruiter, HRBP, People Ops, Controller, Accountant, AE, AM, Customer Success, RevOps, BizOps, Engineer, Designer, Analyst, and Marketer signal common role families. Use these as routing clues against active workspace people and assigned Position Profiles only.",
+    examples: [
+      "Assign earnings reports to finance -> look for active Finance profiles/people; ask if multiple match",
+      "Give this to the client success specialist -> match Customer Success/CS/client success title tags",
+      "Assign the assistant to prep the packet -> resolve assistant from active profile/person aliases, not the sender",
+    ],
+    missingMemoryBehavior: "If a role family matches multiple active people or profiles, ask which one using first and last names and profile titles.",
+  },
+  {
     key: "assignment.explicit_owner",
     category: "assignment",
     title: "Only assign ownership when the user clearly assigns ownership",
@@ -85,6 +151,17 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
       "Assign Maya to send the report -> Maya owns the task",
       "Call Maya at 2:30 -> current user owns a task to call Maya",
       "Ask Nina about payroll -> current user owns a task to ask Nina unless assignment language says Nina should do the work",
+    ],
+  },
+  {
+    key: "assignment.watchers_and_information_only",
+    category: "assignment",
+    title: "FYI, CC, and loop-in are not ownership by default",
+    body: "Treat FYI, CC, keep posted, loop in, include, inform, and share with as watcher/information signals unless the same message also contains a clear ownership verb. A copied or informed person should not become the assignee.",
+    examples: [
+      "FYI Nina on the vendor issue -> no task for Nina unless a work action is stated",
+      "Loop Jordan in on the contract review -> watcher/collaborator signal, not owner",
+      "Assign Nina and CC Jordan -> Nina owns it, Jordan is informed",
     ],
   },
   {
@@ -166,6 +243,30 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     ],
   },
   {
+    key: "scheduling.language_and_constraints",
+    category: "scheduling",
+    title: "Interpret scheduling language and hidden constraints",
+    body: "Scheduling language often implies constraints. Morning usually means 8 AM to noon. Afternoon usually means noon to 5 PM. After lunch usually means after midday. Quick sync and touch base usually mean a short meeting. Deep dive and working session usually need more time. OOO, conflict, not before, after, anytime after, and available/open/free are scheduling constraints. If a time is ambiguous or conflicts with context, ask before creating a timed task or event.",
+    examples: [
+      "Book 30 minutes with Maya next week -> meeting scheduling task with 30 minute duration",
+      "I can do anytime after 2 -> availability constraint",
+      "Not before noon -> do not schedule before noon",
+      "Let's do Friday afternoon -> afternoon window unless an exact time is known",
+    ],
+  },
+  {
+    key: "status.status_update_language",
+    category: "status",
+    title: "Status language should update existing work when possible",
+    body: "Done, complete, finished, closed, in progress, started, blocked, waiting, waiting on others, cancelled, deferred, postponed, pushed, slipped, reassigned, and escalated are task-state signals. If the message references an existing task or recent task context, update that task instead of creating a new one. If no task can be identified, ask which task the update belongs to.",
+    examples: [
+      "Done with the payroll report -> mark payroll report complete if one clear task exists",
+      "Blocked waiting on legal -> mark task blocked and record blocker",
+      "Push the vendor renewal one week -> adjust due date and log the push",
+    ],
+    missingMemoryBehavior: "If multiple recent tasks could be updated, ask which task the status update belongs to.",
+  },
+  {
     key: "task_fields.privacy",
     category: "task_fields",
     title: "Privacy rules for tasks",
@@ -207,6 +308,18 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
       "Create a recurring task for Payroll Coordinator to submit payroll every Friday -> assign to Payroll Coordinator owner and attach to profile",
     ],
     missingMemoryBehavior: "If Donnit does not know a profile title, ask whether to create/link a Position Profile or assign to a person instead.",
+  },
+  {
+    key: "position_profiles.active_profile_tags",
+    category: "position_profiles",
+    title: "Use active assigned Position Profile tags for routing",
+    body: "Position Profile titles should behave like active routing tags. Split assigned active profile titles into useful tags and phrases, such as Finance Intern -> finance, intern, finance intern. Only use profiles that are active and assigned, including delegated or transferred profiles. If a tag matches one profile, route to that profile owner. If it matches multiple profiles, use task context to prefer the closest match, then ask before creating the task if confidence is not high.",
+    examples: [
+      "Assign payroll reports to the finance intern -> route to the one active Finance Intern profile owner",
+      "Assign payroll reports to the intern when Finance Intern and Marketing Intern both exist -> ask whether Finance Intern is correct",
+      "Assign earnings report to finance when two finance profiles exist -> ask which finance profile/person should own it",
+    ],
+    missingMemoryBehavior: "If profile tags are missing for an active profile, derive them from the profile title, department, owner title, and confirmed aliases before asking the user.",
   },
   {
     key: "position_profiles.memory_capture",
