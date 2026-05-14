@@ -32,6 +32,13 @@ const profiles = [
     temporary_owner_id: null,
     delegate_user_id: null,
   },
+  {
+    id: "profile-recruiting",
+    title: "Recruiting Coordinator",
+    current_owner_id: "user-jordan",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
 ] as never;
 
 type EvalExpected = Partial<ReturnType<typeof __chatParserTest.evaluateDeterministicChatTask>> & {
@@ -61,8 +68,28 @@ const evalCases: Array<{
       assignedToId: "user-jordan",
       positionProfileId: "profile-ea",
       dueDate: "2026-05-15",
-      titleIncludes: "board packet",
+      title: "Prepare the board packet",
       titleExcludes: ["assistant with", "assign"],
+    },
+  },
+  {
+    name: "routes EA shorthand to Executive Assistant profile owner",
+    message: "assign the EA to update the CEO briefing by EOD",
+    expected: {
+      assignedToId: "user-jordan",
+      positionProfileId: "profile-ea",
+      dueDate: "2026-05-14",
+      title: "Update the CEO briefing",
+    },
+  },
+  {
+    name: "routes recruiting shorthand to Recruiting Coordinator",
+    message: "ask recruiting to schedule first round interviews by EOW",
+    expected: {
+      assignedToId: "user-jordan",
+      positionProfileId: "profile-recruiting",
+      dueDate: "2026-05-15",
+      titleIncludes: "first round interviews",
     },
   },
   {
@@ -112,6 +139,26 @@ const evalCases: Array<{
       recurrence: "monthly",
       missing: ["assignee"],
       dueDate: "2026-06-01",
+    },
+  },
+  {
+    name: "allows full-name disambiguation",
+    message: "assign Aaron Blake to update the company financial reports by EOW",
+    expected: {
+      assignedToId: "user-aaron-b",
+      dueDate: "2026-05-15",
+      title: "Update the company financial reports",
+    },
+  },
+  {
+    name: "keeps profile routing while asking for compact time",
+    message: "ask the assistant to schedule the board prep call tomorrow at 230",
+    expected: {
+      assignedToId: "user-jordan",
+      positionProfileId: "profile-ea",
+      dueDate: "2026-05-15",
+      missing: ["timeMeridiem"],
+      titleIncludes: "board prep call",
     },
   },
   {

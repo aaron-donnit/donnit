@@ -215,6 +215,6 @@ describe("chat task parser", () => {
         [],
         ["Executive Assistant to the CEO", "assistant"],
       ),
-    ).toBe("Preparing the board packet");
+    ).toBe("Prepare the board packet");
   });
 });

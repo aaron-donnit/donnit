@@ -1047,13 +1047,37 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
     .replace(/\s+/g, " ")
     .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
     .replace(/^(?:the\s+)?(?:assistant|executive assistant|admin assistant|office assistant)\s+(?:with|to|for)\s+/i, "")
+    .replace(/^(?:the\s+)?(?:ea)\s+(?:with|to|for)\s+/i, "")
     .replace(/\b(?:,?\s*this\s+is\s+not|,?\s*not)\s*$/i, "")
     .replace(/^to\s+/i, "")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
-  return withoutAssignee
-    ? withoutAssignee.charAt(0).toUpperCase() + withoutAssignee.slice(1)
-    : withoutAssignee;
+  return withoutAssignee ? normalizeTaskTitleGrammar(withoutAssignee) : withoutAssignee;
+}
+
+function normalizeTaskTitleGrammar(title: string) {
+  const cleaned = title.replace(/\s+/g, " ").trim();
+  const gerundMap: Record<string, string> = {
+    preparing: "Prepare",
+    reviewing: "Review",
+    updating: "Update",
+    sending: "Send",
+    drafting: "Draft",
+    completing: "Complete",
+    reconciling: "Reconcile",
+    scheduling: "Schedule",
+    calling: "Call",
+    emailing: "Email",
+    confirming: "Confirm",
+    collecting: "Collect",
+    submitting: "Submit",
+  };
+  const first = cleaned.split(" ")[0]?.toLowerCase() ?? "";
+  if (gerundMap[first]) {
+    return `${gerundMap[first]} ${cleaned.split(" ").slice(1).join(" ")}`.trim();
+  }
+  const normalized = cleaned.replace(/^take\s+care\s+of\b/i, "Take care of");
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 function parseAnnualReminderDays(message: string) {
@@ -2981,7 +3005,7 @@ function hasExplicitAssignmentIntent(message: string) {
     /\b(?:give|send)\s+(?:this|it|the task|that)?\s*(?:to\s+)?[a-z][a-z' -]{1,80}\s+(?:to\s+)?(?:handle|own|complete|review|finish|do)\b/i.test(message) ||
     /\bput\s+(?:this|it|the task)?\s*(?:on\s+)?[a-z][a-z' -]{1,80}(?:'s)?\s+plate\b/i.test(message) ||
     /\bget\s+[a-z][a-z' -]{1,80}\s+to\s+(?:urgently\s+|quickly\s+|please\s+)?(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|take care of)\b/i.test(message) ||
-    /\b(?:have|get|ask)\s+[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)\b/i.test(message)
+    /\b(?:have|get|ask)\s+[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i.test(message)
   );
 }
 
@@ -3003,6 +3027,37 @@ function findMentionedMemberCandidates(
     (member) => member.profile?.full_name,
     (member) => member.profile?.email,
   );
+}
+
+function compactNaturalText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/["'.,:;!?()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractAssignmentTargetPhrases(message: string) {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  const patterns = [
+    /\b(?:assign|delegate|reassign|route)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?(.+?)\s+(?:to|with|for)\s+\w+/i,
+    /\b(?:assign|delegate|reassign|route)\s+(?:a\s+)?(?:task|todo|to-do|item)\s+to\s+(.+?)\s+(?:to|with|for)\s+\w+/i,
+    /\b(?:have|get|ask)\s+(.+?)\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i,
+    /\b(?:put)\s+(?:this|it|the task)?\s*(?:on\s+)?(.+?)(?:'s)?\s+plate\b/i,
+  ];
+  const phrases = patterns
+    .map((pattern) => normalized.match(pattern)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map((value) =>
+      value
+        .replace(/^(?:the|a|an)\s+task\s+to\s+/i, "")
+        .replace(/^(?:the|a|an)\s+/i, "")
+        .replace(/\b(?:has|have)\s+(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+task.*$/i, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter((value) => value.length > 0 && value.length <= 120);
+  return Array.from(new Set(phrases));
 }
 
 function normalizedProfileSearchText(value: string) {
@@ -3035,7 +3090,7 @@ function profileMatchesText(profile: DonnitPositionProfile, message: string) {
   if (titleSet.has("payroll") && /\bpayroll\b/i.test(message)) return true;
   if (titleSet.has("finance") && /\bfinance\b/i.test(message)) return true;
   if (titleSet.has("sales") && /\bsales\b/i.test(message)) return true;
-  if (titleSet.has("recruit") && /\b(?:recruiter|recruiting|recruitment|talent)\b/i.test(message)) return true;
+  if (words.some((word) => word.startsWith("recruit")) && /\b(?:recruiter|recruiting|recruitment|talent)\b/i.test(message)) return true;
   return words.length >= 2 && words.every((word) => haystack.includes(word));
 }
 
@@ -3046,10 +3101,17 @@ function roleAliasesForProfile(profile: DonnitPositionProfile) {
     aliases.add("assistant");
     aliases.add("executive assistant");
     aliases.add("admin assistant");
+    aliases.add("office assistant");
     aliases.add("EA");
   }
   if (title.includes("payroll")) aliases.add("payroll");
   if (title.includes("finance")) aliases.add("finance");
+  if (title.includes("sales")) aliases.add("sales");
+  if (title.includes("recruit")) {
+    aliases.add("recruiting");
+    aliases.add("recruiter");
+    aliases.add("talent");
+  }
   return Array.from(aliases);
 }
 
@@ -3057,8 +3119,177 @@ function findMentionedPositionProfiles(message: string, profiles: DonnitPosition
   return profiles.filter((profile) => profileMatchesText(profile, message));
 }
 
+function findMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
+  const normalized = compactNaturalText(message);
+  return profiles
+    .map((profile) => {
+      const aliases = roleAliasesForProfile(profile).map(compactNaturalText).filter(Boolean);
+      const score = Math.max(
+        0,
+        ...aliases.map((alias) => {
+          if (!alias) return 0;
+          if (normalized === alias) return 10;
+          if (normalized.includes(alias)) return alias.split(" ").length > 1 ? 8 : 6;
+          const tokens = new Set(normalized.split(" "));
+          return tokens.has(alias) ? 5 : 0;
+        }),
+      );
+      return { profile, score };
+    })
+    .filter((item) => item.score > 0 || profileMatchesText(item.profile, message))
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.profile);
+}
+
 function ownerIdForPositionProfile(profile: DonnitPositionProfile | null | undefined) {
   return profile?.current_owner_id ?? profile?.temporary_owner_id ?? profile?.delegate_user_id ?? null;
+}
+
+function resolveChatAssigneeFromWorkspace(input: {
+  message: string;
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>;
+  profiles: DonnitPositionProfile[];
+  requesterId: string;
+}) {
+  const explicitAssignment = hasExplicitAssignmentIntent(input.message);
+  const fallbackMember = input.members.find((member) => member.user_id === input.requesterId) ?? input.members[0] ?? null;
+  if (!explicitAssignment) {
+    return {
+      assignedToId: fallbackMember?.user_id ?? input.requesterId,
+      member: fallbackMember,
+      profile: null as DonnitPositionProfile | null,
+      ambiguousMembers: [] as typeof input.members,
+      ambiguousProfiles: [] as DonnitPositionProfile[],
+      missingAssignee: false,
+      confidence: 1,
+      matchedPhrase: null as string | null,
+      labelsToStrip: [] as string[],
+    };
+  }
+
+  const targetPhrases = extractAssignmentTargetPhrases(input.message);
+  for (const phrase of targetPhrases) {
+    const memberCandidates = findMentionedMemberCandidates(phrase, input.members);
+    if (memberCandidates.length > 1) {
+      return {
+        assignedToId: fallbackMember?.user_id ?? input.requesterId,
+        member: fallbackMember,
+        profile: null,
+        ambiguousMembers: memberCandidates,
+        ambiguousProfiles: [],
+        missingAssignee: true,
+        confidence: 0.35,
+        matchedPhrase: phrase,
+        labelsToStrip: [],
+      };
+    }
+    if (memberCandidates.length === 1) {
+      return {
+        assignedToId: memberCandidates[0].user_id,
+        member: memberCandidates[0],
+        profile: null,
+        ambiguousMembers: [],
+        ambiguousProfiles: [],
+        missingAssignee: false,
+        confidence: 0.95,
+        matchedPhrase: phrase,
+        labelsToStrip: assigneeAliases(memberCandidates[0].profile?.full_name, memberCandidates[0].profile?.email),
+      };
+    }
+
+    const profileCandidates = findMentionedPositionProfileCandidates(phrase, input.profiles);
+    if (profileCandidates.length > 1) {
+      return {
+        assignedToId: fallbackMember?.user_id ?? input.requesterId,
+        member: fallbackMember,
+        profile: null,
+        ambiguousMembers: [],
+        ambiguousProfiles: profileCandidates,
+        missingAssignee: true,
+        confidence: 0.45,
+        matchedPhrase: phrase,
+        labelsToStrip: [],
+      };
+    }
+    if (profileCandidates.length === 1) {
+      const profile = profileCandidates[0];
+      const ownerId = ownerIdForPositionProfile(profile);
+      const owner = ownerId ? input.members.find((member) => member.user_id === ownerId) ?? null : null;
+      return {
+        assignedToId: ownerId ?? fallbackMember?.user_id ?? input.requesterId,
+        member: owner ?? fallbackMember,
+        profile,
+        ambiguousMembers: [],
+        ambiguousProfiles: [],
+        missingAssignee: !ownerId,
+        confidence: ownerId ? 0.9 : 0.55,
+        matchedPhrase: phrase,
+        labelsToStrip: [
+          ...(owner ? assigneeAliases(owner.profile?.full_name, owner.profile?.email) : []),
+          ...roleAliasesForProfile(profile),
+        ],
+      };
+    }
+  }
+
+  const memberCandidates = findMentionedMemberCandidates(input.message, input.members);
+  const profileCandidates = findMentionedPositionProfileCandidates(input.message, input.profiles);
+  if (memberCandidates.length > 1) {
+    return {
+      assignedToId: fallbackMember?.user_id ?? input.requesterId,
+      member: fallbackMember,
+      profile: null,
+      ambiguousMembers: memberCandidates,
+      ambiguousProfiles: [],
+      missingAssignee: true,
+      confidence: 0.35,
+      matchedPhrase: null,
+      labelsToStrip: [],
+    };
+  }
+  if (memberCandidates.length === 1) {
+    return {
+      assignedToId: memberCandidates[0].user_id,
+      member: memberCandidates[0],
+      profile: null,
+      ambiguousMembers: [],
+      ambiguousProfiles: [],
+      missingAssignee: false,
+      confidence: 0.75,
+      matchedPhrase: null,
+      labelsToStrip: assigneeAliases(memberCandidates[0].profile?.full_name, memberCandidates[0].profile?.email),
+    };
+  }
+  if (profileCandidates.length === 1) {
+    const profile = profileCandidates[0];
+    const ownerId = ownerIdForPositionProfile(profile);
+    const owner = ownerId ? input.members.find((member) => member.user_id === ownerId) ?? null : null;
+    return {
+      assignedToId: ownerId ?? fallbackMember?.user_id ?? input.requesterId,
+      member: owner ?? fallbackMember,
+      profile,
+      ambiguousMembers: [],
+      ambiguousProfiles: [],
+      missingAssignee: !ownerId,
+      confidence: ownerId ? 0.75 : 0.45,
+      matchedPhrase: null,
+      labelsToStrip: [
+        ...(owner ? assigneeAliases(owner.profile?.full_name, owner.profile?.email) : []),
+        ...roleAliasesForProfile(profile),
+      ],
+    };
+  }
+  return {
+    assignedToId: fallbackMember?.user_id ?? input.requesterId,
+    member: fallbackMember,
+    profile: null,
+    ambiguousMembers: [],
+    ambiguousProfiles: profileCandidates.length > 1 ? profileCandidates : [],
+    missingAssignee: true,
+    confidence: 0.2,
+    matchedPhrase: null,
+    labelsToStrip: [],
+  };
 }
 
 function resolveChatPositionProfile(input: {
@@ -4963,21 +5194,17 @@ function evaluateDeterministicChatTask(input: {
 }) {
   const fallback = parseChatTaskAuthenticated(input.message, input.members as Awaited<ReturnType<DonnitStore["listOrgMembers"]>>, input.requesterId);
   const explicitAssignment = hasExplicitAssignmentIntent(input.message);
-  const explicitMentionedMembers = explicitAssignment
-    ? findMentionedMemberCandidates(input.message, input.members as Awaited<ReturnType<DonnitStore["listOrgMembers"]>>)
-    : [];
-  const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
-  const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
+  const workspaceResolution = resolveChatAssigneeFromWorkspace({
+    message: input.message,
+    members: input.members as Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+    profiles: input.profiles,
+    requesterId: input.requesterId,
+  });
   const mentionedProfiles = findMentionedPositionProfiles(input.message, input.profiles);
-  const mentionedProfile = mentionedProfiles.length === 1 ? mentionedProfiles[0] : null;
-  const mentionedProfileOwnerId = ownerIdForPositionProfile(mentionedProfile);
-  const mentionedProfileMember = mentionedProfileOwnerId
-    ? input.members.find((member) => member.user_id === mentionedProfileOwnerId) ?? null
-    : null;
-  const assignedToId = explicitMentionedMember?.user_id ?? mentionedProfileOwnerId ?? fallback.assignedToId;
+  const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
+  const assignedToId = workspaceResolution.assignedToId ?? fallback.assignedToId;
   const resolvedTitle = titleFromMessage(input.message, [
-    ...assigneeAliases(explicitMentionedMember?.profile?.full_name, explicitMentionedMember?.profile?.email),
-    ...assigneeAliases(mentionedProfileMember?.profile?.full_name, mentionedProfileMember?.profile?.email),
+    ...workspaceResolution.labelsToStrip,
     ...(mentionedProfile ? roleAliasesForProfile(mentionedProfile) : []),
   ]) || fallback.title;
   const requester = input.members.find((member) => member.user_id === input.requesterId);
@@ -4986,7 +5213,7 @@ function evaluateDeterministicChatTask(input: {
     firstNameForTaskReference(memberDisplayName(requester ?? {})),
     String(assignedToId) !== String(input.requesterId),
   );
-  const finalTitle = rewrittenTitle.replace(/^to\s+/i, "").trim().replace(/^./, (char) => char.toUpperCase());
+  const finalTitle = normalizeTaskTitleGrammar(rewrittenTitle.replace(/^to\s+/i, "").trim());
   const profileResolution = resolveChatPositionProfile({
     profiles: input.profiles,
     assignedToId: String(assignedToId),
@@ -4994,7 +5221,7 @@ function evaluateDeterministicChatTask(input: {
     visibility: fallback.visibility,
   });
   const missing: PendingChatMissingField[] = [];
-  if (explicitAssignment && ambiguousMentionedAssignee) missing.push("assignee");
+  if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
   if (mentionedProfiles.length > 1) missing.push("positionProfile");
   if (ambiguousCompactClockTime(input.message)) missing.push("timeMeridiem");
   return {
@@ -6307,17 +6534,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         );
         const fallbackInput = parseChatTaskAuthenticated(taskMessage, members, auth.userId);
         const explicitAssignment = hasExplicitAssignmentIntent(taskMessage);
-        const explicitMentionedMembers = explicitAssignment ? findMentionedMemberCandidates(taskMessage, members) : [];
-        const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
-        const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
         const positionProfilesForRouting = await store.listPositionProfiles(orgId);
+        const workspaceResolution = resolveChatAssigneeFromWorkspace({
+          message: taskMessage,
+          members,
+          profiles: positionProfilesForRouting,
+          requesterId: auth.userId,
+        });
         const mentionedProfiles = findMentionedPositionProfiles(taskMessage, positionProfilesForRouting);
-        const mentionedProfile = mentionedProfiles.length === 1 ? mentionedProfiles[0] : null;
-        const mentionedProfileOwnerId = ownerIdForPositionProfile(mentionedProfile);
-        const mentionedProfileMember = mentionedProfileOwnerId
-          ? members.find((member) => member.user_id === mentionedProfileOwnerId) ?? null
-          : null;
-        const aiAssignee = ai && explicitAssignment && !ambiguousMentionedAssignee
+        const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
+        const aiAssignee = ai && explicitAssignment && !workspaceResolution.missingAssignee
           ? members.find((member) => {
               const candidate = matchAiAssignee(ai.assigneeHint, [
                 {
@@ -6329,7 +6555,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               return Boolean(candidate);
             })
           : null;
-        const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? mentionedProfileOwnerId ?? fallbackInput.assignedToId;
+        const assignedToId = workspaceResolution.confidence >= 0.7
+          ? workspaceResolution.assignedToId
+          : aiAssignee?.user_id ?? fallbackInput.assignedToId;
         const resolvedDueDate = fallbackInput.dueDate ?? ai?.dueDate ?? null;
         const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
         const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
@@ -6349,7 +6577,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const resolvedTitle = ai
           ? normalizeAiTitle(ai.title, fallbackInput.title, [
               ...assigneeAliases(aiAssignee?.profile?.full_name, aiAssignee?.profile?.email),
-              ...assigneeAliases(mentionedProfileMember?.profile?.full_name, mentionedProfileMember?.profile?.email),
+              ...workspaceResolution.labelsToStrip,
               ...(mentionedProfile ? roleAliasesForProfile(mentionedProfile) : []),
             ])
           : fallbackInput.title;
@@ -6357,10 +6585,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? titleFromMessage(resolvedTitle, [], roleAliasesForProfile(mentionedProfile)) || resolvedTitle
           : resolvedTitle;
         const requester = members.find((member) => member.user_id === auth.userId);
-        const finalTitle = rewriteRequesterReferencesInTitle(
-          cleanedResolvedTitle,
-          firstNameForTaskReference(memberDisplayName(requester ?? {})),
-          String(assignedToId) !== String(auth.userId),
+        const finalTitle = normalizeTaskTitleGrammar(
+          rewriteRequesterReferencesInTitle(
+            cleanedResolvedTitle,
+            firstNameForTaskReference(memberDisplayName(requester ?? {})),
+            String(assignedToId) !== String(auth.userId),
+          ),
         );
         const repeatDetails = recurrenceDetailsFromMessage(taskMessage, resolvedRecurrence, resolvedDueDate);
         const taskInput = ai
@@ -6389,6 +6619,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               ...fallbackInput,
               title: finalTitle,
               description: descriptionWithServerRepeatDetails(fallbackInput.description ?? taskMessage, repeatDetails),
+              assignedToId,
+              status: assignedToId === auth.userId ? "open" : "pending_acceptance",
               recurrence: resolvedRecurrence,
               reminderDaysBefore: resolvedReminderDaysBefore,
             };
@@ -6402,8 +6634,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const missing: PendingChatMissingField[] = [];
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
-        if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee && !mentionedProfileOwnerId))) missing.push("assignee");
-        if (mentionedProfiles.length > 1) missing.push("positionProfile");
+        if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
+        if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1) missing.push("positionProfile");
         if (!taskInput.dueDate) missing.push("dueDate");
         if (ambiguousCompactClockTime(taskMessage)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");
@@ -6516,10 +6748,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ? normalizeAiTitle(ai.title, fallbackInput.title, assigneeAliases(aiAssignee?.name, aiAssignee?.email))
       : fallbackInput.title;
     const requester = users.find((user) => user.id === DEMO_USER_ID);
-    const finalTitle = rewriteRequesterReferencesInTitle(
-      resolvedTitle,
-      firstNameForTaskReference(requester?.name ?? "Demo Owner"),
-      String(assignedToId) !== String(DEMO_USER_ID),
+    const finalTitle = normalizeTaskTitleGrammar(
+      rewriteRequesterReferencesInTitle(
+        resolvedTitle,
+        firstNameForTaskReference(requester?.name ?? "Demo Owner"),
+        String(assignedToId) !== String(DEMO_USER_ID),
+      ),
     );
     const repeatDetails = recurrenceDetailsFromMessage(parsed.data.message, resolvedRecurrence, resolvedDueDate);
     const taskInput = ai
