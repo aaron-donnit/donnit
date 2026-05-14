@@ -37,6 +37,7 @@ import {
 import {
   DonnitStore,
   type DonnitEmailSuggestion,
+  type DonnitProfile,
   type DonnitPositionProfile,
   type DonnitPositionProfileKnowledge,
   type DonnitPositionProfileTaskMemoryAttachment,
@@ -2325,6 +2326,106 @@ async function requireWorkspaceMemberContext(auth: NonNullable<Request["donnitAu
   return { ok: true as const, orgId, members, actor };
 }
 
+function normalizedAuthEmail(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+async function getOrRepairAuthenticatedProfile(auth: NonNullable<Request["donnitAuth"]>): Promise<DonnitProfile | null> {
+  const userStore = new DonnitStore(auth.client, auth.userId);
+  const profile = await userStore.getProfile();
+  if (profile?.default_org_id) return profile;
+
+  const email = normalizedAuthEmail(auth.email);
+  const admin = email ? createSupabaseAdminClient() : null;
+  if (!admin) return profile;
+
+  const upsertCurrentProfile = async (input: {
+    defaultOrgId: string;
+    fullName?: string | null;
+    persona?: string | null;
+  }) => {
+    const { error } = await admin
+      .from(DONNIT_TABLES.profiles)
+      .upsert(
+        {
+          id: auth.userId,
+          full_name: profile?.full_name || input.fullName || email,
+          email,
+          default_org_id: input.defaultOrgId,
+          persona: profile?.persona || input.persona || "operator",
+        },
+        { onConflict: "id" },
+      );
+    if (error) throw error;
+    return new DonnitStore(admin, auth.userId).getProfile();
+  };
+
+  const { data: currentMemberships, error: currentMembershipError } = await admin
+    .from(DONNIT_TABLES.organizationMembers)
+    .select("*")
+    .eq("user_id", auth.userId)
+    .neq("status", "inactive")
+    .limit(1);
+  if (currentMembershipError) throw currentMembershipError;
+  const currentMembership = Array.isArray(currentMemberships) ? currentMemberships[0] : null;
+  if (currentMembership?.org_id) {
+    return upsertCurrentProfile({ defaultOrgId: currentMembership.org_id });
+  }
+
+  const { data: emailProfiles, error: emailProfileError } = await admin
+    .from(DONNIT_TABLES.profiles)
+    .select("*")
+    .eq("email", email)
+    .not("default_org_id", "is", null)
+    .limit(5);
+  if (emailProfileError) throw emailProfileError;
+
+  const emailProfile = ((emailProfiles ?? []) as DonnitProfile[])
+    .find((candidate) => candidate.id !== auth.userId && candidate.default_org_id);
+  if (!emailProfile?.default_org_id) return profile;
+
+  const { data: matchingMemberships, error: matchingMembershipError } = await admin
+    .from(DONNIT_TABLES.organizationMembers)
+    .select("*")
+    .eq("org_id", emailProfile.default_org_id)
+    .eq("user_id", emailProfile.id)
+    .neq("status", "inactive")
+    .limit(1);
+  if (matchingMembershipError) throw matchingMembershipError;
+  const matchingMembership = Array.isArray(matchingMemberships) ? matchingMemberships[0] : null;
+  if (!matchingMembership?.org_id) return profile;
+
+  const repairedProfile = await upsertCurrentProfile({
+    defaultOrgId: matchingMembership.org_id,
+    fullName: emailProfile.full_name,
+    persona: emailProfile.persona,
+  });
+
+  const { error: memberError } = await admin
+    .from(DONNIT_TABLES.organizationMembers)
+    .upsert(
+      {
+        org_id: matchingMembership.org_id,
+        user_id: auth.userId,
+        role: matchingMembership.role ?? "member",
+        manager_id: matchingMembership.manager_id === emailProfile.id ? null : matchingMembership.manager_id ?? null,
+        can_assign: matchingMembership.can_assign ?? ["owner", "admin", "manager"].includes(String(matchingMembership.role ?? "")),
+        status: "active",
+      },
+      { onConflict: "org_id,user_id" },
+    );
+  if (memberError) throw memberError;
+
+  console.info("[donnit] linked OAuth identity to existing workspace by verified email", {
+    userId: auth.userId,
+    email,
+    orgId: matchingMembership.org_id,
+    sourceProfileId: emailProfile.id,
+  });
+
+  return repairedProfile;
+}
+
 function memberDisplayName(member: { profile?: { full_name?: string | null; email?: string | null } | null }) {
   return member.profile?.full_name || member.profile?.email || "Member";
 }
@@ -3514,7 +3615,7 @@ async function tryBuildGoogleCalendarContext(store: DonnitStore): Promise<Google
 async function buildAuthenticatedBootstrap(req: Request) {
   const auth = req.donnitAuth!;
   const store = new DonnitStore(auth.client, auth.userId);
-  const profile = await store.getProfile();
+  const profile = await getOrRepairAuthenticatedProfile(auth);
   if (!profile?.default_org_id) {
     return {
       authenticated: true,
@@ -6920,8 +7021,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ supabase: true, authenticated: false });
       return;
     }
-    const store = new DonnitStore(req.donnitAuth.client, req.donnitAuth.userId);
-    const profile = await store.getProfile();
+    const profile = await getOrRepairAuthenticatedProfile(req.donnitAuth);
     res.json({
       supabase: true,
       authenticated: true,
