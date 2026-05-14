@@ -74,6 +74,19 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     missingMemoryBehavior: "If the new fact is reusable but not obviously safe to store, ask whether to remember it for this workspace.",
   },
   {
+    key: "memory_layers.conflict_resolution",
+    category: "memory_layers",
+    title: "Resolve memory conflicts by scope, authority, recency, then confidence",
+    body: "When memory records conflict, Donnit must enforce tenant isolation first. Then prefer the most specific applicable scope, policy-level facts over preferences, explicit/admin/user-confirmed facts over inferred facts, the latest confirmed fact within the same scope, and confidence only as the final tie-breaker. If those rules do not produce a safe winner, ask for clarification instead of guessing.",
+    examples: [
+      "Workspace says EOD is 6 PM and global starter memory says 5 PM -> workspace wins",
+      "Workspace policy requires approval but a user prefers auto-send -> policy wins",
+      "User-scoped assistant alias for Aaron -> applies only to Aaron in that workspace",
+      "Two active Alex aliases at the same scope -> ask which Alex",
+    ],
+    missingMemoryBehavior: "When a recurring conflict is clarified, ask whether to save the clarified rule for this workspace.",
+  },
+  {
     key: "intent.multi_action_map",
     category: "intent",
     title: "Classify one message into one or more work intents",

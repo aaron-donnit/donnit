@@ -127,6 +127,81 @@ const profilesWithMultipleInterns = [
   },
 ] as never;
 
+const workspaceAlias = (overrides: {
+  id: string;
+  surfaceForm: string;
+  targetType?: string;
+  targetId: string;
+  scopeType?: string;
+  scopeId?: string | null;
+  confidence?: number;
+  source?: string;
+  lastUsedAt?: string;
+}) => ({
+  id: overrides.id,
+  org_id: "org-1",
+  surface_form: overrides.surfaceForm,
+  normalized_form: overrides.surfaceForm.toLowerCase(),
+  target_type: overrides.targetType ?? "position_profile",
+  target_id: overrides.targetId,
+  scope_type: overrides.scopeType ?? "workspace",
+  scope_id: overrides.scopeId ?? null,
+  scope_key: overrides.scopeId ?? overrides.scopeType ?? "workspace",
+  confidence_score: overrides.confidence ?? 0.65,
+  status: "active",
+  source: overrides.source ?? "learned:chat_resolution",
+  usage_count: 1,
+  contradicted_count: 0,
+  last_used_at: overrides.lastUsedAt ?? "2026-05-14T14:00:00.000Z",
+  contested_at: null,
+  metadata: {},
+  created_by: "user-aaron",
+  created_at: overrides.lastUsedAt ?? "2026-05-14T14:00:00.000Z",
+  updated_at: overrides.lastUsedAt ?? "2026-05-14T14:00:00.000Z",
+  archived_at: null,
+}) as never;
+
+const assistantAliasConflict = [
+  workspaceAlias({
+    id: "alias-workspace-assistant",
+    surfaceForm: "assistant",
+    targetId: "profile-ea",
+    scopeType: "workspace",
+    confidence: 0.95,
+    source: "system:position_profile_title_tag",
+    lastUsedAt: "2026-05-14T09:00:00.000Z",
+  }),
+  workspaceAlias({
+    id: "alias-user-assistant",
+    surfaceForm: "assistant",
+    targetId: "profile-payroll",
+    scopeType: "user",
+    scopeId: "user-aaron",
+    confidence: 0.7,
+    source: "user_confirmed",
+    lastUsedAt: "2026-05-14T09:00:00.000Z",
+  }),
+] as never;
+
+const opsAliasRecencyConflict = [
+  workspaceAlias({
+    id: "alias-ops-old",
+    surfaceForm: "ops",
+    targetId: "profile-sales",
+    confidence: 0.95,
+    source: "user_confirmed",
+    lastUsedAt: "2026-01-10T09:00:00.000Z",
+  }),
+  workspaceAlias({
+    id: "alias-ops-new",
+    surfaceForm: "ops",
+    targetId: "profile-payroll",
+    confidence: 0.55,
+    source: "user_confirmed",
+    lastUsedAt: "2026-05-14T09:00:00.000Z",
+  }),
+] as never;
+
 type EvalExpected = Partial<ReturnType<typeof __chatParserTest.evaluateDeterministicChatTask>> & {
   titleIncludes?: string;
   titleExcludes?: string[];
@@ -137,6 +212,7 @@ const evalCases: Array<{
   message: string;
   expected: EvalExpected;
   profilesOverride?: typeof profiles;
+  aliasesOverride?: ReturnType<typeof workspaceAlias>[];
 }> = [
   {
     name: "assigns explicit person and rewrites me",
@@ -177,6 +253,28 @@ const evalCases: Array<{
       positionProfileId: "profile-ea",
       dueDate: "2026-05-14",
       title: "Update the CEO briefing",
+    },
+  },
+  {
+    name: "user scoped memory overrides workspace alias for that user",
+    message: "assign the assistant to compile packets by EOW",
+    aliasesOverride: assistantAliasConflict,
+    expected: {
+      assignedToId: "user-nina",
+      positionProfileId: "profile-payroll",
+      dueDate: "2026-05-15",
+      title: "Compile packets",
+    },
+  },
+  {
+    name: "newer confirmed workspace memory beats older lower-recency memory",
+    message: "assign ops to handle vendor intake by EOW",
+    aliasesOverride: opsAliasRecencyConflict,
+    expected: {
+      assignedToId: "user-nina",
+      positionProfileId: "profile-payroll",
+      dueDate: "2026-05-15",
+      title: "Vendor intake",
     },
   },
   {
@@ -389,13 +487,14 @@ const evalCases: Array<{
 ];
 
 describe("Donnit task intelligence evals", () => {
-  it.each(evalCases)("$name", ({ message, expected, profilesOverride }) => {
+  it.each(evalCases)("$name", ({ message, expected, profilesOverride, aliasesOverride }) => {
     vi.setSystemTime(new Date("2026-05-14T10:00:00-04:00"));
 
     const actual = __chatParserTest.evaluateDeterministicChatTask({
       message,
       members,
       profiles: profilesOverride ?? profiles,
+      aliases: aliasesOverride ?? [],
       requesterId: "user-aaron",
     });
 

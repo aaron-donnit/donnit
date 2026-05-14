@@ -394,6 +394,8 @@ Rejected for now:
 - Letting the LLM resolve against the full workspace without candidate retrieval.
 - Silent writes when confidence is low.
 
+Conflict resolution is governed by `docs/intelligence/memory-conflict-policy.md`: tenant isolation first, then scope specificity, policy/source authority, explicit confirmation, recency, confidence, and clarification when unsafe.
+
 ## Proposed Data Additions
 
 These are implementation targets, not yet required migrations.

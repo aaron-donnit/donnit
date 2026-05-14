@@ -55,6 +55,7 @@ The backend seed in `server/intelligence/donnit-starter-memory.ts` covers:
 - `workflow.review_before_commit`
 - `memory_layers.scope_precedence`
 - `memory_layers.write_to_correct_scope`
+- `memory_layers.conflict_resolution`
 - `intent.multi_action_map`
 - `task_interpretation.clean_action`
 - `task_interpretation.business_language`

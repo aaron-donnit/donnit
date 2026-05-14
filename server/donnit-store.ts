@@ -457,6 +457,7 @@ export type DonnitWorkspaceMemoryAlias = {
   contradicted_count: number;
   last_used_at: string;
   contested_at: string | null;
+  expires_at?: string | null;
   metadata: Record<string, unknown>;
   created_by: string | null;
   created_at: string;
