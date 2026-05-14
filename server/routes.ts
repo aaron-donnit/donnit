@@ -675,6 +675,8 @@ function parseDueDate(message: string) {
   if (natural) return natural;
   const monthlyOrdinal = parseMonthlyOrdinalWeekdayDueDate(message);
   if (monthlyOrdinal) return monthlyOrdinal;
+  const eodWithWeekday = text.match(/\b(?:eod|eob|cob|close of business|end of business|end of day)\s+(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (eodWithWeekday) return nextWeekdayIso(weekdayIndexes[eodWithWeekday[2]], eodWithWeekday[1] === "next");
   if (/\b(?:eod|eob|cob|close of business|end of business|end of day)\b/.test(text)) return todayIso();
   if (/\b(?:next\s+eow|next\s+end of week|end of next week)\b/.test(text)) return nextWeekdayIso(5, true);
   if (/\b(?:eow|end of week)\b/.test(text)) return nextWeekdayIso(5);
@@ -822,7 +824,7 @@ function parseUrgency(message: string): "low" | "normal" | "high" | "critical" {
   const text = message.toLowerCase();
   if (/\b(?:not urgent|not high priority|no rush|not a rush|when you can|regular priority|standard priority)\b/.test(text)) return "normal";
   if (/\b(?:critical|emergency|blocker|fire drill|drop everything|immediately|sev\s*1|p0)\b/.test(text)) return "critical";
-  if (/\b(?:urgent|asap|high priority|important|time sensitive|before close|p1|eod|cob|eob)\b/.test(text)) return "high";
+  if (/\b(?:urgent|urgently|asap|high priority|important|time sensitive|before close|p1|eod|cob|eob)\b/.test(text)) return "high";
   if (/\b(?:low priority|whenever|someday|backlog|nice to have|p3)\b/.test(text)) return "low";
   return "normal";
 }
@@ -831,7 +833,7 @@ function parseExplicitUrgency(message: string): "low" | "normal" | "high" | "cri
   const text = message.toLowerCase();
   if (/\b(?:not urgent|not high priority|no rush|not a rush|when you can|regular priority|standard priority)\b/.test(text)) return "normal";
   if (/\b(?:critical|emergency|blocker|fire drill|drop everything|immediately|sev\s*1|p0)\b/.test(text)) return "critical";
-  if (/\b(?:urgent|asap|high priority|high urgency|highly urgent|\bhigh\b|important|time sensitive|p1)\b/.test(text)) return "high";
+  if (/\b(?:urgent|urgently|asap|high priority|high urgency|highly urgent|\bhigh\b|important|time sensitive|p1)\b/.test(text)) return "high";
   if (/\b(?:low priority|whenever|someday|backlog|nice to have|p3)\b/.test(text)) return "low";
   if (/\b(normal|medium|standard|regular priority|p2)\b/.test(text)) return "normal";
   return null;
@@ -940,7 +942,7 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
       .replace(new RegExp(`\\b(?:route|transfer|hand\\s*off|handoff)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\b(?:give|send)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bput\\s+(?:this|it)?\\s*(?:on\\s+)?${safe}(?:'s)?\\s+plate\\b`, "gi"), "")
-      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+to\\b`, "gi"), "")
+      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+to\\s+(?:urgently\\s+|quickly\\s+|please\\s+)?(?:take\\s+care\\s+of|handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)?\\s*`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
   }
@@ -2978,6 +2980,7 @@ function hasExplicitAssignmentIntent(message: string) {
     /\b(?:assign|delegate|reassign|route|transfer|handoff|hand\s*off)\b/i.test(message) ||
     /\b(?:give|send)\s+(?:this|it|the task|that)?\s*(?:to\s+)?[a-z][a-z' -]{1,80}\s+(?:to\s+)?(?:handle|own|complete|review|finish|do)\b/i.test(message) ||
     /\bput\s+(?:this|it|the task)?\s*(?:on\s+)?[a-z][a-z' -]{1,80}(?:'s)?\s+plate\b/i.test(message) ||
+    /\bget\s+[a-z][a-z' -]{1,80}\s+to\s+(?:urgently\s+|quickly\s+|please\s+)?(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|take care of)\b/i.test(message) ||
     /\b(?:have|get|ask)\s+[a-z][a-z' -]{1,80}\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)\b/i.test(message)
   );
 }
@@ -4952,8 +4955,67 @@ function normalizeTimestamp(value: string | null | undefined): string | null {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
 
+function evaluateDeterministicChatTask(input: {
+  message: string;
+  members: Array<{ user_id: string; profile?: { full_name?: string | null; email?: string | null } | null }>;
+  profiles: DonnitPositionProfile[];
+  requesterId: string;
+}) {
+  const fallback = parseChatTaskAuthenticated(input.message, input.members as Awaited<ReturnType<DonnitStore["listOrgMembers"]>>, input.requesterId);
+  const explicitAssignment = hasExplicitAssignmentIntent(input.message);
+  const explicitMentionedMembers = explicitAssignment
+    ? findMentionedMemberCandidates(input.message, input.members as Awaited<ReturnType<DonnitStore["listOrgMembers"]>>)
+    : [];
+  const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
+  const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
+  const mentionedProfiles = findMentionedPositionProfiles(input.message, input.profiles);
+  const mentionedProfile = mentionedProfiles.length === 1 ? mentionedProfiles[0] : null;
+  const mentionedProfileOwnerId = ownerIdForPositionProfile(mentionedProfile);
+  const mentionedProfileMember = mentionedProfileOwnerId
+    ? input.members.find((member) => member.user_id === mentionedProfileOwnerId) ?? null
+    : null;
+  const assignedToId = explicitMentionedMember?.user_id ?? mentionedProfileOwnerId ?? fallback.assignedToId;
+  const resolvedTitle = titleFromMessage(input.message, [
+    ...assigneeAliases(explicitMentionedMember?.profile?.full_name, explicitMentionedMember?.profile?.email),
+    ...assigneeAliases(mentionedProfileMember?.profile?.full_name, mentionedProfileMember?.profile?.email),
+    ...(mentionedProfile ? roleAliasesForProfile(mentionedProfile) : []),
+  ]) || fallback.title;
+  const requester = input.members.find((member) => member.user_id === input.requesterId);
+  const rewrittenTitle = rewriteRequesterReferencesInTitle(
+    resolvedTitle,
+    firstNameForTaskReference(memberDisplayName(requester ?? {})),
+    String(assignedToId) !== String(input.requesterId),
+  );
+  const finalTitle = rewrittenTitle.replace(/^to\s+/i, "").trim().replace(/^./, (char) => char.toUpperCase());
+  const profileResolution = resolveChatPositionProfile({
+    profiles: input.profiles,
+    assignedToId: String(assignedToId),
+    message: input.message,
+    visibility: fallback.visibility,
+  });
+  const missing: PendingChatMissingField[] = [];
+  if (explicitAssignment && ambiguousMentionedAssignee) missing.push("assignee");
+  if (mentionedProfiles.length > 1) missing.push("positionProfile");
+  if (ambiguousCompactClockTime(input.message)) missing.push("timeMeridiem");
+  return {
+    title: finalTitle,
+    assignedToId,
+    positionProfileId: profileResolution.positionProfileId,
+    dueDate: fallback.dueDate,
+    dueTime: fallback.dueTime,
+    startTime: fallback.startTime,
+    endTime: fallback.endTime,
+    urgency: fallback.urgency,
+    recurrence: fallback.recurrence,
+    visibility: fallback.visibility,
+    estimatedMinutes: fallback.estimatedMinutes,
+    missing,
+  };
+}
+
 export const __chatParserTest = {
   ambiguousCompactClockTime,
+  evaluateDeterministicChatTask,
   findBestMentionedCandidates,
   fallbackReplyDraft,
   hasExplicitAssignmentIntent,

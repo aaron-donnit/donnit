@@ -82,3 +82,25 @@ Current starter memory is static backend memory. The next product step is a work
 - archiving outdated workspace rules;
 - showing which rules affected a task;
 - preventing private/personal rules from leaking into role memory.
+
+## Eval Harness
+
+Donnit now has a deterministic task-intelligence eval harness in `server/task-intelligence-evals.test.ts`.
+
+The first eval set covers:
+
+- explicit person assignment;
+- Position Profile title routing;
+- Position Profile alias routing such as assistant/EA;
+- contact tasks that should stay self-owned;
+- ambiguous compact times;
+- confidential tasks;
+- first-name collisions;
+- time estimates;
+- personal task exclusion from role memory;
+- profile shorthand such as sales.
+
+Every user-reported prompt failure should be added to this eval set before or during the fix. The eval set separates two failure types:
+
+- **memory coverage failures**: Donnit does not know a phrase, alias, workflow, or expected outcome.
+- **memory application failures**: Donnit has the rule, but deterministic routing or prompt usage does not apply it.
