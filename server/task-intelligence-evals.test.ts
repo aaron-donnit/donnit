@@ -70,6 +70,39 @@ const profilesWithContestedClientSuccess = [
   },
 ] as never;
 
+const profilesWithFinanceIntern = [
+  ...profiles,
+  {
+    id: "profile-finance-intern",
+    title: "Finance Intern",
+    current_owner_id: "user-nina",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
+const profilesWithTwoFinanceProfiles = [
+  ...profilesWithFinanceIntern,
+  {
+    id: "profile-finance-analyst",
+    title: "Finance Analyst",
+    current_owner_id: "user-jordan",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
+const profilesWithMultipleInterns = [
+  ...profilesWithFinanceIntern,
+  {
+    id: "profile-marketing-intern",
+    title: "Marketing Intern",
+    current_owner_id: "user-maya",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
 type EvalExpected = Partial<ReturnType<typeof __chatParserTest.evaluateDeterministicChatTask>> & {
   titleIncludes?: string;
   titleExcludes?: string[];
@@ -260,6 +293,40 @@ const evalCases: Array<{
       dueDate: "2026-05-15",
       missing: ["assignee", "positionProfile"],
       titleIncludes: "customer report",
+    },
+  },
+  {
+    name: "routes exact generated profile tag",
+    message: "assign payroll reports to the finance intern by EOW",
+    profilesOverride: profilesWithFinanceIntern,
+    expected: {
+      assignedToId: "user-nina",
+      positionProfileId: "profile-finance-intern",
+      dueDate: "2026-05-15",
+      titleIncludes: "payroll reports",
+      titleExcludes: ["finance intern"],
+    },
+  },
+  {
+    name: "asks when generated single-word profile tag is contested",
+    message: "assign payroll reports to the intern by EOW",
+    profilesOverride: profilesWithMultipleInterns,
+    expected: {
+      assignedToId: "user-aaron",
+      dueDate: "2026-05-15",
+      missing: ["assignee", "positionProfile"],
+      titleIncludes: "payroll reports",
+    },
+  },
+  {
+    name: "asks when finance tag has multiple profile matches",
+    message: "assign earnings reports to finance by EOW",
+    profilesOverride: profilesWithTwoFinanceProfiles,
+    expected: {
+      assignedToId: "user-aaron",
+      dueDate: "2026-05-15",
+      missing: ["assignee", "positionProfile"],
+      titleIncludes: "earnings reports",
     },
   },
 ];

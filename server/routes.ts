@@ -38,6 +38,7 @@ import {
   DonnitStore,
   type DonnitEmailSuggestion,
   type DonnitPositionProfile,
+  type DonnitWorkspaceMemoryAlias,
   type DonnitTask,
   type DonnitTaskSubtask,
   type DonnitTaskTemplate,
@@ -3168,14 +3169,23 @@ function profileMatchesText(profile: DonnitPositionProfile, message: string) {
 function titleDerivedRoleAliases(title: string) {
   const words = normalizedProfileSearchText(title).split(" ").filter((word) => word.length >= 3);
   const aliases = new Set<string>();
+  const stopWords = new Set(["and", "the", "for", "with", "from", "into", "onto", "role", "position", "specialist", "manager", "coordinator"]);
+  for (const word of words) {
+    if (!stopWords.has(word)) aliases.add(word);
+  }
   for (let size = Math.min(3, words.length); size >= 2; size -= 1) {
     for (let index = 0; index <= words.length - size; index += 1) {
-      aliases.add(words.slice(index, index + size).join(" "));
+      const phrase = words.slice(index, index + size).filter((word) => !["and", "the", "for", "with", "from", "into", "onto"].includes(word)).join(" ");
+      if (phrase.length >= 3) aliases.add(phrase);
     }
   }
   if (words.includes("client") && words.includes("success")) aliases.add("customer success");
   if (words.includes("customer") && words.includes("success")) aliases.add("client success");
   return Array.from(aliases);
+}
+
+function positionProfileTitleTags(title: string) {
+  return Array.from(new Set([title, ...titleDerivedRoleAliases(title)].map((item) => item.trim()).filter((item) => item.length >= 3)));
 }
 
 function roleAliasesForProfile(profile: DonnitPositionProfile) {
@@ -3220,14 +3230,41 @@ function profileTitleTokenScore(profile: DonnitPositionProfile, message: string)
   return 5 + Math.round(ratio * 3);
 }
 
-function rankMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
+function storedAliasScoreForProfile(message: string, profile: DonnitPositionProfile, aliases: DonnitWorkspaceMemoryAlias[] = []) {
+  const normalized = compactNaturalText(message);
+  const tokens = new Set(normalized.split(" ").filter(Boolean));
+  const matchingAliases = aliases.filter(
+    (alias) =>
+      alias.target_type === "position_profile" &&
+      alias.target_id === profile.id &&
+      ["active", "contested"].includes(alias.status),
+  );
+  return Math.max(
+    0,
+    ...matchingAliases.map((alias) => {
+      const aliasText = compactNaturalText(alias.normalized_form || alias.surface_form);
+      const confidence = Math.max(0.1, Math.min(1, Number(alias.confidence_score ?? 0.65)));
+      if (!aliasText) return 0;
+      if (normalized === aliasText) return 10 * confidence;
+      if (normalized.includes(aliasText)) return (aliasText.split(" ").length > 1 ? 8 : 6) * confidence;
+      if (tokens.has(aliasText)) return 5 * confidence;
+      return 0;
+    }),
+  );
+}
+
+function rankMentionedPositionProfileCandidates(
+  message: string,
+  profiles: DonnitPositionProfile[],
+  aliases: DonnitWorkspaceMemoryAlias[] = [],
+) {
   const normalized = compactNaturalText(message);
   return profiles
     .map((profile) => {
-      const aliases = roleAliasesForProfile(profile).map(compactNaturalText).filter(Boolean);
-      const aliasScore = Math.max(
+      const derivedAliases = roleAliasesForProfile(profile).map(compactNaturalText).filter(Boolean);
+      const derivedAliasScore = Math.max(
         0,
-        ...aliases.map((alias) => {
+        ...derivedAliases.map((alias) => {
           if (!alias) return 0;
           if (normalized === alias) return 10;
           if (normalized.includes(alias)) return alias.split(" ").length > 1 ? 8 : 6;
@@ -3235,7 +3272,7 @@ function rankMentionedPositionProfileCandidates(message: string, profiles: Donni
           return tokens.has(alias) ? 5 : 0;
         }),
       );
-      const score = Math.max(aliasScore, profileTitleTokenScore(profile, message));
+      const score = Math.max(derivedAliasScore, storedAliasScoreForProfile(message, profile, aliases), profileTitleTokenScore(profile, message));
       return { profile, score };
     })
     .filter((item) => item.score > 0 || profileMatchesText(item.profile, message))
@@ -3243,8 +3280,12 @@ function rankMentionedPositionProfileCandidates(message: string, profiles: Donni
     .map((item) => ({ candidate: item.profile, score: item.score || 5 }));
 }
 
-function findMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
-  const ranked = rankMentionedPositionProfileCandidates(message, profiles);
+function findMentionedPositionProfileCandidates(
+  message: string,
+  profiles: DonnitPositionProfile[],
+  aliases: DonnitWorkspaceMemoryAlias[] = [],
+) {
+  const ranked = rankMentionedPositionProfileCandidates(message, profiles, aliases);
   return topCandidatesWithinMargin(ranked, 0.25);
 }
 
@@ -3256,6 +3297,7 @@ function resolveChatAssigneeFromWorkspace(input: {
   message: string;
   members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>;
   profiles: DonnitPositionProfile[];
+  aliases?: DonnitWorkspaceMemoryAlias[];
   requesterId: string;
 }) {
   const explicitAssignment = hasExplicitAssignmentIntent(input.message);
@@ -3306,7 +3348,7 @@ function resolveChatAssigneeFromWorkspace(input: {
       };
     }
 
-    const rankedProfiles = rankMentionedPositionProfileCandidates(phrase, input.profiles);
+    const rankedProfiles = rankMentionedPositionProfileCandidates(phrase, input.profiles, input.aliases ?? []);
     const profileConfidence = confidenceFromRankedScores(rankedProfiles, { maxScore: 10, ambiguityMargin: 3 });
     const profileCandidates = profileConfidence >= 0.8 ? [rankedProfiles[0].candidate] : topCandidatesWithinMargin(rankedProfiles, 0.25);
     if (profileCandidates.length > 1) {
@@ -3346,7 +3388,7 @@ function resolveChatAssigneeFromWorkspace(input: {
   const rankedMembers = rankMentionedMembers(input.message, input.members);
   const memberConfidence = confidenceFromRankedScores(rankedMembers, { maxScore: 10, ambiguityMargin: 3 });
   const memberCandidates = memberConfidence >= 0.8 ? [rankedMembers[0].candidate] : topCandidatesWithinMargin(rankedMembers, 1);
-  const rankedProfiles = rankMentionedPositionProfileCandidates(input.message, input.profiles);
+  const rankedProfiles = rankMentionedPositionProfileCandidates(input.message, input.profiles, input.aliases ?? []);
   const profileConfidence = confidenceFromRankedScores(rankedProfiles, { maxScore: 10, ambiguityMargin: 3 });
   const profileCandidates = profileConfidence >= 0.8 ? [rankedProfiles[0].candidate] : topCandidatesWithinMargin(rankedProfiles, 0.25);
   if (memberCandidates.length > 1) {
@@ -3412,11 +3454,12 @@ function resolveChatPositionProfile(input: {
   assignedToId: string;
   message: string;
   visibility: "work" | "personal" | "confidential";
+  aliases?: DonnitWorkspaceMemoryAlias[];
 }) {
   if (input.visibility === "personal") {
     return { positionProfileId: null as string | null, needsChoice: false, candidates: [] as DonnitPositionProfile[] };
   }
-  const explicitProfiles = findMentionedPositionProfileCandidates(input.message, input.profiles);
+  const explicitProfiles = findMentionedPositionProfileCandidates(input.message, input.profiles, input.aliases ?? []);
   if (explicitProfiles.length === 1) {
     return { positionProfileId: explicitProfiles[0].id, needsChoice: false, candidates: explicitProfiles };
   }
@@ -5318,7 +5361,7 @@ function evaluateDeterministicChatTask(input: {
     profiles: input.profiles,
     requesterId: input.requesterId,
   });
-  const mentionedProfiles = findMentionedPositionProfiles(input.message, input.profiles);
+  const mentionedProfiles = findMentionedPositionProfileCandidates(input.message, input.profiles);
   const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
   const assignedToId = workspaceResolution.assignedToId ?? fallback.assignedToId;
   const resolvedTitle = titleFromMessage(input.message, [
@@ -5522,6 +5565,38 @@ async function learnAliasesFromChatResolution(input: {
   } catch (error) {
     console.error("[donnit] workspace alias learning failed", error instanceof Error ? error.message : String(error));
   }
+}
+
+async function syncPositionProfileTitleTags(input: {
+  store: DonnitStore;
+  orgId: string;
+  actorId: string;
+  profile: DonnitPositionProfile;
+}) {
+  const tags = positionProfileTitleTags(input.profile.title);
+  await Promise.all(tags.map(async (tag) => {
+    try {
+      await input.store.reinforceWorkspaceMemoryAlias(input.orgId, {
+        surface_form: tag,
+        normalized_form: workspaceAliasNormalizedForm(tag),
+        target_type: "position_profile",
+        target_id: input.profile.id,
+        scope_type: "workspace",
+        scope_id: null,
+        signalStrength: 0.6,
+        initialConfidence: tag === input.profile.title ? 0.95 : 0.72,
+        source: "system:position_profile_title_tag",
+        metadata: {
+          profileTitle: input.profile.title,
+          ownerId: ownerIdForPositionProfile(input.profile),
+          generatedFrom: "position_profile_title",
+        },
+        created_by: input.actorId,
+      });
+    } catch (error) {
+      console.error("[donnit] position profile tag sync failed", error instanceof Error ? error.message : String(error));
+    }
+  }));
 }
 
 export const __chatParserTest = {
@@ -6822,13 +6897,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const fallbackInput = parseChatTaskAuthenticated(taskMessage, members, auth.userId);
         const explicitAssignment = hasExplicitAssignmentIntent(taskMessage);
         const positionProfilesForRouting = await store.listPositionProfiles(orgId);
+        const workspaceAliases = await store.listWorkspaceMemoryAliases(orgId);
         const workspaceResolution = resolveChatAssigneeFromWorkspace({
           message: taskMessage,
           members,
           profiles: positionProfilesForRouting,
+          aliases: workspaceAliases,
           requesterId: auth.userId,
         });
-        const mentionedProfiles = findMentionedPositionProfiles(taskMessage, positionProfilesForRouting);
+        const mentionedProfiles = findMentionedPositionProfileCandidates(taskMessage, positionProfilesForRouting, workspaceAliases);
         const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
         const aiAssignee = ai && explicitAssignment && !workspaceResolution.missingAssignee
           ? members.find((member) => {
@@ -6920,6 +6997,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           assignedToId: String(taskInput.assignedToId),
           message: taskMessage,
           visibility: taskInput.visibility ?? "work",
+          aliases: workspaceAliases,
         });
         const missing: PendingChatMissingField[] = [];
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
@@ -7944,6 +8022,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         direct_manager_id: managerId,
         risk_summary: "Created by admin. Donnit will enrich this profile from task history.",
       });
+      await syncPositionProfileTitleTags({ store, orgId, actorId: auth.userId, profile: created });
       res.status(201).json(toClientPositionProfile(created));
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -8050,6 +8129,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!updated) {
         res.status(404).json({ message: "Position profile not found." });
         return;
+      }
+      if (parsed.data.title !== undefined || parsed.data.currentOwnerId !== undefined) {
+        await syncPositionProfileTitleTags({ store, orgId, actorId: auth.userId, profile: updated });
       }
       res.json(toClientPositionProfile(updated));
     } catch (error) {
