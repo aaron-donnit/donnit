@@ -702,6 +702,33 @@ function parseDueDate(message: string) {
   return null;
 }
 
+function underspecifiedRelativeDatePhrase(message: string) {
+  const text = normalizeCommonTaskTypos(message).toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  if (
+    /\b(?:eom|eoq|eoy|end of month|end of next month|end of quarter|end of next quarter|end of year|end of next year)\b/.test(text) ||
+    /\b(?:beginning|start|middle|mid|end)\s+of\s+(?:this|next|coming)\s+(?:month|quarter|year)\b/.test(text) ||
+    /\b(?:first|second|third|fourth|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:of\s+)?(?:this|next|coming|every|each)\s+month\b/.test(text)
+  ) {
+    return null;
+  }
+  const match = text.match(/\b(?:(?:sometime|some time|anytime|any time)\s+)?(?:in|during|for|by|before|on)?\s*((?:this|next|coming)\s+(?:month|quarter|year))\b/);
+  if (!match) return null;
+  const phrase = match[1];
+  if (phrase.includes("month")) {
+    return {
+      phrase,
+      field: "due_date_or_range" as const,
+      question: `What exact due date in ${phrase} should I use?`,
+    };
+  }
+  return {
+    phrase,
+    field: "due_date_or_range" as const,
+    question: `What exact due date or range in ${phrase} should I use?`,
+  };
+}
+
 function normalizeTimeOnly(value: string | null | undefined): string | null {
   if (!value) return null;
   const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
@@ -989,6 +1016,10 @@ function normalizeCommonTaskTypos(value: string) {
     .replace(/\bcompet\b/gi, "complete")
     .replace(/\bcompelte\b/gi, "complete")
     .replace(/\bcompelete\b/gi, "complete")
+    .replace(/\bproj(?:e|)kt\b/gi, "project")
+    .replace(/\bprojet\b/gi, "project")
+    .replace(/\bprojct\b/gi, "project")
+    .replace(/\bproeject\b/gi, "project")
     .replace(/\bwok\b/gi, "work")
     .replace(/\bteh\b/gi, "the")
     .replace(/\bfrm\b/gi, "from")
@@ -1084,6 +1115,8 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
     .replace(naturalDate, "")
     .replace(naturalDateDayFirst, "")
     .replace(/\b(?:due|by|before|on)\s+(?:today|tomorrow|next week|this week)\b/gi, "")
+    .replace(/\b(?:due|by|before|on|for|in|during)\s+(?:this|next|coming)\s+(?:month|quarter|year)\b/gi, "")
+    .replace(/\b(?:this|next|coming)\s+(?:month|quarter|year)\b/gi, "")
     .replace(/\b(?:at|@|by|before|around)\s+(?:noon|midnight)\b/gi, "")
     .replace(/\b(?:at|@|by|before|around)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/gi, "")
     .replace(/\b(?:at|@|by|before|around)\s+\d{3,4}\b/gi, "")
@@ -1113,7 +1146,10 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
 }
 
 function normalizeTaskTitleGrammar(title: string) {
-  const cleaned = normalizeCommonTaskTypos(title).replace(/\s+/g, " ").trim();
+  const cleaned = normalizeCommonTaskTypos(title)
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:the|a|an)\s+(?=\S.{2,})/i, "");
   if (/^go\s+through\s+and\s+complete\b/i.test(cleaned)) {
     const normalized = cleaned.replace(/^go\s+through\s+and\s+complete\b/i, "Complete");
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -3414,11 +3450,18 @@ function parseChatTaskAuthenticated(
   };
 }
 
-type PendingChatMissingField = "title" | "assignee" | "dueDate" | "urgency" | "positionProfile" | "timeMeridiem";
+type PendingChatMissingField =
+  | "title"
+  | "assignee"
+  | "dueDate"
+  | "dueDatePrecision"
+  | "urgency"
+  | "positionProfile"
+  | "timeMeridiem";
 
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
-  if (!task.dueDate) missing.add("dueDate");
+  if (!task.dueDate && !missing.has("dueDatePrecision")) missing.add("dueDate");
   return Array.from(missing);
 }
 
@@ -4084,6 +4127,7 @@ function missingChatQuestion(
   const needsTitle = missing.includes("title");
   const ambiguousTime = ambiguousCompactClockTime(task.description || task.title);
   const needsMeetingScope = needsTaskScopeClarification(task.title, task.description || task.title);
+  const vagueDate = underspecifiedRelativeDatePhrase(task.clarificationHint || task.description || task.title);
   if (missing.includes("timeMeridiem")) {
     const timeText = ambiguousTime?.display ?? "that time";
     if (missing.includes("dueDate")) {
@@ -4131,6 +4175,9 @@ function missingChatQuestion(
   }
   if (missing.includes("positionProfile")) {
     return `${intro}${profileQuestion || " Which Position Profile should this belong to?"}`;
+  }
+  if (missing.includes("dueDatePrecision")) {
+    return `${intro} ${vagueDate?.question ?? "What exact due date should I use?"}`;
   }
   if (missing.includes("dueDate") && missing.includes("urgency")) {
     return `${intro} When is this due, and how urgent is it?`;
@@ -4250,6 +4297,7 @@ function buildPendingFromTaskInput(input: {
   visibility: "work" | "personal" | "confidential";
   positionProfileId?: string | null;
   assistantInstruction?: string | null;
+  clarificationHint?: string | null;
 }, missing: PendingChatMissingField[]): PendingChatTask {
   return {
     title: input.title,
@@ -4270,6 +4318,7 @@ function buildPendingFromTaskInput(input: {
     visibility: input.visibility,
     positionProfileId: input.visibility === "personal" ? null : input.positionProfileId ?? null,
     assistantInstruction: input.assistantInstruction ?? null,
+    clarificationHint: input.clarificationHint ?? null,
     missing,
     createdAt: new Date().toISOString(),
   };
@@ -4377,6 +4426,7 @@ function mergePendingChatTask(
     if (item === "title") return isGenericAssignmentTitle(title);
     if (item === "assignee") return !mentionedAssignee;
     if (item === "dueDate") return !dueDate;
+    if (item === "dueDatePrecision") return !parseDueDate(message);
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
     if (item === "timeMeridiem") return !resolvedCompactTime;
@@ -4499,7 +4549,8 @@ const pendingChatTaskSchema = z.object({
   visibility: z.enum(["work", "personal", "confidential"]),
   positionProfileId: z.string().nullable().optional(),
   assistantInstruction: z.string().trim().max(1200).nullable().optional(),
-  missing: z.array(z.enum(["title", "assignee", "dueDate", "urgency", "positionProfile", "timeMeridiem"])).default([]),
+  clarificationHint: z.string().trim().max(1200).nullable().optional(),
+  missing: z.array(z.enum(["title", "assignee", "dueDate", "dueDatePrecision", "urgency", "positionProfile", "timeMeridiem"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -6023,9 +6074,11 @@ function evaluateDeterministicChatTask(input: {
     requesterId: input.requesterId,
   });
   const missing: PendingChatMissingField[] = [];
+  const vagueDate = underspecifiedRelativeDatePhrase(input.message);
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
   if (explicitAssignment && needsTaskScopeClarification(finalTitle, input.message)) missing.push("title");
-  if (explicitAssignment && !fallback.dueDate) missing.push("dueDate");
+  if (explicitAssignment && vagueDate) missing.push("dueDatePrecision");
+  if (explicitAssignment && !fallback.dueDate && !vagueDate) missing.push("dueDate");
   if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1 || profileResolution.needsChoice) {
     missing.push("positionProfile");
   }
@@ -6266,6 +6319,7 @@ export const __chatParserTest = {
   taskContinuitySummary,
   taskMemoryMarkdown,
   taskMemoryTitleKey,
+  underspecifiedRelativeDatePhrase,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
   titleFromMessage,
@@ -7655,12 +7709,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           requesterId: auth.userId,
         });
         const missing: PendingChatMissingField[] = [];
+        const vagueDate = underspecifiedRelativeDatePhrase(taskMessage);
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
         if (explicitAssignment && needsTaskScopeClarification(taskInput.title, taskMessage)) missing.push("title");
         if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
         if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1) missing.push("positionProfile");
-        if (!taskInput.dueDate) missing.push("dueDate");
+        if (vagueDate) missing.push("dueDatePrecision");
+        if (!taskInput.dueDate && !vagueDate) missing.push("dueDate");
         if (ambiguousCompactClockTime(taskMessage)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
@@ -7671,6 +7727,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               assignedById: String(taskInput.assignedById),
               positionProfileId: profileResolution.positionProfileId,
               assistantInstruction: automationInstruction,
+              clarificationHint: taskMessage,
             },
             missing,
           );

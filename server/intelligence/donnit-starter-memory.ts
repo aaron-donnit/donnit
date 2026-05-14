@@ -123,15 +123,29 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
   {
     key: "task_interpretation.typo_tolerance",
     category: "task_interpretation",
-    title: "Correct obvious typos before creating task titles",
-    body: "Users will type quickly and imperfectly. Correct obvious spelling mistakes and shorthand in the task title when the intended word is clear. Do not preserve typos in titles. If a typo creates real ambiguity, ask a clarification instead of guessing.",
+    title: "Normalize language before interpreting the task",
+    body: "Users will type quickly and imperfectly. Preserve the raw text for audit, but correct obvious spelling mistakes and shorthand before intent detection, entity routing, title creation, and due-date decisions. Do not preserve typos in titles when the intended word is clear. If a correction could change the meaning or has multiple plausible candidates, ask one short clarification instead of guessing.",
     examples: [
       "compet -> complete",
       "wok -> work",
+      "projekt -> project",
       "teh -> the",
       "frm -> from",
       "mtg -> meeting",
       "have Nina go through and compet all of our wok from the meeting -> ask which meeting/action items, and use complete/work in the draft title",
+      "assign Nina the Manhattan projekt for next month -> treat projekt as project, then ask for the exact due date in next month",
+    ],
+  },
+  {
+    key: "task_interpretation.clarification_gate",
+    category: "task_interpretation",
+    title: "Ask for the smallest missing piece before creating risky tasks",
+    body: "Create a task only when required fields are clear enough for action. Assignments need an assignee and work item. Deadline-driven tasks need a due date or precise date range. Relative windows like next month, this quarter, or coming year are not exact deadlines unless a workspace policy defines them. Ask one focused question for the missing or ambiguous field, then resume the pending task from memory.",
+    examples: [
+      "next month -> ask which exact due date in next month",
+      "which Nina? -> ask when more than one active Nina matches",
+      "Manhattan project/projekt with one clear correction -> normalize and continue",
+      "Manhattan project could be two projects -> ask which project",
     ],
   },
   {

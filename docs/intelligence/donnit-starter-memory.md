@@ -60,6 +60,7 @@ The backend seed in `server/intelligence/donnit-starter-memory.ts` covers:
 - `task_interpretation.clean_action`
 - `task_interpretation.business_language`
 - `task_interpretation.typo_tolerance`
+- `task_interpretation.clarification_gate`
 - `language.global_phrase_patterns`
 - `task_interpretation.no_task_cases`
 - `roles.business_title_interpretation`
@@ -122,6 +123,12 @@ Example:
 - Input: "assign the assistant with preparing the board packet by eod friday"
 - Good behavior: resolve "assistant" from workspace alias memory, resolve "board packet" from procedural/profile memory, clean the title to "Prepare the board packet", set the due date to Friday at end of day, then create the task or disclose any inferred fields.
 - Bad behavior: assign the task to the sender, copy the full sentence as the title, or invent a person/profile not present in workspace memory.
+
+Second example:
+
+- Input: "assign Nina the Manhattan projekt for next month"
+- Good behavior: normalize "projekt" to "project", resolve Nina only if there is one clear active Nina, remove the vague date phrase from the title, and ask "What exact due date in next month should I use?"
+- Bad behavior: copy the typo into the task, invent a date, or create the task without clarifying the deadline.
 
 ## What Comes Next
 

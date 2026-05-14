@@ -235,6 +235,16 @@ const evalCases: Array<{
     },
   },
   {
+    name: "normalizes project typo and asks for precise next-month due date",
+    message: "assign nina the manhattan projekt for next month",
+    expected: {
+      assignedToId: "user-nina",
+      title: "Manhattan project",
+      missing: ["dueDatePrecision"],
+      titleExcludes: ["projekt"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {

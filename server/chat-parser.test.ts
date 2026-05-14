@@ -90,6 +90,18 @@ describe("chat task parser", () => {
     expect(__chatParserTest.titleFromMessage(prompt)).toBe("Complete all of our work from the meeting");
   });
 
+  it("normalizes project typos but treats next month as an underspecified deadline", () => {
+    const prompt = "assign nina the manhattan projekt for next month";
+
+    expect(__chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina", "nina@example.com"])).toBe(
+      "Manhattan project",
+    );
+    expect(__chatParserTest.underspecifiedRelativeDatePhrase(prompt)).toMatchObject({
+      phrase: "next month",
+      question: "What exact due date in next month should I use?",
+    });
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",
