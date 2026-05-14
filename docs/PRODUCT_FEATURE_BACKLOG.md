@@ -23,7 +23,7 @@ Roadmap: See `docs/AGENTIC_AI_ASSISTANT_ROADMAP.md`.
 
 Core workflow:
 
-1. User assigns a task to Donnit AI from chat, a task detail view, or a future assistant command surface.
+1. User assigns a task to Donnit AI from chat with `/donnit`, a task detail view, or a future assistant command surface.
 2. Donnit AI clarifies missing requirements before starting if the task is ambiguous, risky, or requires credentials/tool access.
 3. Donnit AI creates an execution plan and asks for confirmation before any write/send action.
 4. Donnit AI performs approved read actions autonomously, such as reviewing task history, searching role memory, checking email context, checking calendar availability, summarizing attachments, or drafting a response.
@@ -33,14 +33,17 @@ Core workflow:
 
 MVP scope:
 
-- Start with one bounded assistant skill: "Research and draft a task update." Backend foundation is implemented behind `POST /api/tasks/:id/assistant-runs`; UI entry point is still pending.
+- Start with one bounded assistant skill: "Research and draft a task update." Backend foundation is implemented behind `POST /api/tasks/:id/assistant-runs`; `/donnit` command routing and task UI entry point are still pending.
 - The assistant may read the task, subtasks, notes, completion history, Position Profile memory, relevant email suggestion text, and existing attachments if available.
 - The assistant may produce a draft response, task summary, checklist, or recommended subtasks.
 - The assistant may not send external messages or mutate workspace state without confirmation.
+- The first `/donnit` experience should create or locate a task, attempt to match it to an approved learned workflow, and either queue a Donnit AI run or ask the user to teach/clarify the workflow.
 
 Future scope:
 
 - Tool execution through approved providers such as Gmail, Google Calendar, Slack, and Composio.
+- Voice-to-task through Wispr/Whisper Flow or native mobile dictation, routed into the same chat command parser.
+- Learned workflow recognition, potentially powered by Hermes skill/procedural memory behind Donnit's own permission layer.
 - Assistant-owned task status: assigned to Donnit, in progress, blocked, needs approval, completed.
 - Background runs with notifications when the assistant finishes.
 - Workspace-level assistant memory scoped by organization and Position Profile.

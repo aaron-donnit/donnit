@@ -21,6 +21,16 @@ The assistant's value is highest when it can:
 
 Users should be able to assign simple, bounded work to **Donnit AI** from a task. Donnit AI should learn from prior task completions and Position Profile memory, perform safe internal work, ask for approval before any write or external send, then notify the user when the result is ready.
 
+Users should also be able to start this flow directly from chat with a command:
+
+```text
+/donnit complete the weekly vendor reconciliation
+/donnit send the standard onboarding follow-up to the new hire
+/donnit draft the board meeting scheduling reply
+```
+
+The command means: "Create or locate the task, match it to a learned workflow if possible, and assign the execution attempt to Donnit AI." It should not mean "blindly do whatever was typed." Donnit must still check whether the workflow exists, whether required tools are connected, whether external writes are allowed, and whether the action needs approval.
+
 The first useful workflow:
 
 1. User opens a task and selects `Assign to Donnit AI`.
@@ -45,6 +55,10 @@ Internal Donnit tools:
 - `complete_task(task_id, note)` - permission-gated write.
 - `create_notification(user_id, payload)` - system write after assistant state changes.
 - `create_profile_memory_candidate(profile_id, candidate)` - permission-gated or admin-review write.
+- `find_learned_workflow(org_id, profile_id, task_text)` - match a task against approved repeatable workflows.
+- `get_workflow(workflow_id)` - read workflow steps, required tools, required approvals, examples, and last successful run.
+- `create_workflow_candidate(profile_id, task_id, evidence)` - propose a learned workflow from repeated task completion patterns.
+- `start_ai_task_run(task_id, workflow_id, instruction)` - create the durable assistant run.
 
 External tools, later:
 
@@ -52,6 +66,7 @@ External tools, later:
 - Slack via Slack bot/Composio: draft/send message, with send always approval-gated.
 - Calendar via Google Calendar: propose/schedule blocks, with calendar write approval-gated.
 - Browser/research tooling: future only, disabled for first customer unless explicitly approved.
+- Voice input through Wispr/Whisper Flow or a similar dictation layer: convert speech to text, then feed the resulting text into the same `/donnit` or normal task command router. Voice should not bypass Donnit's confirmation gates.
 
 ### Database Creation
 
@@ -62,6 +77,10 @@ Add Supabase tables:
 - `donnit.ai_task_run_events`: step-by-step audit trail, including plan, tool call, observation, approval request, result, error.
 - `donnit.ai_task_run_approvals`: pending/approved/denied write approvals.
 - `donnit.ai_learnings`: reusable lessons learned from completed tasks, scoped to workspace and optionally Position Profile.
+- `donnit.ai_workflows`: approved repeatable workflows Donnit can run again.
+- `donnit.ai_workflow_steps`: ordered workflow steps with required tool, input schema, approval policy, and expected output.
+- `donnit.ai_workflow_examples`: examples of user phrasing, completed task evidence, and successful outputs used for matching.
+- `donnit.ai_workflow_runs`: workflow-specific run state linked to assistant runs.
 
 Statuses:
 
@@ -81,37 +100,75 @@ Statuses:
    - Seed one virtual user/assistant per workspace: `Donnit AI`.
    - Add server types and store methods for runs/events/approvals.
 
-2. **Task UI**
+2. **Command Router**
+   - Add `/donnit` command detection in chat.
+   - Strip the command prefix before task extraction.
+   - Route normal chat to task creation; route `/donnit` to task creation plus AI workflow matching.
+   - If no matching learned workflow exists, ask whether the user wants to create/teach one.
+   - If matching is low confidence, ask a clarifying question before creating the run.
+
+3. **Task UI**
    - Add `Assign to Donnit AI` inside the task `...` menu.
    - Add an assistant status row in the task detail window.
    - Add notification on run completion, blocked state, or approval request.
 
-3. **Read-Only Agent Run**
+4. **Read-Only Agent Run**
    - First skill: `task_execution_planner`.
    - Inputs: task context, subtasks, events, Position Profile memory.
    - Output: `can_execute`, `questions`, `plan`, `draft_result`, `recommended_writes`, `learning_candidate`.
    - No task mutation yet.
 
-4. **Permission-Gated Writes**
+5. **Permission-Gated Writes**
    - Convert recommended writes into confirmation cards.
    - On approval, let Donnit add note/subtasks/complete task.
    - Log every approved/denied action.
 
-5. **Learning Loop**
+6. **Learning Loop**
    - When tasks are completed, detect simple repeatable patterns.
    - Save learning candidates tied to the Position Profile.
    - Show accepted learning under profile `Instructions` and `Recurring Work`.
+   - Promote a learning candidate into an approved workflow only after enough evidence or explicit user/admin teaching.
 
-6. **External Tool Pilot**
+7. **External Tool Pilot**
    - Start with Gmail draft only.
    - Next Slack draft.
    - Then Calendar scheduling.
    - Keep all sends/writes approval-gated.
 
-7. **Provider Expansion**
+8. **Voice Input**
+   - Treat voice as an input method, not a separate intelligence layer.
+   - Let users dictate normal tasks or `/donnit` commands through Wispr/Whisper Flow or similar.
+   - Later, add native voice capture if the mobile app requires it.
+
+9. **Provider Expansion**
    - Keep OpenAI as first production provider.
    - Add Hermes behind `AgentProvider` only after the Donnit-owned permission, logging, and memory model is stable.
    - Hermes may propose actions; Donnit remains the authority that executes or rejects them.
+
+### Repeat Recognition and Hermes
+
+The repeat-recognition problem is not just "does this task recur weekly?" It is: "Have we learned enough about how this role completes this type of work to safely ask Donnit AI to repeat it?"
+
+Recommended approach:
+
+1. Donnit-owned deterministic layer first:
+   - extract task title, source, profile, recurrence, subtasks, notes, completion artifacts, and tool usage;
+   - cluster similar tasks within the same Position Profile;
+   - require repeated evidence before suggesting a workflow;
+   - store learned workflows in Supabase with explicit approval state.
+
+2. LLM semantic matching second:
+   - use embeddings/semantic search to match new instructions to approved workflows;
+   - use OpenAI reasoning to decide whether the new task is close enough to reuse the workflow;
+   - ask a clarification question when confidence is low.
+
+3. Hermes as optional workflow/skill engine:
+   - use Hermes for procedural skill generation and self-improvement experiments;
+   - isolate Hermes by workspace/profile;
+   - never let Hermes execute production writes directly;
+   - Hermes should return proposed workflow steps/tool calls to Donnit, and Donnit should enforce permissions.
+
+Hermes is promising because its skill system maps well to repeatable procedural work, but the production source of truth must remain Donnit's workflow tables and audit logs.
 
 ### MVP Boundary
 
@@ -123,6 +180,15 @@ For first customer readiness, Donnit AI should not autonomously send external me
 - request approval for any task mutation,
 - notify user when complete,
 - preserve the learning in the task/profile record.
+
+The next build slice should be:
+
+1. `/donnit` command routing in chat.
+2. Learned workflow table/schema.
+3. Read-only matching of `/donnit` task text to learned workflows.
+4. If matched, create an assistant run in `queued/running`.
+5. When finished, create a bell notification and task event.
+6. Keep all external sends and task completion writes approval-gated until the workflow proves reliable.
 
 ## Hermes Assessment
 
