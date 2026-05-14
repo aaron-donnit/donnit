@@ -255,6 +255,17 @@ const evalCases: Array<{
     },
   },
   {
+    name: "repairs operational typos before title and date extraction",
+    message: "assign Jordan to revieew the reprot by frday",
+    expected: {
+      assignedToId: "user-jordan",
+      title: "Review the report",
+      dueDate: "2026-05-15",
+      missing: [],
+      titleExcludes: ["revieew", "reprot", "frday"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {

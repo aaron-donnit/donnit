@@ -112,6 +112,18 @@ describe("chat task parser", () => {
     });
   });
 
+  it("repairs close operational typos without changing valid words or names", () => {
+    vi.setSystemTime(new Date("2026-05-14T10:00:00-04:00"));
+    const prompt = "assign Jordan to revieew the reprot by frday";
+
+    expect(__chatParserTest.normalizeCommonTaskTypos(prompt)).toBe("assign Jordan to review the report by friday");
+    expect(__chatParserTest.titleFromMessage(prompt, ["Jordan Lee", "Jordan", "jordan@example.com"])).toBe(
+      "Review the report",
+    );
+    expect(__chatParserTest.parseDueDate(prompt)).toBe("2026-05-15");
+    expect(__chatParserTest.normalizeCommonTaskTypos("complete all of our wok")).toBe("complete all of our work");
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",

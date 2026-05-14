@@ -136,6 +136,12 @@ Third example:
 - Good behavior: normalize "nect month" to "next month", resolve Jordan only if there is one clear active Jordan, recognize that "this" is not a real work item, and ask what Jordan should do before asking for the exact due date.
 - Bad behavior: create a task titled "Jordan nect month" or ask the user to restate the whole request.
 
+Fourth example:
+
+- Input: "assign Jordan to revieew the reprot by frday"
+- Good behavior: normalize one-edit and transposed operational words to "review the report by Friday", then create the task if Jordan is unambiguous.
+- Bad behavior: preserve obvious typos in the task title or miss the Friday deadline.
+
 ## What Comes Next
 
 Current starter memory is static backend memory. The next product step is a workspace AI memory and task-resolution layer with:

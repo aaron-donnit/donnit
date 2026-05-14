@@ -666,7 +666,7 @@ function parseNaturalDate(text: string) {
 }
 
 function parseDueDate(message: string) {
-  const text = message.toLowerCase();
+  const text = normalizeCommonTaskTypos(message).toLowerCase();
   const isoMatch = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
   if (isoMatch) return isoMatch[1];
   const slashMatch = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
@@ -1011,36 +1011,61 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
   return cleaned;
 }
 
-const safeContextCorrectionVocabulary = [
+const operationalCorrectionVocabulary = [
   "accept",
   "accepted",
   "agenda",
+  "analyze",
   "annual",
+  "appointment",
   "assign",
   "assigned",
+  "attachment",
+  "board",
   "before",
   "call",
+  "calendar",
+  "client",
+  "close",
+  "contract",
   "complete",
+  "completed",
+  "coordinate",
   "confidential",
+  "confirm",
   "critical",
+  "customer",
   "daily",
   "delegate",
+  "document",
   "draft",
   "email",
+  "expense",
   "finish",
+  "financial",
+  "finance",
   "friday",
+  "follow",
   "high",
+  "invoice",
+  "meeting",
   "monday",
   "month",
   "monthly",
   "next",
   "normal",
+  "packet",
+  "payroll",
   "personal",
   "prepare",
   "priority",
+  "project",
   "quarter",
   "quarterly",
   "recurring",
+  "renewal",
+  "report",
+  "reports",
   "review",
   "schedule",
   "send",
@@ -1053,14 +1078,16 @@ const safeContextCorrectionVocabulary = [
   "tuesday",
   "update",
   "urgent",
+  "vendor",
   "wednesday",
   "week",
   "weekly",
+  "work",
   "year",
   "yearly",
 ] as const;
 
-const safeContextCorrectionSet = new Set<string>(safeContextCorrectionVocabulary);
+const operationalCorrectionSet = new Set<string>(operationalCorrectionVocabulary);
 const neverAutoCorrectWords = new Set([
   "all",
   "and",
@@ -1088,10 +1115,44 @@ const neverAutoCorrectWords = new Set([
   "with",
   "you",
 ]);
+const protectedBusinessTokens = new Set([
+  "api",
+  "arr",
+  "ats",
+  "crm",
+  "eod",
+  "eom",
+  "eoq",
+  "eow",
+  "eoy",
+  "hr",
+  "kpi",
+  "mrr",
+  "nda",
+  "ooo",
+  "pto",
+  "qbr",
+  "rif",
+  "sla",
+  "sow",
+]);
 
 function oneEditAway(a: string, b: string) {
   if (a === b) return false;
   if (Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    for (let index = 0; index < a.length - 1; index += 1) {
+      if (
+        a[index] !== b[index] &&
+        a[index] === b[index + 1] &&
+        a[index + 1] === b[index] &&
+        a.slice(0, index) === b.slice(0, index) &&
+        a.slice(index + 2) === b.slice(index + 2)
+      ) {
+        return true;
+      }
+    }
+  }
   let i = 0;
   let j = 0;
   let edits = 0;
@@ -1113,6 +1174,31 @@ function oneEditAway(a: string, b: string) {
   return edits + (a.length - i) + (b.length - j) === 1;
 }
 
+function levenshteinDistance(a: string, b: string) {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let upperLeft = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const upper = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        upperLeft + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      upperLeft = upper;
+    }
+  }
+  return previous[b.length];
+}
+
+function spellingSimilarity(a: string, b: string) {
+  if (!a && !b) return 1;
+  const maxLength = Math.max(a.length, b.length);
+  if (maxLength === 0) return 1;
+  return 1 - levenshteinDistance(a, b) / maxLength;
+}
+
 function preserveTokenCase(original: string, normalized: string) {
   if (original.toUpperCase() === original) return normalized.toUpperCase();
   if (original.charAt(0).toUpperCase() === original.charAt(0)) {
@@ -1121,14 +1207,45 @@ function preserveTokenCase(original: string, normalized: string) {
   return normalized;
 }
 
+function correctionCandidatesForToken(token: string) {
+  const lower = token.toLowerCase();
+  if (
+    neverAutoCorrectWords.has(lower) ||
+    protectedBusinessTokens.has(lower) ||
+    operationalCorrectionSet.has(lower) ||
+    (lower.endsWith("s") && operationalCorrectionSet.has(lower.slice(0, -1))) ||
+    /\d/.test(lower) ||
+    lower.length < 3
+  ) {
+    return [];
+  }
+  return operationalCorrectionVocabulary.filter((candidate) => {
+    if (Math.abs(lower.length - candidate.length) > 2) return false;
+    return oneEditAway(lower, candidate) || spellingSimilarity(lower, candidate) >= 0.95;
+  });
+}
+
 function normalizeLikelyContextTypos(value: string) {
   return value.replace(/\b[a-z]{3,16}\b/gi, (token) => {
     const lower = token.toLowerCase();
-    if (neverAutoCorrectWords.has(lower)) return token;
-    if (safeContextCorrectionSet.has(lower)) return token;
-    const matches = safeContextCorrectionVocabulary.filter((candidate) => oneEditAway(lower, candidate));
+    const matches = correctionCandidatesForToken(lower);
     return matches.length === 1 ? preserveTokenCase(token, matches[0]) : token;
   });
+}
+
+function languageClarificationFromMessage(message: string) {
+  const tokens = Array.from(message.matchAll(/\b[a-z]{3,16}\b/gi)).map((match) => match[0]);
+  for (const token of tokens) {
+    const matches = correctionCandidatesForToken(token.toLowerCase());
+    if (matches.length > 1) {
+      return {
+        token,
+        candidates: matches.slice(0, 4),
+        question: `I may be reading a typo: did you mean ${matches.slice(0, 4).join(" or ")} for "${token}"?`,
+      };
+    }
+  }
+  return null;
 }
 
 function normalizeCommonTaskTypos(value: string) {
@@ -1256,11 +1373,11 @@ function titleFromMessage(message: string, assigneeLabels: string[] = [], roleLa
     .slice(0, 150);
   const withoutAssignee = stripLeadingUnknownAssignee(stripRoleAssignmentPhrases(stripAssigneePhrases(cleaned, assigneeLabels), roleLabels))
     .replace(/\s+/g, " ")
-    .replace(/^(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
+    .replace(/^\s*(?:please\s+)?(?:assign|delegate|reassign)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?/i, "")
     .replace(/^(?:the\s+)?(?:assistant|executive assistant|admin assistant|office assistant)\s+(?:with|to|for)\s+/i, "")
     .replace(/^(?:the\s+)?(?:ea)\s+(?:with|to|for)\s+/i, "")
     .replace(/\b(?:,?\s*this\s+is\s+not|,?\s*not)\s*$/i, "")
-    .replace(/^to\s+/i, "")
+    .replace(/^\s*to\s+/i, "")
     .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
     .trim();
   return withoutAssignee ? normalizeTaskTitleGrammar(withoutAssignee) : withoutAssignee;
@@ -3578,7 +3695,8 @@ type PendingChatMissingField =
   | "dueDatePrecision"
   | "urgency"
   | "positionProfile"
-  | "timeMeridiem";
+  | "timeMeridiem"
+  | "language";
 
 function pendingChatMissing(task: Pick<PendingChatTask, "dueDate" | "missing">) {
   const missing = new Set(task.missing);
@@ -3810,7 +3928,7 @@ function shouldLearnAliasPhrase(phrase: string, targetCanonical: string) {
 }
 
 function extractAssignmentTargetPhrases(message: string) {
-  const normalized = message.replace(/\s+/g, " ").trim();
+  const normalized = normalizeCommonTaskTypos(message).replace(/\s+/g, " ").trim();
   const phrases: string[] = [];
   const clean = (value: string) =>
     value
@@ -4249,6 +4367,10 @@ function missingChatQuestion(
   const ambiguousTime = ambiguousCompactClockTime(task.description || task.title);
   const needsMeetingScope = needsTaskScopeClarification(task.title, task.description || task.title);
   const vagueDate = underspecifiedRelativeDatePhrase(task.clarificationHint || task.description || task.title);
+  const languageClarification = languageClarificationFromMessage(task.clarificationHint || task.description || task.title);
+  if (missing.includes("language") && languageClarification) {
+    return `${intro} ${languageClarification.question}`;
+  }
   if (missing.includes("timeMeridiem")) {
     const timeText = ambiguousTime?.display ?? "that time";
     if (missing.includes("dueDate")) {
@@ -4548,6 +4670,7 @@ function mergePendingChatTask(
     if (item === "assignee") return !mentionedAssignee;
     if (item === "dueDate") return !dueDate;
     if (item === "dueDatePrecision") return !parseDueDate(message);
+    if (item === "language") return Boolean(languageClarificationFromMessage(message));
     if (item === "urgency") return explicitUrgency === null && !(dueDate && isPastDue(dueDate));
     if (item === "positionProfile") return !positionProfileId;
     if (item === "timeMeridiem") return !resolvedCompactTime;
@@ -4671,7 +4794,7 @@ const pendingChatTaskSchema = z.object({
   positionProfileId: z.string().nullable().optional(),
   assistantInstruction: z.string().trim().max(1200).nullable().optional(),
   clarificationHint: z.string().trim().max(1200).nullable().optional(),
-  missing: z.array(z.enum(["title", "assignee", "dueDate", "dueDatePrecision", "urgency", "positionProfile", "timeMeridiem"])).default([]),
+  missing: z.array(z.enum(["title", "assignee", "dueDate", "dueDatePrecision", "urgency", "positionProfile", "timeMeridiem", "language"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
 
@@ -6196,6 +6319,7 @@ function evaluateDeterministicChatTask(input: {
   });
   const missing: PendingChatMissingField[] = [];
   const vagueDate = underspecifiedRelativeDatePhrase(input.message);
+  if (languageClarificationFromMessage(input.message)) missing.push("language");
   if (explicitAssignment && isGenericAssignmentTitle(finalTitle)) missing.push("title");
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
   if (explicitAssignment && needsTaskScopeClarification(finalTitle, input.message)) missing.push("title");
@@ -6442,6 +6566,8 @@ export const __chatParserTest = {
   taskMemoryMarkdown,
   taskMemoryTitleKey,
   underspecifiedRelativeDatePhrase,
+  languageClarificationFromMessage,
+  normalizeCommonTaskTypos,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
   titleFromMessage,
@@ -7832,6 +7958,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         const missing: PendingChatMissingField[] = [];
         const vagueDate = underspecifiedRelativeDatePhrase(taskMessage);
+        if (languageClarificationFromMessage(taskMessage)) missing.push("language");
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
         if (explicitAssignment && needsTaskScopeClarification(taskInput.title, taskMessage)) missing.push("title");
