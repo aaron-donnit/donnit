@@ -21,12 +21,6 @@ type CorrectionCandidate = {
 };
 
 const requireFromAppRoot = createRequire(join(process.cwd(), "package.json"));
-const dictionaryPath = dirname(requireFromAppRoot.resolve("dictionary-en-us/package.json"));
-const spell = nspell({
-  aff: readFileSync(join(dictionaryPath, "index.aff")),
-  dic: readFileSync(join(dictionaryPath, "index.dic")),
-}) as Spellchecker;
-
 const defaultProtectedTerms = new Set([
   "api",
   "arr",
@@ -51,9 +45,39 @@ const defaultProtectedTerms = new Set([
   "sow",
 ]);
 
-for (const term of Array.from(defaultProtectedTerms)) {
-  spell.add(term);
-  spell.add(term.toUpperCase());
+const fallbackCorrections = new Map<string, string>([
+  ["assistnt", "assistant"],
+  ["assisnt", "assistant"],
+  ["clent", "client"],
+  ["drafft", "draft"],
+  ["poposal", "proposal"],
+  ["projekt", "project"],
+  ["reprot", "report"],
+  ["revieew", "review"],
+  ["tomorow", "tomorrow"],
+]);
+
+let spell: Spellchecker | null | undefined;
+
+function getSpellchecker() {
+  if (spell !== undefined) return spell;
+  try {
+    const dictionaryPath = dirname(requireFromAppRoot.resolve("dictionary-en-us/package.json"));
+    spell = nspell({
+      aff: readFileSync(join(dictionaryPath, "index.aff")),
+      dic: readFileSync(join(dictionaryPath, "index.dic")),
+    }) as Spellchecker;
+    for (const term of Array.from(defaultProtectedTerms)) {
+      spell.add(term);
+      spell.add(term.toUpperCase());
+    }
+  } catch (error) {
+    spell = null;
+    console.warn("[donnit] English spellchecker unavailable; using compact fallback corrections", {
+      message: error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160),
+    });
+  }
+  return spell;
 }
 
 function normalizeTerm(value: string) {
@@ -109,17 +133,30 @@ function isLikelyProtectedProperNoun(token: string, offset: number, source: stri
 
 function correctionCandidates(token: string, options: SpellingNormalizationOptions = {}): CorrectionCandidate[] {
   const normalized = token.toLowerCase();
+  const fallback = fallbackCorrections.get(normalized);
+  if (fallback && !protectedTermSet(options).has(normalized)) {
+    return [
+      {
+        original: token,
+        suggestion: fallback,
+        distance: levenshteinDistance(normalized, fallback),
+        similarity: spellingSimilarity(normalized, fallback),
+      },
+    ];
+  }
+  const checker = getSpellchecker();
   if (
     normalized.length < 3 ||
     /\d/.test(normalized) ||
     protectedTermSet(options).has(normalized) ||
-    spell.correct(token) ||
-    spell.correct(normalized)
+    !checker ||
+    checker.correct(token) ||
+    checker.correct(normalized)
   ) {
     return [];
   }
 
-  const suggestions = spell.suggest(normalized).slice(0, 8);
+  const suggestions = checker.suggest(normalized).slice(0, 8);
   if (suggestions.some((suggestion) => suggestion.toLowerCase() === normalized)) {
     return [];
   }
