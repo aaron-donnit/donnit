@@ -1011,8 +1011,128 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
   return cleaned;
 }
 
+const safeContextCorrectionVocabulary = [
+  "accept",
+  "accepted",
+  "agenda",
+  "annual",
+  "assign",
+  "assigned",
+  "before",
+  "call",
+  "complete",
+  "confidential",
+  "critical",
+  "daily",
+  "delegate",
+  "draft",
+  "email",
+  "finish",
+  "friday",
+  "high",
+  "monday",
+  "month",
+  "monthly",
+  "next",
+  "normal",
+  "personal",
+  "prepare",
+  "priority",
+  "quarter",
+  "quarterly",
+  "recurring",
+  "review",
+  "schedule",
+  "send",
+  "sensitive",
+  "sunday",
+  "saturday",
+  "thursday",
+  "today",
+  "tomorrow",
+  "tuesday",
+  "update",
+  "urgent",
+  "wednesday",
+  "week",
+  "weekly",
+  "year",
+  "yearly",
+] as const;
+
+const safeContextCorrectionSet = new Set<string>(safeContextCorrectionVocabulary);
+const neverAutoCorrectWords = new Set([
+  "all",
+  "and",
+  "any",
+  "are",
+  "but",
+  "can",
+  "for",
+  "from",
+  "has",
+  "have",
+  "her",
+  "him",
+  "his",
+  "its",
+  "our",
+  "she",
+  "the",
+  "them",
+  "they",
+  "this",
+  "to",
+  "was",
+  "who",
+  "with",
+  "you",
+]);
+
+function oneEditAway(a: string, b: string) {
+  if (a === b) return false;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else {
+      i += 1;
+      j += 1;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) === 1;
+}
+
+function preserveTokenCase(original: string, normalized: string) {
+  if (original.toUpperCase() === original) return normalized.toUpperCase();
+  if (original.charAt(0).toUpperCase() === original.charAt(0)) {
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+  return normalized;
+}
+
+function normalizeLikelyContextTypos(value: string) {
+  return value.replace(/\b[a-z]{3,16}\b/gi, (token) => {
+    const lower = token.toLowerCase();
+    if (neverAutoCorrectWords.has(lower)) return token;
+    if (safeContextCorrectionSet.has(lower)) return token;
+    const matches = safeContextCorrectionVocabulary.filter((candidate) => oneEditAway(lower, candidate));
+    return matches.length === 1 ? preserveTokenCase(token, matches[0]) : token;
+  });
+}
+
 function normalizeCommonTaskTypos(value: string) {
-  return value
+  const normalized = value
     .replace(/\bcompet\b/gi, "complete")
     .replace(/\bcompelte\b/gi, "complete")
     .replace(/\bcompelete\b/gi, "complete")
@@ -1027,6 +1147,7 @@ function normalizeCommonTaskTypos(value: string) {
     .replace(/\breouccring\b/gi, "recurring")
     .replace(/\breoccuring\b/gi, "recurring")
     .replace(/\breoccur\b/gi, "recur");
+  return normalizeLikelyContextTypos(normalized);
 }
 
 function stripRoleAssignmentPhrases(message: string, roleLabels: string[]) {
@@ -6075,6 +6196,7 @@ function evaluateDeterministicChatTask(input: {
   });
   const missing: PendingChatMissingField[] = [];
   const vagueDate = underspecifiedRelativeDatePhrase(input.message);
+  if (explicitAssignment && isGenericAssignmentTitle(finalTitle)) missing.push("title");
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
   if (explicitAssignment && needsTaskScopeClarification(finalTitle, input.message)) missing.push("title");
   if (explicitAssignment && vagueDate) missing.push("dueDatePrecision");

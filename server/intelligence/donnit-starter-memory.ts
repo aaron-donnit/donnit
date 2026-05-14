@@ -124,11 +124,12 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     key: "task_interpretation.typo_tolerance",
     category: "task_interpretation",
     title: "Normalize language before interpreting the task",
-    body: "Users will type quickly and imperfectly. Preserve the raw text for audit, but correct obvious spelling mistakes and shorthand before intent detection, entity routing, title creation, and due-date decisions. Do not preserve typos in titles when the intended word is clear. If a correction could change the meaning or has multiple plausible candidates, ask one short clarification instead of guessing.",
+    body: "Users will type quickly and imperfectly. Preserve the raw text for audit, but correct obvious spelling mistakes and shorthand before intent detection, entity routing, title creation, and due-date decisions. Safe one-edit corrections are allowed for scheduling words and common task verbs, such as nect -> next when followed by month. Do not preserve typos in titles when the intended word is clear. If a correction could change the meaning or has multiple plausible candidates, ask one short clarification instead of guessing.",
     examples: [
       "compet -> complete",
       "wok -> work",
       "projekt -> project",
+      "nect month -> next month",
       "teh -> the",
       "frm -> from",
       "mtg -> meeting",

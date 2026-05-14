@@ -102,6 +102,16 @@ describe("chat task parser", () => {
     });
   });
 
+  it("repairs one-edit date typos before deciding whether to ask", () => {
+    const prompt = "assign this to Jordan nect month";
+
+    expect(__chatParserTest.titleFromMessage(prompt, ["Jordan Lee", "Jordan", "jordan@example.com"])).toBe("");
+    expect(__chatParserTest.underspecifiedRelativeDatePhrase(prompt)).toMatchObject({
+      phrase: "next month",
+      question: "What exact due date in next month should I use?",
+    });
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",

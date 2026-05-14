@@ -130,6 +130,12 @@ Second example:
 - Good behavior: normalize "projekt" to "project", resolve Nina only if there is one clear active Nina, remove the vague date phrase from the title, and ask "What exact due date in next month should I use?"
 - Bad behavior: copy the typo into the task, invent a date, or create the task without clarifying the deadline.
 
+Third example:
+
+- Input: "assign this to Jordan nect month"
+- Good behavior: normalize "nect month" to "next month", resolve Jordan only if there is one clear active Jordan, recognize that "this" is not a real work item, and ask what Jordan should do before asking for the exact due date.
+- Bad behavior: create a task titled "Jordan nect month" or ask the user to restate the whole request.
+
 ## What Comes Next
 
 Current starter memory is static backend memory. The next product step is a workspace AI memory and task-resolution layer with:

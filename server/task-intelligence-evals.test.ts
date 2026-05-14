@@ -245,6 +245,16 @@ const evalCases: Array<{
     },
   },
   {
+    name: "repairs date typo and asks for missing work item before guessing",
+    message: "assign this to Jordan nect month",
+    expected: {
+      assignedToId: "user-jordan",
+      title: "Untitled task",
+      missing: ["title", "dueDatePrecision"],
+      titleExcludes: ["nect"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {
