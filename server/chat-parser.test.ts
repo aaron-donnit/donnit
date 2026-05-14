@@ -217,4 +217,11 @@ describe("chat task parser", () => {
       ),
     ).toBe("Prepare the board packet");
   });
+
+  it("normalizes and filters learnable alias phrases", () => {
+    expect(__chatParserTest.workspaceAliasNormalizedForm("  My EA! ")).toBe("my ea");
+    expect(__chatParserTest.shouldLearnAliasPhrase("my EA", "Jordan Lee")).toBe(true);
+    expect(__chatParserTest.shouldLearnAliasPhrase("Jordan Lee", "Jordan Lee")).toBe(false);
+    expect(__chatParserTest.shouldLearnAliasPhrase("it", "Board Packet")).toBe(false);
+  });
 });

@@ -3078,6 +3078,21 @@ function compactNaturalText(value: string) {
     .trim();
 }
 
+function workspaceAliasNormalizedForm(value: string) {
+  return compactNaturalText(value);
+}
+
+function shouldLearnAliasPhrase(phrase: string, targetCanonical: string) {
+  const normalized = workspaceAliasNormalizedForm(phrase);
+  if (normalized.length < 3 || normalized.length > 80) return false;
+  if (/^(?:her|him|them|they|it|that|this|these|those|me|myself|you|someone|somebody|person|teammate|employee)$/.test(normalized)) {
+    return false;
+  }
+  if (normalized === workspaceAliasNormalizedForm(targetCanonical)) return false;
+  if (/^(?:the|a|an)$/.test(normalized)) return false;
+  return true;
+}
+
 function extractAssignmentTargetPhrases(message: string) {
   const normalized = message.replace(/\s+/g, " ").trim();
   const patterns = [
@@ -5399,6 +5414,63 @@ async function logChatResolutionEvent(input: {
   }
 }
 
+async function learnAliasesFromChatResolution(input: {
+  store: DonnitStore;
+  orgId: string;
+  actorId: string;
+  workspaceResolution: ReturnType<typeof resolveChatAssigneeFromWorkspace>;
+  createdTaskId?: string | null;
+}) {
+  const phrase = input.workspaceResolution.matchedPhrase?.trim();
+  if (!phrase || input.workspaceResolution.missingAssignee || input.workspaceResolution.confidence < 0.8) return;
+  try {
+    const member = input.workspaceResolution.member;
+    if (member?.user_id) {
+      const canonical = member.profile?.full_name || member.profile?.email || member.user_id;
+      if (shouldLearnAliasPhrase(phrase, canonical)) {
+        await input.store.reinforceWorkspaceMemoryAlias(input.orgId, {
+          surface_form: phrase,
+          normalized_form: workspaceAliasNormalizedForm(phrase),
+          target_type: "member",
+          target_id: member.user_id,
+          scope_type: /^my\s+/i.test(phrase) ? "user" : "workspace",
+          scope_id: /^my\s+/i.test(phrase) ? input.actorId : null,
+          signalStrength: 0.3,
+          initialConfidence: 0.65,
+          source: "learned:chat_resolution",
+          metadata: {
+            resolutionConfidence: input.workspaceResolution.confidence,
+            createdTaskId: input.createdTaskId ?? null,
+          },
+          created_by: input.actorId,
+        });
+      }
+    }
+    const profile = input.workspaceResolution.profile;
+    if (profile?.id && shouldLearnAliasPhrase(phrase, profile.title)) {
+      await input.store.reinforceWorkspaceMemoryAlias(input.orgId, {
+        surface_form: phrase,
+        normalized_form: workspaceAliasNormalizedForm(phrase),
+        target_type: "position_profile",
+        target_id: profile.id,
+        scope_type: "workspace",
+        scope_id: null,
+        signalStrength: 0.3,
+        initialConfidence: 0.65,
+        source: "learned:chat_resolution",
+        metadata: {
+          resolutionConfidence: input.workspaceResolution.confidence,
+          createdTaskId: input.createdTaskId ?? null,
+          ownerId: ownerIdForPositionProfile(profile),
+        },
+        created_by: input.actorId,
+      });
+    }
+  } catch (error) {
+    console.error("[donnit] workspace alias learning failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 export const __chatParserTest = {
   ambiguousCompactClockTime,
   evaluateDeterministicChatTask,
@@ -5413,6 +5485,8 @@ export const __chatParserTest = {
   repeatDetailsFromDescription,
   resolveChatPositionProfile,
   rewriteRequesterReferencesInTitle,
+  shouldLearnAliasPhrase,
+  workspaceAliasNormalizedForm,
   chatTaskOutcome,
   titleFromMessage,
 };
@@ -6867,6 +6941,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           decision: "created",
           createdTaskId: created.id,
           latencyMs: Date.now() - chatResolutionStartedAt,
+        });
+        await learnAliasesFromChatResolution({
+          store,
+          orgId,
+          actorId: auth.userId,
+          workspaceResolution,
+          createdTaskId: created.id,
         });
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });

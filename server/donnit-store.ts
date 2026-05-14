@@ -1277,6 +1277,74 @@ export class DonnitStore {
     return data as DonnitWorkspaceMemoryAlias;
   }
 
+  async reinforceWorkspaceMemoryAlias(
+    orgId: string,
+    input: Pick<DonnitWorkspaceMemoryAlias, "surface_form" | "normalized_form" | "target_type" | "target_id"> &
+      Partial<Pick<DonnitWorkspaceMemoryAlias, "scope_type" | "scope_id" | "source" | "metadata" | "created_by">> & {
+        signalStrength?: number;
+        initialConfidence?: number;
+      },
+  ): Promise<DonnitWorkspaceMemoryAlias | null> {
+    const scopeType = input.scope_type ?? "workspace";
+    const scopeId = input.scope_id ?? null;
+    const scopeKey = scopeId ?? scopeType;
+    const now = new Date().toISOString();
+    const { data: existing, error: readError } = await this.client
+      .from(DONNIT_TABLES.workspaceMemoryAliases)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("normalized_form", input.normalized_form)
+      .eq("target_type", input.target_type)
+      .eq("target_id", input.target_id)
+      .eq("scope_type", scopeType)
+      .eq("scope_key", scopeKey)
+      .maybeSingle();
+    if (readError) {
+      if (isMissingRelationError(readError) || isMissingColumnError(readError)) return null;
+      throw wrapSupabaseError("read workspace_memory_alias failed", readError);
+    }
+    const strength = Math.max(0, Math.min(1, input.signalStrength ?? 0.3));
+    const learningRate = 0.15;
+    if (existing) {
+      const alias = existing as DonnitWorkspaceMemoryAlias;
+      const current = Number(alias.confidence_score ?? 0.65);
+      const nextConfidence = Math.min(0.99, current + learningRate * strength * (1 - current));
+      const { data, error } = await this.client
+        .from(DONNIT_TABLES.workspaceMemoryAliases)
+        .update({
+          confidence_score: nextConfidence,
+          usage_count: Number(alias.usage_count ?? 0) + 1,
+          last_used_at: now,
+          status: alias.status === "archived" || alias.status === "rejected" ? "active" : alias.status,
+          metadata: { ...(alias.metadata ?? {}), ...(input.metadata ?? {}) },
+          updated_at: now,
+          archived_at: null,
+        })
+        .eq("id", alias.id)
+        .select("*")
+        .single();
+      if (error) {
+        if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+        throw wrapSupabaseError("reinforce workspace_memory_alias failed", error);
+      }
+      return data as DonnitWorkspaceMemoryAlias;
+    }
+    return this.upsertWorkspaceMemoryAlias(orgId, {
+      surface_form: input.surface_form,
+      normalized_form: input.normalized_form,
+      target_type: input.target_type,
+      target_id: input.target_id,
+      scope_type: scopeType,
+      scope_id: scopeId,
+      confidence_score: input.initialConfidence ?? 0.65,
+      status: "active",
+      source: input.source ?? "learned:chat_resolution",
+      usage_count: 1,
+      metadata: input.metadata ?? {},
+      created_by: input.created_by ?? this.userId,
+    });
+  }
+
   async createTaskResolutionEvent(
     orgId: string,
     input: Omit<DonnitTaskResolutionEvent, "id" | "org_id" | "actor_id" | "created_at"> &
