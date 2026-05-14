@@ -59,6 +59,26 @@ export function extractResponseText(response: OpenAiResponse) {
   return content?.text ?? null;
 }
 
+function openAiOperatorMessage(status: number, body: string) {
+  const lower = body.toLowerCase();
+  if (status === 401) {
+    if (lower.includes("incorrect api key") || lower.includes("invalid api key")) {
+      return "OpenAI authentication failed. Check that Vercel has a valid OPENAI_API_KEY for this project, then redeploy.";
+    }
+    return "OpenAI authentication failed. Confirm OPENAI_API_KEY is set in Vercel for Production and redeploy.";
+  }
+  if (status === 403) {
+    return "OpenAI rejected the request. Confirm the API key's project has access to the configured DONNIT_AI_MODEL.";
+  }
+  if (status === 404 && lower.includes("model")) {
+    return "OpenAI could not find the configured model. Check DONNIT_AI_MODEL or remove it to use Donnit's default model.";
+  }
+  if (status === 429) {
+    return "OpenAI rate limit or quota was reached. Check project billing, limits, and usage in the OpenAI dashboard.";
+  }
+  return `OpenAI response failed with status ${status}.`;
+}
+
 function functionCalls(response: OpenAiResponse) {
   return (response.output ?? []).filter((item) => item.type === "function_call" && item.name && item.call_id);
 }
@@ -86,7 +106,8 @@ export async function createOpenAiResponse(payload: ResponsesPayload, signal: Ab
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`OpenAI response failed: ${response.status} ${body.slice(0, 500)}`);
+    console.error("[donnit] OpenAI response failed", response.status, body.slice(0, 500));
+    throw new Error(openAiOperatorMessage(response.status, body));
   }
   return (await response.json()) as OpenAiResponse;
 }
