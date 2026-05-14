@@ -92,6 +92,30 @@ const profilesWithTwoFinanceProfiles = [
   },
 ] as never;
 
+const profilesWithVacantFinanceIntern = [
+  ...profiles,
+  {
+    id: "profile-finance-intern",
+    title: "Finance Intern",
+    status: "vacant",
+    current_owner_id: null,
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
+const profilesWithCoveredFinanceIntern = [
+  ...profiles,
+  {
+    id: "profile-finance-intern",
+    title: "Finance Intern",
+    status: "covered",
+    current_owner_id: "user-jordan",
+    temporary_owner_id: null,
+    delegate_user_id: "user-nina",
+  },
+] as never;
+
 const profilesWithMultipleInterns = [
   ...profilesWithFinanceIntern,
   {
@@ -327,6 +351,29 @@ const evalCases: Array<{
       dueDate: "2026-05-15",
       missing: ["assignee", "positionProfile"],
       titleIncludes: "earnings reports",
+    },
+  },
+  {
+    name: "does not route tags for vacant profiles",
+    message: "assign payroll reports to the finance intern by EOW",
+    profilesOverride: profilesWithVacantFinanceIntern,
+    expected: {
+      assignedToId: "user-aaron",
+      dueDate: "2026-05-15",
+      missing: ["assignee"],
+      positionProfileId: null,
+      titleIncludes: "payroll reports",
+    },
+  },
+  {
+    name: "routes tags to delegated covered profile holder",
+    message: "assign payroll reports to the finance intern by EOW",
+    profilesOverride: profilesWithCoveredFinanceIntern,
+    expected: {
+      assignedToId: "user-nina",
+      positionProfileId: "profile-finance-intern",
+      dueDate: "2026-05-15",
+      titleIncludes: "payroll reports",
     },
   },
 ];

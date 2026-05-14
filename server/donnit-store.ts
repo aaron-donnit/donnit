@@ -1345,6 +1345,29 @@ export class DonnitStore {
     });
   }
 
+  async archiveWorkspaceMemoryAliasesForTarget(
+    orgId: string,
+    targetType: DonnitWorkspaceMemoryAlias["target_type"],
+    targetId: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const { error } = await this.client
+      .from(DONNIT_TABLES.workspaceMemoryAliases)
+      .update({
+        status: "archived",
+        archived_at: now,
+        updated_at: now,
+      })
+      .eq("org_id", orgId)
+      .eq("target_type", targetType)
+      .eq("target_id", targetId)
+      .in("status", ["active", "contested"]);
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return;
+      throw wrapSupabaseError("archive workspace_memory_aliases failed", error);
+    }
+  }
+
   async createTaskResolutionEvent(
     orgId: string,
     input: Omit<DonnitTaskResolutionEvent, "id" | "org_id" | "actor_id" | "created_at"> &

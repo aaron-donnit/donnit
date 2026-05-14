@@ -3109,26 +3109,32 @@ function shouldLearnAliasPhrase(phrase: string, targetCanonical: string) {
 
 function extractAssignmentTargetPhrases(message: string) {
   const normalized = message.replace(/\s+/g, " ").trim();
-  const patterns = [
-    /\b(?:assign|delegate|reassign|route)\s+.+?\s+to\s+(?:the\s+)?([a-z][a-z' -]{1,80}?)(?:\s+(?:by|before|on|at|@|due|with|for)\b|$)/i,
-    /\b(?:assign|delegate|reassign|route)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?(.+?)\s+(?:to|with|for)\s+\w+/i,
+  const phrases: string[] = [];
+  const clean = (value: string) =>
+    value
+      .replace(/^(?:the|a|an)\s+task\s+to\s+/i, "")
+      .replace(/^(?:the|a|an)\s+/i, "")
+      .replace(/\s+(?:by|before|on|at|@|due|with|for)\b.*$/i, "")
+      .replace(/\b(?:has|have)\s+(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+task.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const add = (value: string | null | undefined) => {
+    const phrase = value ? clean(value) : "";
+    if (phrase.length > 0 && phrase.length <= 120) phrases.push(phrase);
+  };
+  const assignment = normalized.match(/\b(?:assign|delegate|reassign|route)\s+(.+?)\s+to\s+(.+?)(?:\s+(?:by|before|on|at|@|due|with|for)\b|$)/i);
+  if (assignment) {
+    const before = assignment[1] ?? "";
+    const after = assignment[2] ?? "";
+    const afterFirstWord = normalizedProfileSearchText(after).split(" ")[0] ?? "";
+    const afterStartsWithWorkVerb = /^(?:handle|own|complete|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take|work|submit|create|build|make|write|pull|send)$/.test(afterFirstWord);
+    add(afterStartsWithWorkVerb ? before : after);
+  }
+  [
     /\b(?:assign|delegate|reassign|route)\s+(?:a\s+)?(?:task|todo|to-do|item)\s+to\s+(.+?)\s+(?:to|with|for)\s+\w+/i,
     /\b(?:have|get|ask)\s+(.+?)\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i,
     /\b(?:put)\s+(?:this|it|the task)?\s*(?:on\s+)?(.+?)(?:'s)?\s+plate\b/i,
-  ];
-  const phrases = patterns
-    .map((pattern) => normalized.match(pattern)?.[1])
-    .filter((value): value is string => Boolean(value))
-    .map((value) =>
-      value
-        .replace(/^(?:the|a|an)\s+task\s+to\s+/i, "")
-        .replace(/^(?:the|a|an)\s+/i, "")
-        .replace(/\s+(?:by|before|on|at|@|due|with|for)\b.*$/i, "")
-        .replace(/\b(?:has|have)\s+(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+task.*$/i, "")
-        .replace(/\s+/g, " ")
-        .trim(),
-    )
-    .filter((value) => value.length > 0 && value.length <= 120);
+  ].forEach((pattern) => add(normalized.match(pattern)?.[1]));
   return Array.from(new Set(phrases));
 }
 
@@ -3143,9 +3149,12 @@ function normalizedProfileSearchText(value: string) {
 function profileCandidatesForAssignee(profiles: DonnitPositionProfile[], assignedToId: string) {
   return profiles.filter(
     (profile) =>
-      profile.current_owner_id === assignedToId ||
-      profile.temporary_owner_id === assignedToId ||
-      profile.delegate_user_id === assignedToId,
+      isRoutablePositionProfile(profile) &&
+      (
+        profile.current_owner_id === assignedToId ||
+        profile.temporary_owner_id === assignedToId ||
+        profile.delegate_user_id === assignedToId
+      ),
   );
 }
 
@@ -3216,7 +3225,7 @@ function roleAliasesForProfile(profile: DonnitPositionProfile) {
 }
 
 function findMentionedPositionProfiles(message: string, profiles: DonnitPositionProfile[]) {
-  return profiles.filter((profile) => profileMatchesText(profile, message));
+  return profiles.filter((profile) => isRoutablePositionProfile(profile) && profileMatchesText(profile, message));
 }
 
 function profileTitleTokenScore(profile: DonnitPositionProfile, message: string) {
@@ -3260,6 +3269,7 @@ function rankMentionedPositionProfileCandidates(
 ) {
   const normalized = compactNaturalText(message);
   return profiles
+    .filter(isRoutablePositionProfile)
     .map((profile) => {
       const derivedAliases = roleAliasesForProfile(profile).map(compactNaturalText).filter(Boolean);
       const derivedAliasScore = Math.max(
@@ -3290,7 +3300,13 @@ function findMentionedPositionProfileCandidates(
 }
 
 function ownerIdForPositionProfile(profile: DonnitPositionProfile | null | undefined) {
-  return profile?.current_owner_id ?? profile?.temporary_owner_id ?? profile?.delegate_user_id ?? null;
+  return profile?.temporary_owner_id ?? profile?.delegate_user_id ?? profile?.current_owner_id ?? null;
+}
+
+function isRoutablePositionProfile(profile: DonnitPositionProfile | null | undefined) {
+  const status = profile?.status ?? "active";
+  const hasActiveCoverage = Boolean(profile?.temporary_owner_id || profile?.delegate_user_id);
+  return Boolean(profile && (status === "active" || (status === "covered" && hasActiveCoverage)) && ownerIdForPositionProfile(profile));
 }
 
 function resolveChatAssigneeFromWorkspace(input: {
@@ -3383,6 +3399,20 @@ function resolveChatAssigneeFromWorkspace(input: {
         ],
       };
     }
+  }
+
+  if (targetPhrases.length > 0) {
+    return {
+      assignedToId: fallbackMember?.user_id ?? input.requesterId,
+      member: fallbackMember,
+      profile: null,
+      ambiguousMembers: [],
+      ambiguousProfiles: [],
+      missingAssignee: true,
+      confidence: 0.25,
+      matchedPhrase: targetPhrases[0] ?? null,
+      labelsToStrip: [],
+    };
   }
 
   const rankedMembers = rankMentionedMembers(input.message, input.members);
@@ -5361,7 +5391,9 @@ function evaluateDeterministicChatTask(input: {
     profiles: input.profiles,
     requesterId: input.requesterId,
   });
-  const mentionedProfiles = findMentionedPositionProfileCandidates(input.message, input.profiles);
+  const mentionedProfiles = workspaceResolution.missingAssignee
+    ? []
+    : findMentionedPositionProfileCandidates(input.message, input.profiles);
   const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
   const assignedToId = workspaceResolution.assignedToId ?? fallback.assignedToId;
   const resolvedTitle = titleFromMessage(input.message, [
@@ -5378,7 +5410,7 @@ function evaluateDeterministicChatTask(input: {
     stripResolvedAssignmentTargetFromTitle(rewrittenTitle.replace(/^to\s+/i, "").trim(), workspaceResolution.matchedPhrase),
   );
   const profileResolution = resolveChatPositionProfile({
-    profiles: input.profiles,
+    profiles: workspaceResolution.missingAssignee ? [] : input.profiles,
     assignedToId: String(assignedToId),
     message: input.message,
     visibility: fallback.visibility,
@@ -5573,6 +5605,14 @@ async function syncPositionProfileTitleTags(input: {
   actorId: string;
   profile: DonnitPositionProfile;
 }) {
+  if (!isRoutablePositionProfile(input.profile)) {
+    try {
+      await input.store.archiveWorkspaceMemoryAliasesForTarget(input.orgId, "position_profile", input.profile.id);
+    } catch (error) {
+      console.error("[donnit] position profile tag archive failed", error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
   const tags = positionProfileTitleTags(input.profile.title);
   await Promise.all(tags.map(async (tag) => {
     try {
@@ -6905,7 +6945,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           aliases: workspaceAliases,
           requesterId: auth.userId,
         });
-        const mentionedProfiles = findMentionedPositionProfileCandidates(taskMessage, positionProfilesForRouting, workspaceAliases);
+        const mentionedProfiles = workspaceResolution.missingAssignee
+          ? []
+          : findMentionedPositionProfileCandidates(taskMessage, positionProfilesForRouting, workspaceAliases);
         const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
         const aiAssignee = ai && explicitAssignment && !workspaceResolution.missingAssignee
           ? members.find((member) => {
@@ -6991,7 +7033,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               recurrence: resolvedRecurrence,
               reminderDaysBefore: resolvedReminderDaysBefore,
             };
-        const positionProfiles = taskInput.visibility === "personal" ? [] : positionProfilesForRouting;
+        const positionProfiles = taskInput.visibility === "personal" || workspaceResolution.missingAssignee ? [] : positionProfilesForRouting;
         const profileResolution = resolveChatPositionProfile({
           profiles: positionProfiles,
           assignedToId: String(taskInput.assignedToId),
@@ -8130,7 +8172,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Position profile not found." });
         return;
       }
-      if (parsed.data.title !== undefined || parsed.data.currentOwnerId !== undefined) {
+      if (
+        parsed.data.title !== undefined ||
+        parsed.data.status !== undefined ||
+        parsed.data.currentOwnerId !== undefined ||
+        parsed.data.temporaryOwnerId !== undefined ||
+        parsed.data.delegateUserId !== undefined
+      ) {
         await syncPositionProfileTitleTags({ store, orgId, actorId: auth.userId, profile: updated });
       }
       res.json(toClientPositionProfile(updated));
@@ -8351,6 +8399,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
           if (updatedProfile) {
             profile = toClientPositionProfile(updatedProfile);
+            await syncPositionProfileTitleTags({ store: writeStore, orgId, actorId: auth.userId, profile: updatedProfile });
             await writeStore.createPositionProfileAssignment(orgId, {
               position_profile_id: updatedProfile.id,
               from_user_id: fromUserId,
