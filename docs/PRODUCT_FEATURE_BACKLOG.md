@@ -27,6 +27,16 @@ Current focus:
 
 - Build a cloud-backed Position Profile memory vault using Supabase `position_profile_knowledge`, inspired by Obsidian's durable Markdown-file model but workspace-scoped and transition-safe.
 - Make Donnit AI read from this durable role memory when drafting task updates or handoff intelligence.
+- Build the workspace task-resolution layer documented in `docs/intelligence/task-resolution-memory-architecture.md`: entity memory, relationship memory, alias memory, session memory, procedural memory, bounded candidate retrieval, confidence scoring, clarification merge, and correction-to-memory learning.
+
+Next implementation sequence:
+
+1. Expand the task-intelligence eval set around aliases, roles, recurring work, vague times, corrections, and session follow-ups.
+2. Add workspace alias memory for people, Position Profiles, departments, recurring artifacts, and task-template triggers.
+3. Build a shared task-resolution context provider that retrieves bounded candidate sets before the LLM resolves the input.
+4. Replace ad hoc chat extraction with a structured resolution contract that returns confidence, inferred fields, gaps, and one clarifying question.
+5. Persist pending task drafts so follow-up answers update the existing task instead of creating malformed new tasks.
+6. Log user corrections and accepted inferences back into workspace or Position Profile memory.
 
 ### Agentic AI Assistant
 

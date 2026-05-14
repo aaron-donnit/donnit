@@ -6,11 +6,16 @@ This is the global operating memory Donnit should load for every workspace befor
 
 ## Product Principle
 
-Donnit has two memory layers:
+Donnit now treats starter memory as layer zero of a broader task-resolution memory architecture. See `docs/intelligence/task-resolution-memory-architecture.md`.
+
+Donnit has four practical memory layers today:
 
 - **Starter memory**: global product behavior. It teaches Donnit how to interpret work, route tasks, speak naturally, use agenda, use notifications, and protect privacy.
 - **Workspace memory**: customer-specific behavior. It teaches Donnit local vocabulary, people aliases, profile nicknames, department shorthand, recurring workflows, and company preferences.
 - **Position Profile memory**: role-specific institutional knowledge. It preserves recurring responsibilities, how-to notes, tools, stakeholders, critical dates, risks, and historical task evidence.
+- **Session memory**: short-term conversation context. It stores pending task drafts, unresolved clarifying questions, recent entities, and user replies so Donnit does not lose the thread between turns.
+
+Starter memory should never be asked to do the whole job alone. It should guide behavior, but task creation needs a resolution pipeline that retrieves actual workspace candidates, scores confidence, asks when the answer is unclear, and writes corrections back into memory.
 
 ## Core Workflow Audit
 
@@ -73,15 +78,35 @@ Examples:
 - "Maya" means Maya Chen unless another Maya is added later.
 - "Monthly close" tasks should attach to the Finance Coordinator profile.
 
+## Memory Reaction Principle
+
+Donnit's reaction to a messy input should follow this sequence:
+
+1. Parse the user's raw words without guessing.
+2. Retrieve a short list of possible people, Position Profiles, aliases, templates, recurring duties, and recent session entities.
+3. Resolve against only those candidates.
+4. Assign confidence to each critical field.
+5. Create the task only when confidence is high enough.
+6. Ask one targeted clarifying question when a critical field is missing or ambiguous.
+7. Store accepted corrections as workspace or Position Profile memory.
+
+Example:
+
+- Input: "assign the assistant with preparing the board packet by eod friday"
+- Good behavior: resolve "assistant" from workspace alias memory, resolve "board packet" from procedural/profile memory, clean the title to "Prepare the board packet", set the due date to Friday at end of day, then create the task or disclose any inferred fields.
+- Bad behavior: assign the task to the sender, copy the full sentence as the title, or invent a person/profile not present in workspace memory.
+
 ## What Comes Next
 
-Current starter memory is static backend memory. The next product step is a workspace AI memory table and UI/admin controls for:
+Current starter memory is static backend memory. The next product step is a workspace AI memory and task-resolution layer with:
 
 - adding/editing workspace vocabulary;
 - approving memory learned from clarification;
 - archiving outdated workspace rules;
 - showing which rules affected a task;
 - preventing private/personal rules from leaking into role memory.
+- maintaining pending task drafts across clarifying chat turns;
+- logging candidate retrieval, confidence, final decisions, and corrections for every task resolution.
 
 ## Eval Harness
 
