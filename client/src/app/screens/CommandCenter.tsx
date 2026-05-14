@@ -148,6 +148,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
   const [mvpReadinessManuallyOpen, setMvpReadinessManuallyOpen] = useState(false);
   const [appView, setAppView] = useState<AppView>("home");
   const [supportView, setSupportView] = useState<SupportRailView>("today");
+  const [adminSection, setAdminSection] = useState<"org-chart" | "members" | "templates" | "settings">("org-chart");
   const [workspaceTaskScope, setWorkspaceTaskScope] = useState<"mine" | "team">("mine");
   const [selectedTeamViewUserId, setSelectedTeamViewUserId] = useState("");
   const [googleConnectPolling, setGoogleConnectPolling] = useState(false);
@@ -1369,6 +1370,33 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     { label: "Admin", actions: adminActions },
     { label: "Workspace", actions: workspaceActions },
   ].filter((group) => group.actions.length > 0);
+  const adminSections = [
+    {
+      id: "org-chart" as const,
+      label: "Organizational Chart",
+      detail: "Reporting lines and manager visibility",
+      icon: Users,
+    },
+    {
+      id: "members" as const,
+      label: "Members",
+      detail: "People, permissions, and access",
+      icon: UserPlus,
+    },
+    {
+      id: "templates" as const,
+      label: "Task Templates",
+      detail: "Reusable task sequences",
+      icon: ClipboardList,
+    },
+    {
+      id: "settings" as const,
+      label: "Workspace Settings",
+      detail: "Integrations and automation",
+      icon: Settings,
+    },
+  ];
+  const activeAdminSection = adminSections.find((item) => item.id === adminSection) ?? adminSections[0];
   const appNavItems: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }>; count?: number; disabled?: boolean }> = [
     { id: "home", label: "Home", icon: Home },
     { id: "tasks", label: "Tasks", icon: ClipboardList, count: metrics.open },
@@ -1907,36 +1935,80 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "admin" && (
-            <section key={`admin-${viewResetKeys.admin}`} className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 lg:px-6">
+            <section key={`admin-${viewResetKeys.admin}`} className="mx-auto w-full max-w-[1600px] px-4 py-4 lg:px-6">
               {canOpenManagerReports ? (
-                <>
-                  <div className="rounded-md border border-border bg-card p-4">
-                    <p className="text-sm font-medium text-foreground">Admin</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Manage members, Position Profile ownership, reusable templates, and workspace controls.
-                    </p>
+                <div className="admin-console" data-testid="admin-console">
+                  <aside className="admin-console-nav" aria-label="Admin sections">
+                    <div className="admin-console-kicker">Admin</div>
+                    <h2>Workspace controls</h2>
+                    <p>Manage structure, access, templates, and operating settings from one place.</p>
+                    <div className="admin-console-list">
+                      {adminSections.map((item) => {
+                        const Icon = item.icon;
+                        const active = item.id === adminSection;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setAdminSection(item.id)}
+                            className={`admin-console-item${active ? " is-active" : ""}`}
+                            data-testid={`button-admin-section-${item.id}`}
+                          >
+                            <Icon className="size-4" />
+                            <span>
+                              <strong>{item.label}</strong>
+                              <small>{item.detail}</small>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </aside>
+                  <div className="admin-console-main">
+                    <div className="admin-console-head">
+                      <div>
+                        <p className="ui-label">Admin Portal</p>
+                        <h3>{activeAdminSection.label}</h3>
+                        <p>{activeAdminSection.detail}</p>
+                      </div>
+                      <span className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground">
+                        {currentUser?.role ?? "member"}
+                      </span>
+                    </div>
+                    <div className="admin-console-body">
+                      {adminSection === "org-chart" && <OrgChartPanel users={data.users} currentUser={currentUser} />}
+                      {adminSection === "members" && (
+                        <WorkspaceMembersPanel
+                          users={data.users}
+                          positionProfiles={positionProfiles}
+                          currentUser={currentUser}
+                          currentUserId={data.currentUserId}
+                        />
+                      )}
+                      {adminSection === "templates" && (
+                        Boolean(data.authenticated) ? (
+                          <TaskTemplatesPanel templates={data.taskTemplates ?? []} authenticated={Boolean(data.authenticated)} />
+                        ) : (
+                          <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                            Sign in to manage task templates.
+                          </div>
+                        )
+                      )}
+                      {adminSection === "settings" && (
+                        <div className="rounded-md border border-border bg-card p-4">
+                          <p className="text-sm font-medium text-foreground">Integrations and workspace controls</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Gmail, Slack, SMS, signatures, calendar export, and automation preferences live in workspace settings.
+                          </p>
+                          <Button className="mt-4" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid="button-admin-open-settings">
+                            <Settings className="size-4" />
+                            Open workspace settings
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <OrgChartPanel users={data.users} currentUser={currentUser} />
-                  <div className="grid gap-4 xl:grid-cols-[1fr_.9fr]">
-                    {Boolean(data.authenticated) && <TaskTemplatesPanel templates={data.taskTemplates ?? []} authenticated={Boolean(data.authenticated)} />}
-                    <WorkspaceMembersPanel
-                      users={data.users}
-                      positionProfiles={positionProfiles}
-                      currentUser={currentUser}
-                      currentUserId={data.currentUserId}
-                    />
-                  </div>
-                  <div className="rounded-md border border-border bg-card p-4">
-                    <p className="text-sm font-medium text-foreground">Integrations and workspace controls</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Gmail, Slack, SMS, signatures, calendar export, and automation preferences live in workspace settings.
-                    </p>
-                    <Button className="mt-4" type="button" onClick={() => setWorkspaceSettingsOpen(true)} data-testid="button-admin-open-settings">
-                      <Settings className="size-4" />
-                      Open workspace settings
-                    </Button>
-                  </div>
-                </>
+                </div>
               ) : (
                 <RestrictedView title="Admin is locked" detail="Only managers and admins can manage workspace setup, members, and operating controls." />
               )}
