@@ -1729,6 +1729,25 @@ function toClientPositionProfile(profile: DonnitPositionProfile) {
   };
 }
 
+function toClientPositionProfileKnowledge(item: DonnitPositionProfileKnowledge) {
+  return {
+    id: item.id,
+    positionProfileId: item.position_profile_id,
+    sourceTaskId: item.source_task_id,
+    kind: item.kind,
+    title: item.title,
+    body: item.body,
+    markdownBody: item.markdown_body ?? "",
+    sourceKind: item.source_kind ?? "task",
+    evidence: item.evidence ?? {},
+    confidence: item.confidence,
+    confidenceScore: item.confidence_score ?? 0.6,
+    importance: item.importance ?? 50,
+    lastSeenAt: item.last_seen_at,
+    createdAt: item.created_at,
+  };
+}
+
 type ClientTaskShape = ReturnType<typeof toClientTask>;
 
 function cleanStringArray(value: unknown, maxItems = 300) {
@@ -1825,6 +1844,20 @@ function canViewSensitiveTask(
     task.delegated_to === actorId ||
     (task.collaborator_ids ?? []).includes(actorId)
   );
+}
+
+function canViewTaskContext(
+  task: Pick<DonnitTask, "assigned_to" | "assigned_by" | "delegated_to" | "collaborator_ids" | "visibility">,
+  actorId: string,
+  actor: { role?: string | null } | null | undefined,
+  members: Array<{ user_id: string; manager_id?: string | null }>,
+) {
+  if (!canViewSensitiveTask(task, actorId, actor)) return false;
+  if (isWorkspaceAdmin(actor)) return true;
+  if (task.assigned_to === actorId || task.assigned_by === actorId || task.delegated_to === actorId) return true;
+  if ((task.collaborator_ids ?? []).includes(actorId)) return true;
+  const assignee = members.find((member) => member.user_id === task.assigned_to);
+  return String(actor?.role ?? "") === "manager" && assignee?.manager_id === actorId;
 }
 
 function isMemberAdminSchemaError(error: unknown) {
@@ -7541,6 +7574,120 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ------------------------------------------------------------------
   // Tasks
   // ------------------------------------------------------------------
+  app.get("/api/tasks/:id/continuity-context", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceMemberContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const store = new DonnitStore(auth.client, auth.userId);
+      const task = await store.getTask(String(req.params.id));
+      if (!task || task.org_id !== context.orgId || !canViewTaskContext(task, auth.userId, context.actor, context.members)) {
+        res.status(404).json({ message: "Task not found." });
+        return;
+      }
+      const profileId = task.position_profile_id;
+      if (!profileId || task.visibility === "personal") {
+        res.json({
+          ok: true,
+          task: toClientTask(task),
+          profile: null,
+          knowledge: [],
+          historicalTasks: [],
+          events: [],
+          subtasks: [],
+        });
+        return;
+      }
+
+      const [profiles, knowledge, tasks, events, subtasks] = await Promise.all([
+        store.listPositionProfiles(context.orgId),
+        store.listPositionProfileKnowledge(context.orgId, profileId),
+        store.listTasks(context.orgId),
+        store.listEvents(context.orgId),
+        store.listTaskSubtasks(context.orgId),
+      ]);
+      const profile = profiles.find((item) => item.id === profileId) ?? null;
+      if (!profile) {
+        res.json({
+          ok: true,
+          task: toClientTask(task),
+          profile: null,
+          knowledge: [],
+          historicalTasks: [],
+          events: events.filter((event) => event.task_id === task.id).slice(0, 12).map((event) => ({
+            id: event.id,
+            taskId: event.task_id,
+            actorId: event.actor_id,
+            type: event.type,
+            note: event.note,
+            createdAt: event.created_at,
+          })),
+          subtasks: subtasks.filter((subtask) => subtask.task_id === task.id).map(toClientTaskSubtask),
+        });
+        return;
+      }
+      const canViewProfileMemory =
+        isWorkspaceAdmin(context.actor) ||
+        profile.current_owner_id === auth.userId ||
+        profile.temporary_owner_id === auth.userId ||
+        profile.delegate_user_id === auth.userId ||
+        profile.direct_manager_id === auth.userId ||
+        canViewTaskContext(task, auth.userId, context.actor, context.members);
+
+      if (!canViewProfileMemory) {
+        res.status(403).json({ message: "You do not have access to this Position Profile context." });
+        return;
+      }
+
+      const visibleKnowledge = knowledge
+        .filter((item) => {
+          const evidence = (item.evidence ?? {}) as { visibility?: unknown };
+          const visibility = String(evidence.visibility ?? "work");
+          if (visibility === "personal") return false;
+          if (visibility === "confidential" && !isWorkspaceAdmin(context.actor) && item.source_task_id !== task.id) return false;
+          return true;
+        })
+        .slice(0, 12);
+      const historicalTasks = tasks
+        .filter((item) => (
+          item.id !== task.id &&
+          item.position_profile_id === profileId &&
+          item.status === "completed" &&
+          item.visibility !== "personal" &&
+          canViewSensitiveTask(item, auth.userId, context.actor)
+        ))
+        .sort((a, b) => {
+          const aDone = a.status === "completed" ? 0 : 1;
+          const bDone = b.status === "completed" ? 0 : 1;
+          if (aDone !== bDone) return aDone - bDone;
+          return String(b.completed_at ?? b.created_at).localeCompare(String(a.completed_at ?? a.created_at));
+        })
+        .slice(0, 10);
+
+      res.json({
+        ok: true,
+        task: toClientTask(task),
+        profile: toClientPositionProfile(profile),
+        knowledge: visibleKnowledge.map(toClientPositionProfileKnowledge),
+        historicalTasks: historicalTasks.map(toClientTask),
+        events: events.filter((event) => event.task_id === task.id).slice(0, 12).map((event) => ({
+          id: event.id,
+          taskId: event.task_id,
+          actorId: event.actor_id,
+          type: event.type,
+          note: event.note,
+          createdAt: event.created_at,
+        })),
+        subtasks: subtasks.filter((subtask) => subtask.task_id === task.id).map(toClientTaskSubtask),
+      });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/tasks", async (req: Request, res: Response) => {
     const parsed = taskCreateRequestSchema.safeParse(req.body);
     if (!parsed.success) {

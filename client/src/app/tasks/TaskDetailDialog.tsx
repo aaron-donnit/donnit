@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, CheckCircle2, History, ListChecks, ListPlus, Loader2, MoreHorizontal, Paperclip, Send, UserPlus, UserRoundCheck, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Id, LocalSubtask, PositionProfile, Task, TaskEvent, TaskSubtask, User } from "@/app/types";
+import type { Id, LocalSubtask, PositionProfile, Task, TaskContinuityContext, TaskEvent, TaskSubtask, User } from "@/app/types";
 import { dialogShellClass } from "@/app/constants";
 import { urgencyLabel } from "@/app/lib/urgency";
 import { taskDueLabel } from "@/app/lib/date";
@@ -86,7 +86,7 @@ export default function TaskDetailDialog({
   const [localSubtasks, setLocalSubtasks] = useState<LocalSubtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
-  const [showPositionHistory, setShowPositionHistory] = useState(false);
+  const [showRoleContext, setShowRoleContext] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -115,7 +115,7 @@ export default function TaskDetailDialog({
     setDraggingFiles(false);
     setNewSubtaskTitle("");
     setShowInheritedHistory(false);
-    setShowPositionHistory(false);
+    setShowRoleContext(false);
     if (authenticated) {
       setLocalSubtasks([]);
       return;
@@ -338,6 +338,12 @@ export default function TaskDetailDialog({
     },
   });
 
+  const roleContextQuery = useQuery<TaskContinuityContext>({
+    queryKey: [`/api/tasks/${task?.id ?? "none"}/continuity-context`],
+    enabled: Boolean(authenticated && open && showRoleContext && task?.id && task.positionProfileId && visibility !== "personal"),
+    staleTime: 30_000,
+  });
+
   if (!task) return null;
   const activeUsers = users.filter(isActiveUser);
   const assignee = users.find((user) => String(user.id) === String(task.assignedToId));
@@ -351,6 +357,10 @@ export default function TaskDetailDialog({
   const relatedHistoricalTasks = (relatedPositionProfile?.completedTasks ?? [])
     .filter((item) => String(item.id) !== String(task.id) && item.visibility !== "personal")
     .slice(0, 6);
+  const roleContext = roleContextQuery.data ?? null;
+  const roleKnowledge = roleContext?.knowledge ?? [];
+  const roleHistoricalTasks = authenticated ? roleContext?.historicalTasks ?? [] : relatedHistoricalTasks;
+  const roleContextProfileTitle = roleContext?.profile?.title ?? relatedPositionProfile?.title ?? "Position Profile";
   const selectedAssigneeProfiles = savedPositionProfiles.filter((profile) => String(profilePrimaryOwnerId(profile)) === assignedToId);
   const coverageProfiles = savedPositionProfiles.filter(
     (profile) =>
@@ -687,45 +697,83 @@ export default function TaskDetailDialog({
               )}
             </div>
           )}
-          {!inheritedContext && relatedPositionProfile && (
-            <div className="rounded-md border border-brand-green/30 bg-brand-green/10 px-3 py-3">
+          {relatedPositionProfile && visibility !== "personal" && (
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Position Profile history</p>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">Role context</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    This task is linked to {relatedPositionProfile.title}. Prior completed work can be used for reference without changing this task's working notes.
+                    {relatedPositionProfile.title} memory is available when you need prior work, notes, and recurring patterns.
                   </p>
                 </div>
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setShowPositionHistory((value) => !value)}
-                  data-testid="button-task-position-history-toggle"
+                  onClick={() => setShowRoleContext((value) => !value)}
+                  data-testid="button-task-role-context-toggle"
                 >
-                  {showPositionHistory ? "Hide history" : "Show history"}
+                  {showRoleContext ? "Hide" : "Open"}
                 </Button>
               </div>
-              {showPositionHistory && (
-                <div className="mt-3 grid gap-2 text-xs" data-testid="panel-task-position-history">
-                  {relatedHistoricalTasks.length === 0 ? (
+              {showRoleContext && (
+                <div className="mt-3 grid max-h-[360px] gap-3 overflow-y-auto rounded-md border border-border bg-background p-3 text-xs" data-testid="panel-task-role-context">
+                  {roleContextQuery.isLoading ? (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Loading role context...
+                    </div>
+                  ) : roleContextQuery.isError ? (
                     <p className="rounded-md border border-dashed border-border bg-background px-3 py-3 text-center text-muted-foreground">
-                      No completed reference work has been captured for this profile yet.
+                      Role context could not be loaded. Try again after saving the task.
                     </p>
                   ) : (
-                    relatedHistoricalTasks.map((item) => (
-                      <div key={String(item.id)} className="rounded-md border border-border bg-background px-3 py-2">
-                        <p className="font-medium text-foreground">{item.title}</p>
+                    <>
+                      <div>
+                        <p className="font-medium text-foreground">{roleContextProfileTitle}</p>
                         <p className="mt-0.5 text-muted-foreground">
-                          {item.completedAt ? `Completed ${new Date(item.completedAt).toLocaleDateString()}` : item.dueDate ? `Due ${item.dueDate}` : "Historical task"}
+                          Context is pulled from the Position Profile only when opened.
                         </p>
-                        {(item.description || item.completionNotes) && (
-                          <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-muted-foreground">
-                            {[stripRepeatDetails(item.description), richNoteToPlainText(item.completionNotes)].filter(Boolean).join("\n\n")}
+                      </div>
+                      {roleKnowledge.length > 0 && (
+                        <div className="grid gap-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role memory</p>
+                          {roleKnowledge.slice(0, 5).map((item) => (
+                            <div key={String(item.id)} className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-sm bg-brand-green/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-brand-green">
+                                  {item.kind.replace(/_/g, " ")}
+                                </span>
+                                <span className="font-medium text-foreground">{item.title}</span>
+                              </div>
+                              <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">{item.body}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="grid gap-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Prior tasks</p>
+                        {roleHistoricalTasks.length === 0 ? (
+                          <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-center text-muted-foreground">
+                            No prior reference tasks have been captured for this role yet.
                           </p>
+                        ) : (
+                          roleHistoricalTasks.slice(0, 6).map((item) => (
+                            <div key={String(item.id)} className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                              <p className="font-medium text-foreground">{item.title}</p>
+                              <p className="mt-0.5 text-muted-foreground">
+                                {item.completedAt ? `Completed ${new Date(item.completedAt).toLocaleDateString()}` : item.dueDate ? `Due ${item.dueDate}` : "Historical task"}
+                              </p>
+                              {(item.description || item.completionNotes) && (
+                                <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-muted-foreground">
+                                  {[stripRepeatDetails(item.description), richNoteToPlainText(item.completionNotes)].filter(Boolean).join("\n\n")}
+                                </p>
+                              )}
+                            </div>
+                          ))
                         )}
                       </div>
-                    ))
+                    </>
                   )}
                 </div>
               )}

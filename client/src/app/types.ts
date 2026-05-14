@@ -304,6 +304,33 @@ export type PersistedPositionProfile = {
   updatedAt: string;
 };
 
+export type PositionProfileKnowledge = {
+  id: Id;
+  positionProfileId: Id;
+  sourceTaskId: Id | null;
+  kind: string;
+  title: string;
+  body: string;
+  markdownBody: string;
+  sourceKind: string;
+  evidence: Record<string, unknown>;
+  confidence: "low" | "medium" | "high";
+  confidenceScore: number;
+  importance: number;
+  lastSeenAt: string;
+  createdAt: string;
+};
+
+export type TaskContinuityContext = {
+  ok: boolean;
+  task: Task;
+  profile: PersistedPositionProfile | null;
+  knowledge: PositionProfileKnowledge[];
+  historicalTasks: Task[];
+  events: TaskEvent[];
+  subtasks: TaskSubtask[];
+};
+
 export type ContinuityPreviewTask = {
   id: string;
   title: string;
