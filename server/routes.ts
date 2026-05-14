@@ -2330,6 +2330,73 @@ function normalizedAuthEmail(value: string | null | undefined) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function workspaceSlugBase(value: string) {
+  const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "workspace";
+}
+
+async function bootstrapWorkspaceWithAdmin(
+  auth: NonNullable<Request["donnitAuth"]>,
+  input: { fullName?: string; email?: string; orgName?: string },
+) {
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const existing = await getOrRepairAuthenticatedProfile(auth);
+  if (existing?.default_org_id) {
+    return { user_id: auth.userId, org_id: existing.default_org_id, is_new: false };
+  }
+
+  const email = normalizedAuthEmail(input.email ?? auth.email);
+  const fullName = String(input.fullName ?? "").trim() || email || "New user";
+  const orgName = String(input.orgName ?? "").trim() || `${fullName}'s workspace`;
+  const slug = `${workspaceSlugBase(orgName)}-${auth.userId.replace(/-/g, "").slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
+
+  const { data: org, error: orgError } = await admin
+    .from(DONNIT_TABLES.organizations)
+    .insert({ name: orgName, slug })
+    .select("id")
+    .single();
+  if (orgError) throw orgError;
+  const orgId = String(org.id);
+
+  const { error: profileError } = await admin
+    .from(DONNIT_TABLES.profiles)
+    .upsert(
+      {
+        id: auth.userId,
+        full_name: fullName,
+        email,
+        default_org_id: orgId,
+        persona: "operator",
+      },
+      { onConflict: "id" },
+    );
+  if (profileError) throw profileError;
+
+  const { error: memberError } = await admin
+    .from(DONNIT_TABLES.organizationMembers)
+    .upsert(
+      {
+        org_id: orgId,
+        user_id: auth.userId,
+        role: "owner",
+        manager_id: null,
+        can_assign: true,
+        status: "active",
+      },
+      { onConflict: "org_id,user_id" },
+    );
+  if (memberError) throw memberError;
+
+  const { error: prefsError } = await admin
+    .from(DONNIT_TABLES.reminderPreferences)
+    .upsert({ user_id: auth.userId }, { onConflict: "user_id" });
+  if (prefsError) throw prefsError;
+
+  return { user_id: auth.userId, org_id: orgId, is_new: true };
+}
+
 async function getOrRepairAuthenticatedProfile(auth: NonNullable<Request["donnitAuth"]>): Promise<DonnitProfile | null> {
   const userStore = new DonnitStore(auth.client, auth.userId);
   const profile = await userStore.getProfile();
@@ -7046,6 +7113,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const orgName = typeof req.body?.orgName === "string" ? req.body.orgName.slice(0, 200) : "";
     const store = new DonnitStore(auth.client, auth.userId);
     try {
+      const existing = await getOrRepairAuthenticatedProfile(auth);
+      if (existing?.default_org_id) {
+        res.json({ ok: true, user_id: auth.userId, org_id: existing.default_org_id, is_new: false });
+        return;
+      }
       const result = await store.bootstrapWorkspace({
         fullName,
         email: auth.email ?? undefined,
@@ -7053,6 +7125,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true, ...result });
     } catch (error) {
+      const fallback = await bootstrapWorkspaceWithAdmin(auth, {
+        fullName,
+        email: auth.email ?? undefined,
+        orgName,
+      }).catch((fallbackError) => {
+        const fallbackPayload = serializeSupabaseError(fallbackError);
+        console.error("[donnit] admin bootstrap fallback failed", {
+          userId: auth.userId,
+          ...fallbackPayload,
+        });
+        return null;
+      });
+      if (fallback) {
+        console.warn("[donnit] bootstrap_workspace RPC failed; recovered with admin bootstrap", {
+          userId: auth.userId,
+          ...serializeSupabaseError(error),
+        });
+        res.json({ ok: true, ...fallback, recovered: true });
+        return;
+      }
       const payload = serializeSupabaseError(error);
       console.error("[donnit] bootstrap_workspace failed", {
         userId: auth.userId,
