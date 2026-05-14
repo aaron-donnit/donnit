@@ -48,6 +48,28 @@ const profiles = [
   },
 ] as never;
 
+const profilesWithClientSuccess = [
+  ...profiles,
+  {
+    id: "profile-client-success",
+    title: "Client Success Specialist",
+    current_owner_id: "user-maya",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
+const profilesWithContestedClientSuccess = [
+  ...profilesWithClientSuccess,
+  {
+    id: "profile-client-success-manager",
+    title: "Client Success Manager",
+    current_owner_id: "user-nina",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
+] as never;
+
 type EvalExpected = Partial<ReturnType<typeof __chatParserTest.evaluateDeterministicChatTask>> & {
   titleIncludes?: string;
   titleExcludes?: string[];
@@ -57,6 +79,7 @@ const evalCases: Array<{
   name: string;
   message: string;
   expected: EvalExpected;
+  profilesOverride?: typeof profiles;
 }> = [
   {
     name: "assigns explicit person and rewrites me",
@@ -216,16 +239,39 @@ const evalCases: Array<{
       titleIncludes: "ACME renewal",
     },
   },
+  {
+    name: "routes task-first assignment to closest role title",
+    message: "assign a customer report to the client success by EOW",
+    profilesOverride: profilesWithClientSuccess,
+    expected: {
+      assignedToId: "user-maya",
+      positionProfileId: "profile-client-success",
+      dueDate: "2026-05-15",
+      titleIncludes: "customer report",
+      titleExcludes: ["client success"],
+    },
+  },
+  {
+    name: "asks when task-first role title is contested",
+    message: "assign a customer report to the client success by EOW",
+    profilesOverride: profilesWithContestedClientSuccess,
+    expected: {
+      assignedToId: "user-aaron",
+      dueDate: "2026-05-15",
+      missing: ["assignee", "positionProfile"],
+      titleIncludes: "customer report",
+    },
+  },
 ];
 
 describe("Donnit task intelligence evals", () => {
-  it.each(evalCases)("$name", ({ message, expected }) => {
+  it.each(evalCases)("$name", ({ message, expected, profilesOverride }) => {
     vi.setSystemTime(new Date("2026-05-14T10:00:00-04:00"));
 
     const actual = __chatParserTest.evaluateDeterministicChatTask({
       message,
       members,
-      profiles,
+      profiles: profilesOverride ?? profiles,
       requesterId: "user-aaron",
     });
 

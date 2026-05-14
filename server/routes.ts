@@ -987,6 +987,7 @@ function stripRoleAssignmentPhrases(message: string, roleLabels: string[]) {
     cleaned = cleaned
       .replace(new RegExp(`\\b(?:please\\s+)?(?:${verbs})\\s+(?:the\\s+)?${safe}\\s+(?:with|to|for)\\s+`, "gi"), "")
       .replace(new RegExp(`\\b(?:please\\s+)?(?:${verbs})\\s+(?:this\\s+)?(?:task\\s+)?(?:to\\s+)?(?:the\\s+)?${safe}\\b`, "gi"), "")
+      .replace(new RegExp(`\\bto\\s+(?:the\\s+)?${safe}(?=\\s|$)`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+(?:the\\s+)?${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bunder\\s+(?:the\\s+)?${safe}\\b`, "gi"), "");
   }
@@ -1107,6 +1108,18 @@ function normalizeTaskTitleGrammar(title: string) {
   }
   const normalized = cleaned.replace(/^take\s+care\s+of\b/i, "Take care of");
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function stripResolvedAssignmentTargetFromTitle(title: string, matchedPhrase: string | null | undefined) {
+  const phrase = matchedPhrase?.trim();
+  if (!phrase) return title;
+  const safe = escapeRegExp(phrase.replace(/^(?:the|a|an)\s+/i, "").trim());
+  if (!safe) return title;
+  return title
+    .replace(new RegExp(`\\bto\\s+(?:the\\s+)?${safe}(?=\\s|$)`, "gi"), "")
+    .replace(/\s+/g, " ")
+    .replace(/^[,.:;-\s]+|[,.:;-\s]+$/g, "")
+    .trim();
 }
 
 function parseAnnualReminderDays(message: string) {
@@ -3096,6 +3109,7 @@ function shouldLearnAliasPhrase(phrase: string, targetCanonical: string) {
 function extractAssignmentTargetPhrases(message: string) {
   const normalized = message.replace(/\s+/g, " ").trim();
   const patterns = [
+    /\b(?:assign|delegate|reassign|route)\s+.+?\s+to\s+(?:the\s+)?([a-z][a-z' -]{1,80}?)(?:\s+(?:by|before|on|at|@|due|with|for)\b|$)/i,
     /\b(?:assign|delegate|reassign|route)\s+(?:this\s+)?(?:task\s+)?(?:to\s+)?(.+?)\s+(?:to|with|for)\s+\w+/i,
     /\b(?:assign|delegate|reassign|route)\s+(?:a\s+)?(?:task|todo|to-do|item)\s+to\s+(.+?)\s+(?:to|with|for)\s+\w+/i,
     /\b(?:have|get|ask)\s+(.+?)\s+to\s+(?:handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow|schedule|reschedule|book|take care of|work on)\b/i,
@@ -3108,6 +3122,7 @@ function extractAssignmentTargetPhrases(message: string) {
       value
         .replace(/^(?:the|a|an)\s+task\s+to\s+/i, "")
         .replace(/^(?:the|a|an)\s+/i, "")
+        .replace(/\s+(?:by|before|on|at|@|due|with|for)\b.*$/i, "")
         .replace(/\b(?:has|have)\s+(?:a\s+)?(?:recurring|reoccurring|reoccuring|reouccring)\s+task.*$/i, "")
         .replace(/\s+/g, " ")
         .trim(),
@@ -3150,8 +3165,21 @@ function profileMatchesText(profile: DonnitPositionProfile, message: string) {
   return words.length >= 2 && words.every((word) => haystack.includes(word));
 }
 
+function titleDerivedRoleAliases(title: string) {
+  const words = normalizedProfileSearchText(title).split(" ").filter((word) => word.length >= 3);
+  const aliases = new Set<string>();
+  for (let size = Math.min(3, words.length); size >= 2; size -= 1) {
+    for (let index = 0; index <= words.length - size; index += 1) {
+      aliases.add(words.slice(index, index + size).join(" "));
+    }
+  }
+  if (words.includes("client") && words.includes("success")) aliases.add("customer success");
+  if (words.includes("customer") && words.includes("success")) aliases.add("client success");
+  return Array.from(aliases);
+}
+
 function roleAliasesForProfile(profile: DonnitPositionProfile) {
-  const aliases = new Set<string>([profile.title]);
+  const aliases = new Set<string>([profile.title, ...titleDerivedRoleAliases(profile.title)]);
   const title = normalizedProfileSearchText(profile.title);
   if (title.includes("assistant")) {
     aliases.add("assistant");
@@ -3163,6 +3191,12 @@ function roleAliasesForProfile(profile: DonnitPositionProfile) {
   if (title.includes("payroll")) aliases.add("payroll");
   if (title.includes("finance")) aliases.add("finance");
   if (title.includes("sales")) aliases.add("sales");
+  if (title.includes("client success") || title.includes("customer success")) {
+    aliases.add("client success");
+    aliases.add("customer success");
+    aliases.add("success");
+    aliases.add("cs");
+  }
   if (title.includes("recruit")) {
     aliases.add("recruiting");
     aliases.add("recruiter");
@@ -3175,12 +3209,23 @@ function findMentionedPositionProfiles(message: string, profiles: DonnitPosition
   return profiles.filter((profile) => profileMatchesText(profile, message));
 }
 
+function profileTitleTokenScore(profile: DonnitPositionProfile, message: string) {
+  const haystack = normalizedProfileSearchText(message);
+  const tokens = new Set(haystack.split(" ").filter(Boolean));
+  const words = normalizedProfileSearchText(profile.title).split(" ").filter((word) => word.length >= 3);
+  if (words.length === 0) return 0;
+  const matched = words.filter((word) => tokens.has(word) || haystack.includes(word));
+  if (matched.length < 2) return 0;
+  const ratio = matched.length / words.length;
+  return 5 + Math.round(ratio * 3);
+}
+
 function rankMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
   const normalized = compactNaturalText(message);
   return profiles
     .map((profile) => {
       const aliases = roleAliasesForProfile(profile).map(compactNaturalText).filter(Boolean);
-      const score = Math.max(
+      const aliasScore = Math.max(
         0,
         ...aliases.map((alias) => {
           if (!alias) return 0;
@@ -3190,6 +3235,7 @@ function rankMentionedPositionProfileCandidates(message: string, profiles: Donni
           return tokens.has(alias) ? 5 : 0;
         }),
       );
+      const score = Math.max(aliasScore, profileTitleTokenScore(profile, message));
       return { profile, score };
     })
     .filter((item) => item.score > 0 || profileMatchesText(item.profile, message))
@@ -3370,9 +3416,12 @@ function resolveChatPositionProfile(input: {
   if (input.visibility === "personal") {
     return { positionProfileId: null as string | null, needsChoice: false, candidates: [] as DonnitPositionProfile[] };
   }
-  const explicitProfiles = findMentionedPositionProfiles(input.message, input.profiles);
+  const explicitProfiles = findMentionedPositionProfileCandidates(input.message, input.profiles);
   if (explicitProfiles.length === 1) {
     return { positionProfileId: explicitProfiles[0].id, needsChoice: false, candidates: explicitProfiles };
+  }
+  if (explicitProfiles.length > 1) {
+    return { positionProfileId: null as string | null, needsChoice: true, candidates: explicitProfiles };
   }
   const candidates = profileCandidatesForAssignee(input.profiles, input.assignedToId);
   if (candidates.length === 0) {
@@ -5282,7 +5331,9 @@ function evaluateDeterministicChatTask(input: {
     firstNameForTaskReference(memberDisplayName(requester ?? {})),
     String(assignedToId) !== String(input.requesterId),
   );
-  const finalTitle = normalizeTaskTitleGrammar(rewrittenTitle.replace(/^to\s+/i, "").trim());
+  const finalTitle = normalizeTaskTitleGrammar(
+    stripResolvedAssignmentTargetFromTitle(rewrittenTitle.replace(/^to\s+/i, "").trim(), workspaceResolution.matchedPhrase),
+  );
   const profileResolution = resolveChatPositionProfile({
     profiles: input.profiles,
     assignedToId: String(assignedToId),
@@ -5291,7 +5342,9 @@ function evaluateDeterministicChatTask(input: {
   });
   const missing: PendingChatMissingField[] = [];
   if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
-  if (mentionedProfiles.length > 1) missing.push("positionProfile");
+  if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1 || profileResolution.needsChoice) {
+    missing.push("positionProfile");
+  }
   if (ambiguousCompactClockTime(input.message)) missing.push("timeMeridiem");
   return {
     title: finalTitle,
@@ -6820,10 +6873,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           : resolvedTitle;
         const requester = members.find((member) => member.user_id === auth.userId);
         const finalTitle = normalizeTaskTitleGrammar(
-          rewriteRequesterReferencesInTitle(
-            cleanedResolvedTitle,
-            firstNameForTaskReference(memberDisplayName(requester ?? {})),
-            String(assignedToId) !== String(auth.userId),
+          stripResolvedAssignmentTargetFromTitle(
+            rewriteRequesterReferencesInTitle(
+              cleanedResolvedTitle,
+              firstNameForTaskReference(memberDisplayName(requester ?? {})),
+              String(assignedToId) !== String(auth.userId),
+            ),
+            workspaceResolution.matchedPhrase,
           ),
         );
         const repeatDetails = recurrenceDetailsFromMessage(taskMessage, resolvedRecurrence, resolvedDueDate);
