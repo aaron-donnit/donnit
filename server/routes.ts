@@ -47,6 +47,7 @@ import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
 import { draftTaskUpdateWithAgent } from "./intelligence/skills/task-update-assistant";
 import { executeDonnitComposioReadTool, isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
+import { starterMemoryPromptBlock } from "./intelligence/donnit-starter-memory";
 
 const DEMO_USER_ID = 1;
 
@@ -597,6 +598,7 @@ const donnitLanguageLexicon = {
 
 const donnitTaskExtractionPolicy = [
   "Extract one actionable Donnit task for a professional workplace continuity tool.",
+  "Use Donnit starter memory as product behavior memory. It is global operating knowledge, not customer-private role memory.",
   "Return only schema fields. Use null dueDate when no date is clear.",
   "Write a clean action title, not copied source text. Titles must not start with assignment boilerplate like 'Assign Jordan'.",
   "Ask-don't-guess policy: when the source is ambiguous, context-only, or missing a clear action, set shouldCreateTask=false or confidence=low so Donnit can ask a clarifying question.",
@@ -3012,6 +3014,14 @@ function profileMatchesText(profile: DonnitPositionProfile, message: string) {
   return words.length >= 2 && words.every((word) => haystack.includes(word));
 }
 
+function findMentionedPositionProfiles(message: string, profiles: DonnitPositionProfile[]) {
+  return profiles.filter((profile) => profileMatchesText(profile, message));
+}
+
+function ownerIdForPositionProfile(profile: DonnitPositionProfile | null | undefined) {
+  return profile?.current_owner_id ?? profile?.temporary_owner_id ?? profile?.delegate_user_id ?? null;
+}
+
 function resolveChatPositionProfile(input: {
   profiles: DonnitPositionProfile[];
   assignedToId: string;
@@ -3020,6 +3030,10 @@ function resolveChatPositionProfile(input: {
 }) {
   if (input.visibility === "personal") {
     return { positionProfileId: null as string | null, needsChoice: false, candidates: [] as DonnitPositionProfile[] };
+  }
+  const explicitProfiles = findMentionedPositionProfiles(input.message, input.profiles);
+  if (explicitProfiles.length === 1) {
+    return { positionProfileId: explicitProfiles[0].id, needsChoice: false, candidates: explicitProfiles };
   }
   const candidates = profileCandidatesForAssignee(input.profiles, input.assignedToId);
   if (candidates.length === 0) {
@@ -4104,6 +4118,7 @@ async function extractTaskWithAi(input: {
               availableAssignees: input.memberLabels ?? [],
               today: todayIso(),
               currentYear: new Date().getFullYear(),
+              donnitStarterMemory: starterMemoryPromptBlock(),
               workplaceAbbreviations,
               interpretationLexicon: donnitLanguageLexicon,
             }),
@@ -6197,6 +6212,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const explicitMentionedMembers = explicitAssignment ? findMentionedMemberCandidates(taskMessage, members) : [];
         const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
         const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
+        const positionProfilesForRouting = await store.listPositionProfiles(orgId);
+        const mentionedProfiles = findMentionedPositionProfiles(taskMessage, positionProfilesForRouting);
+        const mentionedProfile = mentionedProfiles.length === 1 ? mentionedProfiles[0] : null;
+        const mentionedProfileOwnerId = ownerIdForPositionProfile(mentionedProfile);
         const aiAssignee = ai && explicitAssignment && !ambiguousMentionedAssignee
           ? members.find((member) => {
               const candidate = matchAiAssignee(ai.assigneeHint, [
@@ -6209,7 +6228,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               return Boolean(candidate);
             })
           : null;
-        const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? fallbackInput.assignedToId;
+        const assignedToId = aiAssignee?.user_id ?? explicitMentionedMember?.user_id ?? mentionedProfileOwnerId ?? fallbackInput.assignedToId;
         const resolvedDueDate = fallbackInput.dueDate ?? ai?.dueDate ?? null;
         const resolvedDueTime = normalizeTimeOnly(ai?.dueTime) ?? fallbackInput.dueTime ?? null;
         const resolvedStartTime = normalizeTimeOnly(ai?.startTime) ?? fallbackInput.startTime ?? null;
@@ -6267,7 +6286,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               recurrence: resolvedRecurrence,
               reminderDaysBefore: resolvedReminderDaysBefore,
             };
-        const positionProfiles = taskInput.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
+        const positionProfiles = taskInput.visibility === "personal" ? [] : positionProfilesForRouting;
         const profileResolution = resolveChatPositionProfile({
           profiles: positionProfiles,
           assignedToId: String(taskInput.assignedToId),
@@ -6277,7 +6296,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const missing: PendingChatMissingField[] = [];
         const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
-        if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee))) missing.push("assignee");
+        if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee && !mentionedProfileOwnerId))) missing.push("assignee");
+        if (mentionedProfiles.length > 1) missing.push("positionProfile");
         if (!taskInput.dueDate) missing.push("dueDate");
         if (ambiguousCompactClockTime(taskMessage)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");

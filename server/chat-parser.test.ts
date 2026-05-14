@@ -160,4 +160,32 @@ describe("chat task parser", () => {
       }),
     ).toMatchObject({ positionProfileId: "profile-office", needsChoice: false });
   });
+
+  it("recognizes an explicitly named profile even before owner routing has resolved", () => {
+    const profiles = [
+      {
+        id: "profile-payroll",
+        title: "Payroll Coordinator",
+        current_owner_id: "user-nina",
+        temporary_owner_id: null,
+        delegate_user_id: null,
+      },
+      {
+        id: "profile-sales",
+        title: "Sales Manager",
+        current_owner_id: "user-aaron",
+        temporary_owner_id: null,
+        delegate_user_id: null,
+      },
+    ];
+
+    expect(
+      __chatParserTest.resolveChatPositionProfile({
+        profiles: profiles as never,
+        assignedToId: "user-aaron",
+        message: "Assign Payroll Coordinator to submit payroll every Friday",
+        visibility: "work",
+      }),
+    ).toMatchObject({ positionProfileId: "profile-payroll", needsChoice: false });
+  });
 });
