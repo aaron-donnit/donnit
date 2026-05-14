@@ -382,6 +382,59 @@ export type DonnitAssistantRunEvent = {
   created_at: string;
 };
 
+export type DonnitWorkspaceMemoryAlias = {
+  id: string;
+  org_id: string;
+  surface_form: string;
+  normalized_form: string;
+  target_type: "member" | "position_profile" | "team" | "artifact" | "project" | "template" | "tool";
+  target_id: string;
+  scope_type: "user" | "team" | "position_profile" | "workspace";
+  scope_id: string | null;
+  scope_key: string;
+  confidence_score: number;
+  status: "active" | "contested" | "archived" | "rejected";
+  source: string;
+  usage_count: number;
+  contradicted_count: number;
+  last_used_at: string;
+  contested_at: string | null;
+  metadata: Record<string, unknown>;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+};
+
+export type DonnitTaskResolutionEvent = {
+  id: string;
+  org_id: string;
+  actor_id: string | null;
+  source: "chat" | "manual" | "email" | "slack" | "sms" | "document" | "automation";
+  original_text: string;
+  parsed_slots: Record<string, unknown>;
+  candidate_snapshot: Record<string, unknown>;
+  resolution_output: Record<string, unknown>;
+  decision: "created" | "asked" | "confirmed" | "corrected" | "rejected" | "ignored";
+  confidence_score: number | null;
+  created_task_id: string | null;
+  correction: Record<string, unknown>;
+  signal_type:
+    | "explicit_correction"
+    | "clarification_picked"
+    | "clarification_unpicked"
+    | "silent_edit"
+    | "implicit_acceptance"
+    | "undo"
+    | "task_completed"
+    | null;
+  signal_strength: number | null;
+  latency_ms: number;
+  model: string | null;
+  cost_usd: number;
+  created_at: string;
+};
+
 export class DonnitStore {
   constructor(private readonly client: SupabaseClient, public readonly userId: string) {}
 
@@ -1150,5 +1203,112 @@ export class DonnitStore {
       throw wrapSupabaseError("upsert position_profile_knowledge failed", error);
     }
     return data as DonnitPositionProfileKnowledge;
+  }
+
+  async listWorkspaceMemoryAliases(orgId: string, normalizedForm?: string): Promise<DonnitWorkspaceMemoryAlias[]> {
+    let query = this.client
+      .from(DONNIT_TABLES.workspaceMemoryAliases)
+      .select("*")
+      .eq("org_id", orgId)
+      .in("status", ["active", "contested"])
+      .order("confidence_score", { ascending: false })
+      .order("last_used_at", { ascending: false })
+      .limit(100);
+    if (normalizedForm) query = query.eq("normalized_form", normalizedForm);
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return [];
+      throw wrapSupabaseError("list workspace_memory_aliases failed", error);
+    }
+    return (data ?? []) as DonnitWorkspaceMemoryAlias[];
+  }
+
+  async upsertWorkspaceMemoryAlias(
+    orgId: string,
+    input: Pick<DonnitWorkspaceMemoryAlias, "surface_form" | "normalized_form" | "target_type" | "target_id"> &
+      Partial<
+        Pick<
+          DonnitWorkspaceMemoryAlias,
+          | "scope_type"
+          | "scope_id"
+          | "confidence_score"
+          | "status"
+          | "source"
+          | "usage_count"
+          | "contradicted_count"
+          | "contested_at"
+          | "metadata"
+          | "created_by"
+          | "archived_at"
+        >
+      >,
+  ): Promise<DonnitWorkspaceMemoryAlias | null> {
+    const now = new Date().toISOString();
+    const payload = {
+      org_id: orgId,
+      surface_form: input.surface_form,
+      normalized_form: input.normalized_form,
+      target_type: input.target_type,
+      target_id: input.target_id,
+      scope_type: input.scope_type ?? "workspace",
+      scope_id: input.scope_id ?? null,
+      scope_key: input.scope_id ?? input.scope_type ?? "workspace",
+      confidence_score: input.confidence_score ?? 0.65,
+      status: input.status ?? "active",
+      source: input.source ?? "learned",
+      usage_count: input.usage_count ?? 1,
+      contradicted_count: input.contradicted_count ?? 0,
+      last_used_at: now,
+      contested_at: input.contested_at ?? null,
+      metadata: input.metadata ?? {},
+      created_by: input.created_by ?? this.userId,
+      updated_at: now,
+      archived_at: input.archived_at ?? null,
+    };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.workspaceMemoryAliases)
+      .upsert(payload, { onConflict: "org_id,normalized_form,target_type,target_id,scope_type,scope_key" })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("upsert workspace_memory_alias failed", error);
+    }
+    return data as DonnitWorkspaceMemoryAlias;
+  }
+
+  async createTaskResolutionEvent(
+    orgId: string,
+    input: Omit<DonnitTaskResolutionEvent, "id" | "org_id" | "actor_id" | "created_at"> &
+      Partial<Pick<DonnitTaskResolutionEvent, "actor_id">>,
+  ): Promise<DonnitTaskResolutionEvent | null> {
+    const payload = {
+      actor_id: input.actor_id ?? this.userId,
+      source: input.source,
+      original_text: input.original_text,
+      parsed_slots: input.parsed_slots ?? {},
+      candidate_snapshot: input.candidate_snapshot ?? {},
+      resolution_output: input.resolution_output ?? {},
+      decision: input.decision,
+      confidence_score: input.confidence_score ?? null,
+      created_task_id: input.created_task_id ?? null,
+      correction: input.correction ?? {},
+      signal_type: input.signal_type ?? null,
+      signal_strength: input.signal_strength ?? null,
+      latency_ms: input.latency_ms ?? 0,
+      model: input.model ?? null,
+      cost_usd: input.cost_usd ?? 0,
+      org_id: orgId,
+    };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskResolutionEvents)
+      .insert(payload)
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("create task_resolution_event failed", error);
+    }
+    return data as DonnitTaskResolutionEvent;
   }
 }

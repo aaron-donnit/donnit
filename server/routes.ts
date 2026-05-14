@@ -5294,6 +5294,111 @@ function evaluateDeterministicChatTask(input: {
   };
 }
 
+function chatResolutionParsedSlots(message: string) {
+  return {
+    explicitAssignment: hasExplicitAssignmentIntent(message),
+    targetPhrases: extractAssignmentTargetPhrases(message),
+    dueDate: parseDueDate(message),
+    dueTimeAmbiguous: ambiguousCompactClockTime(message)?.display ?? null,
+    urgency: parseExplicitUrgency(message) ?? parseUrgency(message),
+    recurrence: parseTaskRecurrence(message),
+    visibility: parseTaskVisibility(message),
+    estimateMinutes: parseEstimate(message),
+  };
+}
+
+function memberLogSummary(member: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>[number] | null | undefined) {
+  return member
+    ? {
+        id: member.user_id,
+        name: member.profile?.full_name ?? "",
+        email: member.profile?.email ?? "",
+      }
+    : null;
+}
+
+function profileLogSummary(profile: DonnitPositionProfile | null | undefined) {
+  return profile
+    ? {
+        id: profile.id,
+        title: profile.title,
+        currentOwnerId: profile.current_owner_id,
+        temporaryOwnerId: profile.temporary_owner_id,
+        delegateUserId: profile.delegate_user_id,
+      }
+    : null;
+}
+
+function chatResolutionCandidateSnapshot(input: {
+  resolution: ReturnType<typeof resolveChatAssigneeFromWorkspace>;
+  mentionedProfiles: DonnitPositionProfile[];
+}) {
+  return {
+    matchedPhrase: input.resolution.matchedPhrase,
+    confidence: input.resolution.confidence,
+    resolvedMember: memberLogSummary(input.resolution.member),
+    resolvedProfile: profileLogSummary(input.resolution.profile),
+    ambiguousMembers: input.resolution.ambiguousMembers.map(memberLogSummary),
+    ambiguousProfiles: input.resolution.ambiguousProfiles.map(profileLogSummary),
+    mentionedProfiles: input.mentionedProfiles.map(profileLogSummary),
+  };
+}
+
+async function logChatResolutionEvent(input: {
+  store: DonnitStore;
+  orgId: string;
+  originalText: string;
+  workspaceResolution: ReturnType<typeof resolveChatAssigneeFromWorkspace>;
+  mentionedProfiles: DonnitPositionProfile[];
+  taskInput?: {
+    title: string;
+    assignedToId: string | number;
+    dueDate: string | null;
+    urgency: string;
+    recurrence: string;
+    visibility: string;
+  };
+  positionProfileId?: string | null;
+  missing: PendingChatMissingField[];
+  decision: "created" | "asked";
+  createdTaskId?: string | null;
+  latencyMs?: number;
+}) {
+  try {
+    await input.store.createTaskResolutionEvent(input.orgId, {
+      source: "chat",
+      original_text: input.originalText,
+      parsed_slots: chatResolutionParsedSlots(input.originalText),
+      candidate_snapshot: chatResolutionCandidateSnapshot({
+        resolution: input.workspaceResolution,
+        mentionedProfiles: input.mentionedProfiles,
+      }),
+      resolution_output: {
+        title: input.taskInput?.title ?? null,
+        assignedToId: input.taskInput?.assignedToId ?? input.workspaceResolution.assignedToId,
+        positionProfileId: input.positionProfileId ?? input.workspaceResolution.profile?.id ?? null,
+        dueDate: input.taskInput?.dueDate ?? null,
+        urgency: input.taskInput?.urgency ?? null,
+        recurrence: input.taskInput?.recurrence ?? null,
+        visibility: input.taskInput?.visibility ?? null,
+        missing: input.missing,
+        decision: input.decision,
+      },
+      decision: input.decision,
+      confidence_score: input.workspaceResolution.confidence,
+      created_task_id: input.createdTaskId ?? null,
+      correction: {},
+      signal_type: input.decision === "created" ? "implicit_acceptance" : null,
+      signal_strength: input.decision === "created" ? 0.3 : null,
+      latency_ms: input.latencyMs ?? 0,
+      model: process.env.DONNIT_AI_MODEL ?? null,
+      cost_usd: 0,
+    });
+  } catch (error) {
+    console.error("[donnit] chat resolution event log failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 export const __chatParserTest = {
   ambiguousCompactClockTime,
   evaluateDeterministicChatTask,
@@ -6480,6 +6585,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const rawChatMessage = parsed.data.message;
         const automationInstruction = parseDonnitAutomationInstruction(rawChatMessage);
         const taskMessage = automationInstruction ?? rawChatMessage;
+        const chatResolutionStartedAt = Date.now();
         await store.createChatMessage(orgId, { role: "user", content: rawChatMessage, task_id: null });
         if (automationInstruction === "") {
           const assistant = await store.createChatMessage(orgId, {
@@ -6704,6 +6810,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             },
             missing,
           );
+          await logChatResolutionEvent({
+            store,
+            orgId,
+            originalText: taskMessage,
+            workspaceResolution,
+            mentionedProfiles,
+            taskInput,
+            positionProfileId: profileResolution.positionProfileId,
+            missing,
+            decision: "asked",
+            latencyMs: Date.now() - chatResolutionStartedAt,
+          });
           await setPendingChatTask(store, orgId, pendingTask);
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
@@ -6736,6 +6854,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             due_date: taskInput.dueDate,
             reminder_days_before: taskInput.reminderDaysBefore,
           }),
+        });
+        await logChatResolutionEvent({
+          store,
+          orgId,
+          originalText: taskMessage,
+          workspaceResolution,
+          mentionedProfiles,
+          taskInput,
+          positionProfileId: profileResolution.positionProfileId,
+          missing: [],
+          decision: "created",
+          createdTaskId: created.id,
+          latencyMs: Date.now() - chatResolutionStartedAt,
         });
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });

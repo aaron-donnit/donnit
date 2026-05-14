@@ -33,6 +33,8 @@ export const DONNIT_TABLES = {
   aiToolCalls: "ai_tool_calls",
   assistantRuns: "assistant_runs",
   assistantRunEvents: "assistant_run_events",
+  workspaceMemoryAliases: "workspace_memory_aliases",
+  taskResolutionEvents: "task_resolution_events",
 } as const;
 
 export function getSupabaseConfig() {
