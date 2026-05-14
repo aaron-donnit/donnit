@@ -12,8 +12,10 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const parsedPreview = useMemo(() => {
-    const text = message.trim();
-    if (!text) return null;
+    const rawText = message.trim();
+    if (!rawText) return null;
+    const isDonnitCommand = /^\/donnit\b/i.test(rawText);
+    const text = rawText.replace(/^\/donnit\b\s*/i, "").trim() || rawText;
     const lower = text.toLowerCase();
     const urgency = /asap|urgent|critical|emergency|immediately|today|now/.test(lower)
       ? "High"
@@ -42,7 +44,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
       .replace(/\b(assign|send|give)\s+[A-Z][a-z]+\s+(to|a task to)?/i, "")
       .replace(/\s+/g, " ")
       .trim();
-    return { title, urgency, due, recurrence, assignee };
+    return { title, urgency, due, recurrence, assignee, isDonnitCommand };
   }, [message]);
 
   const latestPersistedAssistant = useMemo(
@@ -87,6 +89,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
     const text = message.trim();
     if (text.length >= 2 && !chat.isPending) chat.mutate(text);
   };
+  const isDonnitCommand = /^\/donnit\b/i.test(message.trim());
 
   const chips: Array<[string, string | undefined]> = [
     ["Assignee", parsedPreview?.assignee],
@@ -110,7 +113,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
               send();
             }
           }}
-          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent"'
+          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent" or "/donnit prep an update for the vendor review"'
           className="composer-input"
           data-testid="input-chat-message"
         />
@@ -136,7 +139,7 @@ export default function ChatPanel({ messages }: { messages: ChatMessage[] }) {
               ? <Loader2 className="size-3.5 animate-spin" />
               : <Send className="size-3.5" />
             }
-            Add task
+            {isDonnitCommand ? "Run Donnit" : "Add task"}
           </button>
         </div>
       </div>

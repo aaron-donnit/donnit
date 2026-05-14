@@ -3040,6 +3040,40 @@ function chatTaskOutcome(task: DonnitTask, members: Awaited<ReturnType<DonnitSto
   return `I assigned ${assigneeName} to ${action}${dueText}.${recurrenceText}${urgencyText}${visibilitySentence}`;
 }
 
+function parseDonnitAutomationInstruction(message: string) {
+  const match = message.trim().match(/^\/donnit\b\s*(.*)$/i);
+  if (!match) return null;
+  return (match[1] ?? "").trim();
+}
+
+function formatAssistantRunSummary(output: Record<string, unknown>) {
+  const summary = typeof output.summary === "string" ? output.summary.trim() : "";
+  const suggestedUpdate = typeof output.suggestedUpdate === "string" ? output.suggestedUpdate.trim() : "";
+  const blockers = Array.isArray(output.blockers)
+    ? output.blockers.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const nextSteps = Array.isArray(output.suggestedNextSteps)
+    ? output.suggestedNextSteps.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const parts = [
+    summary,
+    suggestedUpdate ? `Suggested update: ${suggestedUpdate}` : "",
+    blockers.length > 0 ? `Blockers: ${blockers.slice(0, 2).join("; ")}` : "",
+    nextSteps.length > 0 ? `Next: ${nextSteps.slice(0, 2).join("; ")}` : "",
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
+function chatTaskAutomationOutcome(
+  task: DonnitTask,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+  output: Record<string, unknown>,
+) {
+  const base = chatTaskOutcome(task, members);
+  const summary = formatAssistantRunSummary(output);
+  return summary ? `${base} Donnit AI reviewed the task: ${summary}` : `${base} Donnit AI reviewed the task and logged the result.`;
+}
+
 function buildPendingFromTaskInput(input: {
   title: string;
   description: string;
@@ -3058,6 +3092,7 @@ function buildPendingFromTaskInput(input: {
   reminderDaysBefore: number;
   visibility: "work" | "personal" | "confidential";
   positionProfileId?: string | null;
+  assistantInstruction?: string | null;
 }, missing: PendingChatMissingField[]): PendingChatTask {
   return {
     title: input.title,
@@ -3077,6 +3112,7 @@ function buildPendingFromTaskInput(input: {
     reminderDaysBefore: input.reminderDaysBefore,
     visibility: input.visibility,
     positionProfileId: input.visibility === "personal" ? null : input.positionProfileId ?? null,
+    assistantInstruction: input.assistantInstruction ?? null,
     missing,
     createdAt: new Date().toISOString(),
   };
@@ -3305,6 +3341,7 @@ const pendingChatTaskSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(365),
   visibility: z.enum(["work", "personal", "confidential"]),
   positionProfileId: z.string().nullable().optional(),
+  assistantInstruction: z.string().trim().max(1200).nullable().optional(),
   missing: z.array(z.enum(["title", "assignee", "dueDate", "urgency", "positionProfile", "timeMeridiem"])).default([]),
   createdAt: z.string().datetime().optional(),
 });
@@ -3313,6 +3350,104 @@ type PendingChatTask = z.infer<typeof pendingChatTaskSchema>;
 const pendingChatTaskMemory = new Map<string, PendingChatTask>();
 const pendingChatTaskMarker = "DONNIT_PENDING_CHAT_TASK:";
 const pendingChatTaskClearedMarker = "DONNIT_PENDING_CHAT_TASK_CLEARED";
+
+async function runDonnitTaskAutomation(input: {
+  store: DonnitStore;
+  orgId: string;
+  userId: string;
+  task: DonnitTask;
+  instruction: string;
+  skill?: "task_update";
+}) {
+  const correlationId = `assistant_${crypto.randomUUID()}`;
+  const provider = process.env.DONNIT_REASONING_PROVIDER === "hermes" ? ("hermes" as const) : ("openai" as const);
+  const assistantRun = await input.store.createAssistantRun(input.orgId, {
+    task_id: input.task.id,
+    position_profile_id: input.task.position_profile_id,
+    provider,
+    skill_id: "task_update_assistant.v1",
+    status: "running",
+    instruction: input.instruction,
+    correlation_id: correlationId,
+  });
+  try {
+    await input.store.createAssistantRunEvent(input.orgId, {
+      assistant_run_id: assistantRun.id,
+      task_id: input.task.id,
+      type: "started",
+      payload: {
+        skill: input.skill ?? "task_update",
+        instruction: input.instruction,
+      },
+    });
+    const result = await draftTaskUpdateWithAgent({
+      store: input.store,
+      orgId: input.orgId,
+      userId: input.userId,
+      taskId: input.task.id,
+      instruction: input.instruction,
+      correlationId,
+    });
+    const output = {
+      summary: result.summary,
+      suggestedUpdate: result.suggested_update,
+      blockers: result.blockers,
+      suggestedNextSteps: result.suggested_next_steps,
+      profileMemoryCandidate: result.profile_memory_candidate,
+      confidence: result.confidence,
+    };
+    const updatedRun = await input.store.updateAssistantRun(assistantRun.id, {
+      status: "completed",
+      output,
+      completed_at: new Date().toISOString(),
+      estimated_cost_usd: result.estimatedCostUsd,
+    });
+    await input.store.createAssistantRunEvent(input.orgId, {
+      assistant_run_id: assistantRun.id,
+      task_id: input.task.id,
+      type: "completed",
+      payload: {
+        output,
+        estimatedCostUsd: result.estimatedCostUsd,
+        correlationId: result.correlationId,
+      },
+    });
+    await input.store.addEvent(input.orgId, {
+      task_id: input.task.id,
+      actor_id: input.userId,
+      type: "assistant_completed",
+      note: formatAssistantRunSummary(output) || "Donnit AI completed a task review.",
+    }).catch(() => null);
+    return {
+      run: updatedRun ?? assistantRun,
+      taskId: input.task.id,
+      status: "completed" as const,
+      correlationId: result.correlationId,
+      estimatedCostUsd: result.estimatedCostUsd,
+      output,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await input.store.updateAssistantRun(assistantRun.id, {
+      status: "failed",
+      completed_at: new Date().toISOString(),
+      error_message: message,
+    }).catch(() => null);
+    await input.store.createAssistantRunEvent(input.orgId, {
+      assistant_run_id: assistantRun.id,
+      task_id: input.task.id,
+      type: "failed",
+      payload: { message },
+    }).catch(() => null);
+    await input.store.addEvent(input.orgId, {
+      task_id: input.task.id,
+      actor_id: input.userId,
+      type: "assistant_failed",
+      note: message,
+    }).catch(() => null);
+    throw error;
+  }
+}
 
 const workspaceStateSchema = z.discriminatedUnion("key", [
   z.object({
@@ -5806,13 +5941,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const orgId = profile.default_org_id;
         const members = await store.listOrgMembers(orgId);
-        await store.createChatMessage(orgId, { role: "user", content: parsed.data.message, task_id: null });
+        const rawChatMessage = parsed.data.message;
+        const automationInstruction = parseDonnitAutomationInstruction(rawChatMessage);
+        const taskMessage = automationInstruction ?? rawChatMessage;
+        await store.createChatMessage(orgId, { role: "user", content: rawChatMessage, task_id: null });
+        if (automationInstruction === "") {
+          const assistant = await store.createChatMessage(orgId, {
+            role: "assistant",
+            content: "Tell me the task Donnit AI should work on after /donnit. For example: /donnit summarize blockers for the vendor renewal by Friday.",
+            task_id: null,
+          });
+          res.json({ assistant, pending: false });
+          return;
+        }
         const pending = await getPendingChatTask(store, orgId);
-        if (pending) {
-          if (looksLikeNewTaskIntent(parsed.data.message) && !looksLikeClarificationReply(parsed.data.message)) {
+        if (pending && automationInstruction !== null) {
+          await clearPendingChatTask(store, orgId);
+        } else if (pending) {
+          if (looksLikeNewTaskIntent(taskMessage) && !looksLikeClarificationReply(taskMessage)) {
             await clearPendingChatTask(store, orgId);
           } else {
-          if (/\b(cancel|never mind|nevermind|discard|stop)\b/i.test(parsed.data.message)) {
+          if (/\b(cancel|never mind|nevermind|discard|stop)\b/i.test(taskMessage)) {
             await clearPendingChatTask(store, orgId);
             const assistant = await store.createChatMessage(orgId, {
               role: "assistant",
@@ -5824,7 +5973,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
 
           const positionProfiles = pending.visibility === "personal" ? [] : await store.listPositionProfiles(orgId);
-          const merged = mergePendingChatTask(pending, parsed.data.message, positionProfiles, members);
+          const merged = mergePendingChatTask(pending, taskMessage, positionProfiles, members);
           if (pendingChatMissing(merged).length > 0) {
             await setPendingChatTask(store, orgId, merged);
             const assistant = await store.createChatMessage(orgId, {
@@ -5863,16 +6012,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await applyTaskTemplateToTask(store, orgId, created, { description: merged.description });
           await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: merged.description });
           await clearPendingChatTask(store, orgId);
+          let automation: Awaited<ReturnType<typeof runDonnitTaskAutomation>> | null = null;
+          let assistantContent = chatTaskOutcome(created, members);
+          if (merged.assistantInstruction) {
+            try {
+              automation = await runDonnitTaskAutomation({
+                store,
+                orgId,
+                userId: auth.userId,
+                task: created,
+                instruction: merged.assistantInstruction,
+              });
+              assistantContent = chatTaskAutomationOutcome(created, members, automation.output);
+            } catch (error) {
+              assistantContent = `${assistantContent} Donnit AI could not complete its review yet: ${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
-            content: chatTaskOutcome(created, members),
+            content: assistantContent,
             task_id: created.id,
           });
-          res.status(201).json({ task: toClientTask(created), assistant });
+          res.status(201).json({ task: toClientTask(created), assistant, automation });
           return;
           }
         }
-        if (looksLikeClarificationReply(parsed.data.message)) {
+        if (looksLikeClarificationReply(taskMessage)) {
           const assistant = await store.createChatMessage(orgId, {
             role: "assistant",
             content: "I lost the task context for that reply. Please restate the task with the owner, due date, and urgency so I can assign it cleanly.",
@@ -5882,12 +6047,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return;
         }
         const ai = await extractChatTaskWithAi(
-          parsed.data.message,
+          taskMessage,
           members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
         );
-        const fallbackInput = parseChatTaskAuthenticated(parsed.data.message, members, auth.userId);
-        const explicitAssignment = hasExplicitAssignmentIntent(parsed.data.message);
-        const explicitMentionedMembers = explicitAssignment ? findMentionedMemberCandidates(parsed.data.message, members) : [];
+        const fallbackInput = parseChatTaskAuthenticated(taskMessage, members, auth.userId);
+        const explicitAssignment = hasExplicitAssignmentIntent(taskMessage);
+        const explicitMentionedMembers = explicitAssignment ? findMentionedMemberCandidates(taskMessage, members) : [];
         const ambiguousMentionedAssignee = explicitMentionedMembers.length > 1;
         const explicitMentionedMember = explicitMentionedMembers.length === 1 ? explicitMentionedMembers[0] : null;
         const aiAssignee = ai && explicitAssignment && !ambiguousMentionedAssignee
@@ -5930,12 +6095,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           firstNameForTaskReference(memberDisplayName(requester ?? {})),
           String(assignedToId) !== String(auth.userId),
         );
-        const repeatDetails = recurrenceDetailsFromMessage(parsed.data.message, resolvedRecurrence, resolvedDueDate);
+        const repeatDetails = recurrenceDetailsFromMessage(taskMessage, resolvedRecurrence, resolvedDueDate);
         const taskInput = ai
           ? {
               title: finalTitle,
               description: descriptionWithServerRepeatDetails(
-                `${normalizeAiDescription(ai.description, parsed.data.message)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
+                `${normalizeAiDescription(ai.description, taskMessage)}\n\nDonnit rationale: ${ai.rationale}${explicitAssignment && ai.assigneeHint && !aiAssignee ? `\nPotential assignee mentioned: ${ai.assigneeHint}` : ""}`,
                 repeatDetails,
               ),
               status: assignedToId === auth.userId ? "open" : "pending_acceptance",
@@ -5956,7 +6121,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           : {
               ...fallbackInput,
               title: finalTitle,
-              description: descriptionWithServerRepeatDetails(fallbackInput.description ?? parsed.data.message, repeatDetails),
+              description: descriptionWithServerRepeatDetails(fallbackInput.description ?? taskMessage, repeatDetails),
               recurrence: resolvedRecurrence,
               reminderDaysBefore: resolvedReminderDaysBefore,
             };
@@ -5964,7 +6129,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const profileResolution = resolveChatPositionProfile({
           profiles: positionProfiles,
           assignedToId: String(taskInput.assignedToId),
-          message: parsed.data.message,
+          message: taskMessage,
           visibility: taskInput.visibility ?? "work",
         });
         const missing: PendingChatMissingField[] = [];
@@ -5972,7 +6137,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
         if (explicitAssignment && (ambiguousMentionedAssignee || (!explicitMentionedMember && !aiAssignee))) missing.push("assignee");
         if (!taskInput.dueDate) missing.push("dueDate");
-        if (ambiguousCompactClockTime(parsed.data.message)) missing.push("timeMeridiem");
+        if (ambiguousCompactClockTime(taskMessage)) missing.push("timeMeridiem");
         if (profileResolution.needsChoice) missing.push("positionProfile");
         if (missing.length > 0) {
           const pendingTask = buildPendingFromTaskInput(
@@ -5981,6 +6146,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               assignedToId: String(taskInput.assignedToId),
               assignedById: String(taskInput.assignedById),
               positionProfileId: profileResolution.positionProfileId,
+              assistantInstruction: automationInstruction,
             },
             missing,
           );
@@ -6019,12 +6185,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });
+        let automation: Awaited<ReturnType<typeof runDonnitTaskAutomation>> | null = null;
+        let assistantContent = chatTaskOutcome(created, members);
+        if (automationInstruction) {
+          try {
+            automation = await runDonnitTaskAutomation({
+              store,
+              orgId,
+              userId: auth.userId,
+              task: created,
+              instruction: automationInstruction,
+            });
+            assistantContent = chatTaskAutomationOutcome(created, members, automation.output);
+          } catch (error) {
+            assistantContent = `${assistantContent} Donnit AI could not complete its review yet: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
         const assistant = await store.createChatMessage(orgId, {
           role: "assistant",
-          content: chatTaskOutcome(created, members),
+          content: assistantContent,
           task_id: created.id,
         });
-        res.status(201).json({ task: toClientTask(created), assistant });
+        res.status(201).json({ task: toClientTask(created), assistant, automation });
         return;
       } catch (error) {
         res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
@@ -6853,7 +7035,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const auth = req.donnitAuth!;
     const store = new DonnitStore(auth.client, auth.userId);
-    let assistantRunId: string | null = null;
     try {
       const context = await requireWorkspaceMemberContext(auth);
       if (!context.ok) {
@@ -6866,75 +7047,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Task not found." });
         return;
       }
-      const correlationId = `assistant_${crypto.randomUUID()}`;
-      const provider = process.env.DONNIT_REASONING_PROVIDER === "hermes" ? ("hermes" as const) : ("openai" as const);
-      const assistantRun = await store.createAssistantRun(context.orgId, {
-        task_id: task.id,
-        position_profile_id: task.position_profile_id,
-        provider,
-        skill_id: "task_update_assistant.v1",
-        status: "running",
-        instruction: parsed.data.instruction,
-        correlation_id: correlationId,
-      });
-      assistantRunId = assistantRun.id;
-      await store.createAssistantRunEvent(context.orgId, {
-        assistant_run_id: assistantRun.id,
-        task_id: task.id,
-        type: "started",
-        payload: {
-          skill: parsed.data.skill,
-          instruction: parsed.data.instruction,
-        },
-      });
-      const result = await draftTaskUpdateWithAgent({
+      const result = await runDonnitTaskAutomation({
         store,
         orgId: context.orgId,
         userId: auth.userId,
-        taskId: task.id,
+        task,
         instruction: parsed.data.instruction,
-        correlationId,
-      });
-      const output = {
-        summary: result.summary,
-        suggestedUpdate: result.suggested_update,
-        blockers: result.blockers,
-        suggestedNextSteps: result.suggested_next_steps,
-        profileMemoryCandidate: result.profile_memory_candidate,
-        confidence: result.confidence,
-      };
-      const updatedRun = await store.updateAssistantRun(assistantRun.id, {
-        status: "completed",
-        output,
-        completed_at: new Date().toISOString(),
-        estimated_cost_usd: result.estimatedCostUsd,
-      });
-      await store.createAssistantRunEvent(context.orgId, {
-        assistant_run_id: assistantRun.id,
-        task_id: task.id,
-        type: "completed",
-        payload: {
-          output,
-          estimatedCostUsd: result.estimatedCostUsd,
-          correlationId: result.correlationId,
-        },
+        skill: parsed.data.skill,
       });
       res.status(201).json({
-        id: updatedRun?.id ?? assistantRun.id,
+        id: result.run.id,
         taskId: task.id,
-        status: "completed",
+        status: result.status,
         correlationId: result.correlationId,
         estimatedCostUsd: result.estimatedCostUsd,
-        output,
+        output: result.output,
       });
     } catch (error) {
-      if (assistantRunId) {
-        await store.updateAssistantRun(assistantRunId, {
-          status: "failed",
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
-        }).catch(() => null);
-      }
       const described = describeSupabaseError(error);
       const reason = classifySupabaseError(described, { schema: DONNIT_SCHEMA, table: "assistant_runs" });
       if (reason === "missing_table" || reason === "invalid_column" || reason === "schema_not_exposed") {

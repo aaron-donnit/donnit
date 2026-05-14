@@ -45,6 +45,25 @@ export function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]
         taskId: task.id,
       });
     }
+    for (const event of events.filter((item) => item.type === "assistant_completed" || item.type === "assistant_failed")) {
+      const task = tasks.find((candidate) => String(candidate.id) === String(event.taskId));
+      if (!task) continue;
+      const visibleToCurrentUser =
+        String(event.actorId) === String(currentUserId) ||
+        String(task.assignedToId) === String(currentUserId) ||
+        String(task.assignedById) === String(currentUserId) ||
+        String(task.delegatedToId ?? "") === String(currentUserId) ||
+        (task.collaboratorIds ?? []).some((id) => String(id) === String(currentUserId));
+      if (!visibleToCurrentUser) continue;
+      items.push({
+        id: `assistant-${event.type}-${task.id}-${event.id}`,
+        title: event.type === "assistant_completed" ? "Donnit AI finished" : "Donnit AI needs review",
+        detail: event.type === "assistant_completed" ? task.title : `${task.title}${event.note ? ` - ${event.note}` : ""}`,
+        severity: event.type === "assistant_failed" ? "high" : "normal",
+        source: "task",
+        taskId: task.id,
+      });
+    }
   }
 
   for (const task of active) {

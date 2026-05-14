@@ -183,7 +183,7 @@ For first customer readiness, Donnit AI should not autonomously send external me
 
 The next build slice should be:
 
-1. `/donnit` command routing in chat.
+1. `/donnit` command routing in chat. Status 2026-05-13: ready to test for internal read-only automation. `/donnit ...` creates a normal task, runs the task-update assistant, logs the run, and surfaces a notification when finished.
 2. Learned workflow table/schema.
 3. Read-only matching of `/donnit` task text to learned workflows.
 4. If matched, create an assistant run in `queued/running`.

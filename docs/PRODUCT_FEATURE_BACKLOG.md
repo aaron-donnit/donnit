@@ -33,11 +33,11 @@ Core workflow:
 
 MVP scope:
 
-- Start with one bounded assistant skill: "Research and draft a task update." Backend foundation is implemented behind `POST /api/tasks/:id/assistant-runs`; `/donnit` command routing and task UI entry point are still pending.
+- Start with one bounded assistant skill: "Research and draft a task update." Backend foundation is implemented behind `POST /api/tasks/:id/assistant-runs`; `/donnit` command routing from chat is ready to test.
 - The assistant may read the task, subtasks, notes, completion history, Position Profile memory, relevant email suggestion text, and existing attachments if available.
 - The assistant may produce a draft response, task summary, checklist, or recommended subtasks.
 - The assistant may not send external messages or mutate workspace state without confirmation.
-- The first `/donnit` experience should create or locate a task, attempt to match it to an approved learned workflow, and either queue a Donnit AI run or ask the user to teach/clarify the workflow.
+- The first `/donnit` experience creates the task through the normal chat parser, starts the internal read-only Donnit AI task-update assistant, writes the result to the task log, and triggers a bell notification. Learned workflow matching remains future scope.
 
 Future scope:
 
