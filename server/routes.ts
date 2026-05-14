@@ -2126,6 +2126,35 @@ function uniqueMemoryItems<T>(items: T[], keyFor: (item: T) => string, max = 20)
   return output;
 }
 
+function memoryKeyFromParts(parts: Array<string | null | undefined>) {
+  return parts
+    .map((part) => String(part ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean)
+    .join(":")
+    .slice(0, 220);
+}
+
+function confidenceScoreForTaskMemory(eventType: string, visibility: string) {
+  if (visibility === "confidential") return 0.72;
+  if (eventType === "completed") return 0.86;
+  if (eventType === "note_added") return 0.78;
+  if (eventType === "created") return 0.62;
+  return 0.68;
+}
+
+function confidenceLabelForScore(score: number): "low" | "medium" | "high" {
+  if (score >= 0.8) return "high";
+  if (score <= 0.45) return "low";
+  return "medium";
+}
+
+function sourceKindForTaskMemory(source: DonnitTask["source"], eventType: string) {
+  if (eventType === "completed" || eventType === "note_added" || eventType === "due_date_postponed") return "task_event" as const;
+  if (source === "email" || source === "slack" || source === "sms" || source === "document" || source === "manual") return source;
+  if (source === "chat") return "manual" as const;
+  return "task" as const;
+}
+
 async function enrichPositionProfileMemoryFromTask(input: {
   store: DonnitStore;
   orgId: string;
@@ -2150,6 +2179,8 @@ async function enrichPositionProfileMemoryFromTask(input: {
     const existingSources = typeof previous.sourceMix === "object" && previous.sourceMix !== null ? previous.sourceMix as Record<string, number> : {};
     const existingStats = typeof previous.stats === "object" && previous.stats !== null ? previous.stats as Record<string, number> : {};
     const capturedAt = new Date().toISOString();
+    const confidenceScore = confidenceScoreForTaskMemory(input.eventType, visibility);
+    const confidence = confidenceLabelForScore(confidenceScore);
     const taskSignal = {
       taskId: input.task.id,
       title: input.task.title,
@@ -2220,6 +2251,95 @@ async function enrichPositionProfileMemoryFromTask(input: {
       risk_score: riskScore,
       risk_summary: `${profile.title} memory updated from ${input.eventType.replace(/_/g, " ")}: ${input.task.title}.`,
     });
+    const evidence = {
+      taskId: input.task.id,
+      eventType: input.eventType,
+      source: input.task.source,
+      visibility,
+      dueDate: input.task.due_date,
+      recurrence: input.task.recurrence,
+      capturedAt,
+    };
+    const sourceKind = sourceKindForTaskMemory(input.task.source, input.eventType);
+    await Promise.all([
+      writeStore.upsertPositionProfileKnowledge(input.orgId, {
+        position_profile_id: profile.id,
+        source_task_id: input.task.id,
+        kind: "process",
+        title: input.task.title,
+        body: compactMemoryText(input.task.description || input.note || input.task.title, 900),
+        markdown_body: [
+          `# ${input.task.title}`,
+          "",
+          `- Status: ${input.task.status}`,
+          `- Urgency: ${input.task.urgency}`,
+          `- Source: ${input.task.source}`,
+          input.task.due_date ? `- Due: ${input.task.due_date}` : "",
+          input.task.recurrence !== "none" ? `- Recurrence: ${input.task.recurrence}` : "",
+          "",
+          compactMemoryText(input.task.description || input.note || "", 1400),
+        ].filter(Boolean).join("\n"),
+        memory_key: memoryKeyFromParts(["task", input.task.id, "process"]),
+        source_kind: sourceKind,
+        evidence,
+        confidence,
+        confidence_score: confidenceScore,
+        importance: input.task.urgency === "critical" ? 88 : input.task.urgency === "high" ? 76 : 58,
+        created_by: input.store.userId,
+      }),
+      recurringSignal
+        ? writeStore.upsertPositionProfileKnowledge(input.orgId, {
+            position_profile_id: profile.id,
+            source_task_id: input.task.id,
+            kind: "recurring_responsibility",
+            title: input.task.title,
+            body: compactMemoryText(
+              `${input.task.title}. Cadence: ${recurringSignal.cadence}. ${recurringSignal.repeatDetails ? `Repeat details: ${recurringSignal.repeatDetails}. ` : ""}${input.task.description}`,
+              900,
+            ),
+            markdown_body: [
+              `# Recurring responsibility: ${input.task.title}`,
+              "",
+              `- Cadence: ${recurringSignal.cadence}`,
+              recurringSignal.repeatDetails ? `- Repeat details: ${recurringSignal.repeatDetails}` : "",
+              recurringSignal.dueDate ? `- Current due date: ${recurringSignal.dueDate}` : "",
+              `- Show early: ${recurringSignal.showEarlyDays} day(s)`,
+              "",
+              compactMemoryText(input.task.description, 1400),
+            ].filter(Boolean).join("\n"),
+            memory_key: memoryKeyFromParts(["task", input.task.id, "recurring"]),
+            source_kind: sourceKind,
+            evidence,
+            confidence: "high",
+            confidence_score: Math.max(confidenceScore, 0.86),
+            importance: 92,
+            created_by: input.store.userId,
+          })
+        : Promise.resolve(null),
+      howToSignal
+        ? writeStore.upsertPositionProfileKnowledge(input.orgId, {
+            position_profile_id: profile.id,
+            source_task_id: input.task.id,
+            kind: "how_to",
+            title: input.task.title,
+            body: howToSignal.note,
+            markdown_body: [
+              `# How to: ${input.task.title}`,
+              "",
+              howToSignal.note,
+              "",
+              `Source event: ${input.eventType.replace(/_/g, " ")}`,
+            ].join("\n"),
+            memory_key: memoryKeyFromParts(["task", input.task.id, "how-to", input.eventType]),
+            source_kind: sourceKind,
+            evidence,
+            confidence,
+            confidence_score: confidenceScore,
+            importance: input.eventType === "completed" ? 84 : 66,
+            created_by: input.store.userId,
+          })
+        : Promise.resolve(null),
+    ]);
   } catch (error) {
     console.error("[donnit] position profile memory enrichment failed", error instanceof Error ? error.message : String(error));
   }
@@ -3412,6 +3532,28 @@ async function runDonnitTaskAutomation(input: {
         correlationId: result.correlationId,
       },
     });
+    if (input.task.position_profile_id && result.profile_memory_candidate) {
+      await input.store.upsertPositionProfileKnowledge(input.orgId, {
+        position_profile_id: input.task.position_profile_id,
+        source_task_id: input.task.id,
+        kind: "how_to",
+        title: input.task.title,
+        body: result.profile_memory_candidate,
+        markdown_body: [`# Assistant learning: ${input.task.title}`, "", result.profile_memory_candidate].join("\n"),
+        memory_key: memoryKeyFromParts(["assistant", input.task.id, "profile-memory-candidate"]),
+        source_kind: "assistant",
+        evidence: {
+          taskId: input.task.id,
+          assistantRunId: assistantRun.id,
+          correlationId: result.correlationId,
+          confidence: result.confidence,
+        },
+        confidence: result.confidence,
+        confidence_score: result.confidence === "high" ? 0.84 : result.confidence === "low" ? 0.4 : 0.62,
+        importance: result.confidence === "high" ? 82 : 62,
+        created_by: input.userId,
+      }).catch(() => null);
+    }
     await input.store.addEvent(input.orgId, {
       task_id: input.task.id,
       actor_id: input.userId,

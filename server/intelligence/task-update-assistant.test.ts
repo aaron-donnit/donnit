@@ -96,6 +96,26 @@ function mockStore(overrides: Partial<DonnitStore> = {}) {
         updated_at: "2026-05-13T00:00:00.000Z",
       },
     ]),
+    listPositionProfileKnowledge: vi.fn(async () => [
+      {
+        id: "knowledge-1",
+        org_id: "org-1",
+        position_profile_id: "role-1",
+        source_task_id: "task-1",
+        kind: "how_to",
+        title: "Prepare payroll report",
+        body: "Payroll reports require the final hours file before they can be completed.",
+        confidence: "high",
+        last_seen_at: "2026-05-13T13:00:00.000Z",
+        created_at: "2026-05-13T13:00:00.000Z",
+        memory_key: "task:task-1:how-to",
+        markdown_body: "# How to: Prepare payroll report\n\nUse the final hours file before completing payroll.",
+        source_kind: "task_event",
+        status: "active",
+        importance: 84,
+        confidence_score: 0.86,
+      },
+    ]),
     ...overrides,
     __modelCalls: modelCalls,
     __toolCalls: toolCalls,
@@ -141,6 +161,7 @@ describe("task update assistant skill", () => {
     expect(result.summary).toContain("blocked");
     expect(result.profile_memory_candidate).toContain("Payroll reports");
     expect(store.getTask).toHaveBeenCalledWith("task-1");
+    expect(store.listPositionProfileKnowledge).toHaveBeenCalledWith("org-1", "role-1");
     expect(store.__modelCalls).toHaveLength(2);
     expect(store.__toolCalls).toHaveLength(1);
     expect(store.updateAiSession).toHaveBeenCalledWith("session-1", expect.objectContaining({ status: "completed" }));

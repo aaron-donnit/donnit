@@ -51,6 +51,17 @@ const taskContextOutputSchema = z.object({
     risk_summary: z.string(),
     institutional_memory: z.record(z.unknown()),
   }).nullable(),
+  role_memory: z.array(z.object({
+    id: z.string(),
+    kind: z.string(),
+    title: z.string(),
+    body: z.string(),
+    markdown_body: z.string().optional(),
+    confidence: z.string(),
+    importance: z.number().optional(),
+    source_kind: z.string().optional(),
+    last_seen_at: z.string(),
+  })),
 });
 
 export const taskUpdateAssistantOutputSchema = z.object({
@@ -128,6 +139,7 @@ function taskContextOutputJsonSchema() {
     subtasks: { type: "array", items: { type: "object", additionalProperties: true } },
     recent_events: { type: "array", items: { type: "object", additionalProperties: true } },
     position_profile: { type: ["object", "null"], additionalProperties: true },
+    role_memory: { type: "array", items: { type: "object", additionalProperties: true } },
   });
 }
 
@@ -144,7 +156,7 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
     execute: async ({ task_id }) => {
       const task = await input.store.getTask(task_id);
       if (!task || task.org_id !== input.orgId) {
-        return { found: false, task: null, subtasks: [], recent_events: [], position_profile: null };
+        return { found: false, task: null, subtasks: [], recent_events: [], position_profile: null, role_memory: [] };
       }
       const [subtasks, events, profiles] = await Promise.all([
         input.store.listTaskSubtasks(input.orgId),
@@ -152,6 +164,7 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
         input.store.listPositionProfiles(input.orgId),
       ]);
       const profile = profiles.find((item) => item.id === task.position_profile_id) ?? null;
+      const roleMemory = profile ? await input.store.listPositionProfileKnowledge(input.orgId, profile.id) : [];
       return {
         found: true,
         task: compactTask(task),
@@ -174,6 +187,17 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
             created_at: event.created_at,
           })),
         position_profile: compactProfile(profile),
+        role_memory: roleMemory.slice(0, 12).map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+          body: item.body,
+          markdown_body: item.markdown_body,
+          confidence: item.confidence,
+          importance: item.importance,
+          source_kind: item.source_kind,
+          last_seen_at: item.last_seen_at,
+        })),
       };
     },
   });
@@ -222,7 +246,7 @@ export async function draftTaskUpdateWithAgent(input: {
         "You reason on behalf of the position profile or task owner, not as a generic chatbot.",
         "You must call get_task_context before answering.",
         "Do not claim to have completed external work; this v1 skill is read-only and reports what should happen next.",
-        "Use task notes, subtasks, activity, and position memory when present.",
+        "Use task notes, subtasks, activity, durable role_memory, and position memory when present.",
         "If context is missing, say exactly what is missing and keep confidence low.",
         "Return concise JSON. suggested_update should be written in a human work-update style that can be shown inside Donnit.",
         "profile_memory_candidate should contain one reusable role-learning insight only when the context reveals a repeatable duty, decision rule, relationship, or timing pattern.",

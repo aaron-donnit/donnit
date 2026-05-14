@@ -13,6 +13,21 @@ Status key:
 
 ## Open Features
 
+### Product Refinement Sprint: Memory, Intelligence, UI
+
+Status: In progress
+
+Goal: Strengthen Donnit around the three product weaknesses identified on 2026-05-14 before customer onboarding:
+
+1. Durable role memory and learning: Position Profiles need a source-backed, searchable, editable memory system that survives employee transitions and can be read by Donnit AI.
+2. Chat and automation intelligence: Chat, email, Slack, SMS, and assistant workflows need better interpretation, clarification, and role-aware responses comparable to modern AI work platforms.
+3. UI simplification: The command center, admin portal, and Position Profiles need less clutter, clearer navigation, and sharper first-use paths.
+
+Current focus:
+
+- Build a cloud-backed Position Profile memory vault using Supabase `position_profile_knowledge`, inspired by Obsidian's durable Markdown-file model but workspace-scoped and transition-safe.
+- Make Donnit AI read from this durable role memory when drafting task updates or handoff intelligence.
+
 ### Agentic AI Assistant
 
 Status: In progress

@@ -93,6 +93,14 @@ function memorySnippets(role: DonnitPositionProfile, query: string, topK: number
     .slice(0, topK);
 }
 
+function scoreKnowledge(query: string, title: string, body: string) {
+  const normalizedQuery = query.toLowerCase();
+  const text = `${title} ${body}`.toLowerCase();
+  const words = normalizedQuery.split(/\s+/).filter((word) => word.length >= 3);
+  const matches = words.filter((word) => text.includes(word)).length;
+  return Math.min(0.95, 0.35 + matches * 0.15);
+}
+
 export function createHandoverToolRegistry(input: { store: DonnitStore; orgId: string }) {
   const registry = new ToolRegistry();
   registry.register({
@@ -168,7 +176,24 @@ export function createHandoverToolRegistry(input: { store: DonnitStore; orgId: s
     idempotent: true,
     execute: async ({ role_id, query, top_k }) => {
       const role = (await input.store.listPositionProfiles(input.orgId)).find((item) => item.id === role_id);
-      return { items: role ? memorySnippets(role, query, top_k ?? 5) : [] };
+      if (!role) return { items: [] };
+      const durable = await input.store.listPositionProfileKnowledge(input.orgId, role.id);
+      const durableItems = durable.map((item) => ({
+        source: `position_profile_knowledge.${item.id}`,
+        kind: item.kind,
+        title: item.title,
+        snippet: item.markdown_body || item.body,
+        score: scoreKnowledge(query, item.title, `${item.body} ${item.markdown_body ?? ""}`),
+        confidence: item.confidence,
+        importance: item.importance,
+        source_kind: item.source_kind,
+        last_seen_at: item.last_seen_at,
+      }));
+      return {
+        items: [...durableItems, ...memorySnippets(role, query, top_k ?? 5)]
+          .sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0))
+          .slice(0, top_k ?? 5),
+      };
     },
   });
   registry.register({

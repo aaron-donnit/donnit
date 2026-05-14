@@ -247,6 +247,44 @@ export type DonnitPositionProfileAssignment = {
   created_at: string;
 };
 
+export type DonnitPositionProfileKnowledgeKind =
+  | "how_to"
+  | "recurring_responsibility"
+  | "stakeholder"
+  | "tool"
+  | "risk"
+  | "critical_date"
+  | "decision_rule"
+  | "relationship"
+  | "process"
+  | "preference"
+  | "handoff_note";
+
+export type DonnitPositionProfileKnowledge = {
+  id: string;
+  org_id: string;
+  position_profile_id: string;
+  source_task_id: string | null;
+  kind: DonnitPositionProfileKnowledgeKind;
+  title: string;
+  body: string;
+  confidence: "low" | "medium" | "high";
+  last_seen_at: string;
+  created_at: string;
+  memory_key?: string;
+  markdown_body?: string;
+  source_kind?: "task" | "task_event" | "email" | "slack" | "sms" | "document" | "manual" | "assistant" | "profile_transfer";
+  source_event_id?: string | null;
+  source_ref?: string;
+  evidence?: Record<string, unknown>;
+  status?: "active" | "superseded" | "archived" | "rejected";
+  importance?: number;
+  confidence_score?: number;
+  created_by?: string | null;
+  updated_at?: string;
+  archived_at?: string | null;
+};
+
 export type DonnitUserWorkspaceState = {
   id: string;
   org_id: string;
@@ -1039,5 +1077,78 @@ export class DonnitStore {
       throw wrapSupabaseError("create position_profile_assignment failed", error);
     }
     return data as DonnitPositionProfileAssignment;
+  }
+
+  async listPositionProfileKnowledge(orgId: string, positionProfileId: string): Promise<DonnitPositionProfileKnowledge[]> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileKnowledge)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("position_profile_id", positionProfileId)
+      .or("archived_at.is.null,status.eq.active")
+      .order("importance", { ascending: false })
+      .order("last_seen_at", { ascending: false })
+      .limit(100);
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return [];
+      throw wrapSupabaseError("list position_profile_knowledge failed", error);
+    }
+    return (data ?? []) as DonnitPositionProfileKnowledge[];
+  }
+
+  async upsertPositionProfileKnowledge(
+    orgId: string,
+    input: Pick<DonnitPositionProfileKnowledge, "position_profile_id" | "kind" | "title"> &
+      Partial<
+        Pick<
+          DonnitPositionProfileKnowledge,
+          | "source_task_id"
+          | "body"
+          | "confidence"
+          | "memory_key"
+          | "markdown_body"
+          | "source_kind"
+          | "source_event_id"
+          | "source_ref"
+          | "evidence"
+          | "status"
+          | "importance"
+          | "confidence_score"
+          | "created_by"
+        >
+      >,
+  ): Promise<DonnitPositionProfileKnowledge | null> {
+    const now = new Date().toISOString();
+    const payload = {
+      org_id: orgId,
+      position_profile_id: input.position_profile_id,
+      source_task_id: input.source_task_id ?? null,
+      kind: input.kind,
+      title: input.title,
+      body: input.body ?? "",
+      confidence: input.confidence ?? "medium",
+      last_seen_at: now,
+      memory_key: input.memory_key ?? undefined,
+      markdown_body: input.markdown_body ?? "",
+      source_kind: input.source_kind ?? "task",
+      source_event_id: input.source_event_id ?? null,
+      source_ref: input.source_ref ?? "",
+      evidence: input.evidence ?? {},
+      status: input.status ?? "active",
+      importance: input.importance ?? 50,
+      confidence_score: input.confidence_score ?? (input.confidence === "high" ? 0.85 : input.confidence === "low" ? 0.35 : 0.6),
+      created_by: input.created_by ?? this.userId,
+      updated_at: now,
+    };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileKnowledge)
+      .upsert(payload, { onConflict: "org_id,position_profile_id,memory_key" })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("upsert position_profile_knowledge failed", error);
+    }
+    return data as DonnitPositionProfileKnowledge;
   }
 }
