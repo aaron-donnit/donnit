@@ -1007,8 +1007,8 @@ function stripAssigneePhrases(message: string, assigneeLabels: string[]) {
       .replace(new RegExp(`\\b(?:route|transfer|hand\\s*off|handoff)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\b(?:give|send)(?: this)?(?: task)?\\s+to\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bput\\s+(?:this|it)?\\s*(?:on\\s+)?${safe}(?:'s)?\\s+plate\\b`, "gi"), "")
-      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+(?=(?:go\\s+through|handle|own|complete|compet|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take\\s+care\\s+of|work\\s+on)\\b)`, "gi"), "")
-      .replace(new RegExp(`\\b(?:have|get|ask)\\s+${safe}\\s+to\\s+(?:urgently\\s+|quickly\\s+|please\\s+)?(?:take\\s+care\\s+of|handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)?\\s*`, "gi"), "")
+      .replace(new RegExp(`\\b(?:have|get|ask)\\s+(?:the\\s+)?${safe}\\s+(?=(?:go\\s+through|handle|own|complete|compet|review|finish|do|send|prepare|prep|draft|update|call|email|follow|schedule|reschedule|book|take\\s+care\\s+of|work\\s+on)\\b)`, "gi"), "")
+      .replace(new RegExp(`\\b(?:have|get|ask)\\s+(?:the\\s+)?${safe}\\s+to\\s+(?:urgently\\s+|quickly\\s+|please\\s+)?(?:take\\s+care\\s+of|handle|own|complete|review|finish|do|send|prepare|draft|update|call|email|follow)?\\s*`, "gi"), "")
       .replace(new RegExp(`\\bfor\\s+${safe}\\b`, "gi"), "")
       .replace(new RegExp(`@${safe}\\b`, "gi"), "");
   }
@@ -1024,6 +1024,7 @@ const operationalCorrectionVocabulary = [
   "appointment",
   "assign",
   "assigned",
+  "assistant",
   "attachment",
   "board",
   "before",
@@ -1064,6 +1065,7 @@ const operationalCorrectionVocabulary = [
   "prepare",
   "priority",
   "project",
+  "proposal",
   "quarter",
   "quarterly",
   "recurring",
@@ -1255,9 +1257,19 @@ function languageClarificationFromMessage(message: string) {
 function normalizeCommonTaskTypos(value: string) {
   const normalized = value
     .replace(/\btha\b/gi, "the")
+    .replace(/\bassisnt\b/gi, "assistant")
+    .replace(/\bassit(?:a|)nt\b/gi, "assistant")
+    .replace(/\bassitant\b/gi, "assistant")
+    .replace(/\bassistan\b/gi, "assistant")
+    .replace(/\bassistent\b/gi, "assistant")
+    .replace(/\bassistance\b/gi, "assistant")
     .replace(/\bcompet\b/gi, "complete")
     .replace(/\bcompelte\b/gi, "complete")
     .replace(/\bcompelete\b/gi, "complete")
+    .replace(/\bpoposal\b/gi, "proposal")
+    .replace(/\bproposl\b/gi, "proposal")
+    .replace(/\bpropsal\b/gi, "proposal")
+    .replace(/\bpropsoal\b/gi, "proposal")
     .replace(/\bproj(?:e|)kt\b/gi, "project")
     .replace(/\bprojet\b/gi, "project")
     .replace(/\bprojct\b/gi, "project")
@@ -1275,10 +1287,13 @@ function normalizeCommonTaskTypos(value: string) {
 function stripRoleAssignmentPhrases(message: string, roleLabels: string[]) {
   let cleaned = message;
   const verbs = "assign|delegate|reassign|route|transfer|hand\\s*off|handoff|send|get|have|ask";
+  const actionVerbs = "go\\s+through|handle|own|complete|review|finish|do|send|prepare|prep|compile|draft|update|call|email|follow|schedule|reschedule|book|take\\s+care\\s+of|work\\s+on|create|write|pull|submit|finalize|revise";
   for (const label of roleLabels) {
     const safe = escapeRegExp(label.trim());
     if (!safe) continue;
     cleaned = cleaned
+      .replace(new RegExp(`\\b(?:please\\s+)?(?:have|get|ask)\\s+(?:the\\s+)?${safe}\\s+(?=(?:${actionVerbs})\\b)`, "gi"), "")
+      .replace(new RegExp(`\\b(?:please\\s+)?(?:${verbs})\\s+(?:the\\s+)?${safe}\\s+(?=(?:${actionVerbs})\\b)`, "gi"), "")
       .replace(new RegExp(`\\b(?:please\\s+)?(?:${verbs})\\s+(?:the\\s+)?${safe}\\s+(?:with|to|for)\\s+`, "gi"), "")
       .replace(new RegExp(`\\b(?:please\\s+)?(?:${verbs})\\s+(?:this\\s+)?(?:task\\s+)?(?:to\\s+)?(?:the\\s+)?${safe}\\b`, "gi"), "")
       .replace(new RegExp(`\\bto\\s+(?:the\\s+)?${safe}(?=\\s|$)`, "gi"), "")
@@ -4016,6 +4031,26 @@ function profileMatchesText(profile: DonnitPositionProfile, message: string) {
   return words.length >= 2 && words.every((word) => haystack.includes(word));
 }
 
+function fuzzyRoleTokenMatches(source: string, target: string) {
+  if (source === target) return true;
+  if (source.length < 5 || target.length < 5) return false;
+  const distance = levenshteinDistance(source, target);
+  return distance <= 2 && spellingSimilarity(source, target) >= 0.72;
+}
+
+function fuzzyAliasScore(alias: string, normalizedMessage: string) {
+  const aliasWords = normalizedProfileSearchText(alias).split(" ").filter((word) => word.length >= 3);
+  const messageWords = normalizedMessage.split(" ").filter(Boolean);
+  if (aliasWords.length === 0 || messageWords.length === 0) return 0;
+  if (aliasWords.length === 1) {
+    return messageWords.some((word) => fuzzyRoleTokenMatches(word, aliasWords[0])) ? 5 : 0;
+  }
+  const matchedAll = aliasWords.every((aliasWord) =>
+    messageWords.some((word) => word === aliasWord || fuzzyRoleTokenMatches(word, aliasWord)),
+  );
+  return matchedAll ? 6.5 : 0;
+}
+
 function titleDerivedRoleAliases(title: string) {
   const words = normalizedProfileSearchText(title).split(" ").filter((word) => word.length >= 3);
   const aliases = new Set<string>();
@@ -4120,7 +4155,7 @@ function rankMentionedPositionProfileCandidates(
           if (normalized === alias) return 10;
           if (normalized.includes(alias)) return alias.split(" ").length > 1 ? 8 : 6;
           const tokens = new Set(normalized.split(" "));
-          return tokens.has(alias) ? 5 : 0;
+          return tokens.has(alias) ? 5 : fuzzyAliasScore(alias, normalized);
         }),
       );
       const storedScore = storedAliasScoreForProfile(message, profile, aliases, context);

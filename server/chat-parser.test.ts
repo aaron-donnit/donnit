@@ -134,6 +134,17 @@ describe("chat task parser", () => {
     expect(__chatParserTest.needsSpecificActionClarification("Work on the client deck for our processing call", prompt)).toBe(true);
   });
 
+  it("normalizes assistant and proposal typos in role-based assignment", () => {
+    const prompt = "have the assisnt draft a poposal for the new lease in manhattan";
+
+    expect(__chatParserTest.normalizeCommonTaskTypos(prompt)).toBe(
+      "have the assistant draft a proposal for the new lease in manhattan",
+    );
+    expect(
+      __chatParserTest.titleFromMessage(prompt, ["Jordan Lee", "jordan@example.com", "assistant", "Executive Assistant to the CEO"]),
+    ).toBe("Draft a proposal for the new lease in manhattan");
+  });
+
   it("detects compact clock times that need AM or PM clarification", () => {
     expect(__chatParserTest.ambiguousCompactClockTime("call Maya at 230")).toMatchObject({
       display: "2:30",

@@ -277,6 +277,17 @@ const evalCases: Array<{
     },
   },
   {
+    name: "routes misspelled assistant role to Executive Assistant profile owner",
+    message: "have the assisnt draft a poposal for the new lease in manhattan",
+    expected: {
+      assignedToId: "user-jordan",
+      positionProfileId: "profile-ea",
+      title: "Draft a proposal for the new lease in manhattan",
+      missing: ["dueDate"],
+      titleExcludes: ["assisnt", "assistnt", "poposal"],
+    },
+  },
+  {
     name: "routes assistant alias to Executive Assistant profile owner",
     message: "assign the assistant with preparing the board packet by eod friday",
     expected: {
