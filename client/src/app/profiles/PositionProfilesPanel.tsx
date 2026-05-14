@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
   ListChecks,
   ListPlus,
   Loader2,
+  Paperclip,
   Repeat2,
   Search,
   ShieldCheck,
@@ -65,6 +66,12 @@ type TaskMemoryFormStep = {
   estimatedMinutes: number;
 };
 
+type CapturedAttachment = {
+  name: string;
+  kind: "Document" | "Image" | "Spreadsheet" | "Other";
+  size: number;
+};
+
 type TaskMemoryDraft = {
   title: string;
   objective: string;
@@ -76,6 +83,7 @@ type TaskMemoryDraft = {
   guidelines: string;
   importantInformation: string;
   attachmentReferences: string;
+  attachments: CapturedAttachment[];
   steps: TaskMemoryFormStep[];
 };
 
@@ -111,8 +119,21 @@ function emptyTaskMemoryDraft(): TaskMemoryDraft {
     guidelines: "",
     importantInformation: "",
     attachmentReferences: "",
+    attachments: [],
     steps: [emptyTaskMemoryStep(0), emptyTaskMemoryStep(1)],
   };
+}
+
+function classifyAttachment(file: File): CapturedAttachment["kind"] {
+  const lower = file.name.toLowerCase();
+  if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(lower)) return "Image";
+  if (/\.(csv|xls|xlsx|numbers)$/i.test(lower)) return "Spreadsheet";
+  if (file.type.includes("pdf") || /\.(pdf|doc|docx|txt|rtf|md)$/i.test(lower)) return "Document";
+  return "Other";
+}
+
+function attachmentSummaryLines(attachments: CapturedAttachment[]) {
+  return attachments.map((file) => `Attachment captured: [${file.kind}] ${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`);
 }
 
 export default function PositionProfilesPanel({
@@ -179,6 +200,8 @@ export default function PositionProfilesPanel({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [taskMemoryOpen, setTaskMemoryOpen] = useState(false);
   const [taskMemoryDraft, setTaskMemoryDraft] = useState<TaskMemoryDraft>(() => emptyTaskMemoryDraft());
+  const [taskMemoryDraggingFiles, setTaskMemoryDraggingFiles] = useState(false);
+  const taskMemoryAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [assignmentDialogOpen, setAssignmentDialogOpen] = useState(false);
   const [newProfileTitle, setNewProfileTitle] = useState("");
@@ -416,7 +439,8 @@ export default function PositionProfilesPanel({
         confidenceScore: 0.9,
         guidelines: input.guidelines.trim(),
         importantInformation: input.importantInformation.trim(),
-        attachmentReferences: input.attachmentReferences.trim(),
+        attachmentReferences: [input.attachmentReferences.trim(), ...attachmentSummaryLines(input.attachments)].filter(Boolean).join("\n"),
+        attachmentFiles: input.attachments,
         steps: cleanedSteps,
       });
       return (await res.json()) as PositionProfileTaskMemory;
@@ -792,6 +816,26 @@ export default function PositionProfilesPanel({
     setTaskMemoryDraft((current) => ({
       ...current,
       steps: current.steps.length <= 1 ? current.steps : current.steps.filter((_, stepIndex) => stepIndex !== index),
+    }));
+  }
+
+  function captureTaskMemoryFiles(fileList: FileList | null) {
+    const captured = Array.from(fileList ?? []).map((file) => ({
+      name: file.name,
+      kind: classifyAttachment(file),
+      size: file.size,
+    }));
+    if (captured.length === 0) return;
+    setTaskMemoryDraft((current) => ({
+      ...current,
+      attachments: [...current.attachments, ...captured].slice(0, 12),
+    }));
+  }
+
+  function removeTaskMemoryAttachment(index: number) {
+    setTaskMemoryDraft((current) => ({
+      ...current,
+      attachments: current.attachments.filter((_, itemIndex) => itemIndex !== index),
     }));
   }
 
@@ -1258,6 +1302,16 @@ export default function PositionProfilesPanel({
                                 <span className="font-medium text-foreground">References:</span> {memoryMetadataText(memory, "attachmentReferences")}
                               </p>
                             )}
+                            {memoryAttachmentFiles(memory).length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {memoryAttachmentFiles(memory).slice(0, 4).map((file) => (
+                                  <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-[10px] text-muted-foreground">
+                                    <Paperclip className="size-3" />
+                                    {file.name}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                             {memory.steps.length > 0 && (
                               <ol className="mt-2 space-y-1 text-xs text-muted-foreground">
                                 {memory.steps.slice(0, 4).map((step, index) => (
@@ -1517,14 +1571,78 @@ export default function PositionProfilesPanel({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="task-memory-attachments">Attachments / references</Label>
-                  <Textarea
-                    id="task-memory-attachments"
-                    value={taskMemoryDraft.attachmentReferences}
-                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, attachmentReferences: event.target.value }))}
-                    placeholder="Paste links, filenames, folder paths, or source systems. File upload comes after storage permissions are finalized."
-                    rows={3}
-                    maxLength={4000}
-                  />
+                  <div className="rounded-md border border-border bg-background p-3">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <Textarea
+                        id="task-memory-attachments"
+                        value={taskMemoryDraft.attachmentReferences}
+                        onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, attachmentReferences: event.target.value }))}
+                        placeholder="Paste links, filenames, folder paths, or source systems."
+                        rows={3}
+                        maxLength={4000}
+                      />
+                      <Button type="button" variant="outline" onClick={() => taskMemoryAttachmentInputRef.current?.click()}>
+                        <Paperclip className="size-4" />
+                        Choose files
+                      </Button>
+                      <input
+                        ref={taskMemoryAttachmentInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          captureTaskMemoryFiles(event.target.files);
+                          event.target.value = "";
+                        }}
+                        data-testid="input-task-memory-attachments"
+                      />
+                    </div>
+                    <div
+                      className={`mt-2 rounded-md border border-dashed px-3 py-3 text-xs transition ${
+                        taskMemoryDraggingFiles ? "border-brand-green bg-brand-green/10" : "border-border bg-muted/30"
+                      }`}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        setTaskMemoryDraggingFiles(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setTaskMemoryDraggingFiles(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        setTaskMemoryDraggingFiles(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        captureTaskMemoryFiles(event.dataTransfer.files);
+                        setTaskMemoryDraggingFiles(false);
+                      }}
+                      data-testid="dropzone-task-memory-attachments"
+                    >
+                      <div className="flex items-center gap-2 font-medium text-foreground">
+                        <Paperclip className="size-3.5" />
+                        Drop files here
+                      </div>
+                      {taskMemoryDraft.attachments.length > 0 ? (
+                        <div className="mt-2 space-y-1">
+                          {taskMemoryDraft.attachments.map((file, index) => (
+                            <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1">
+                              <span className="min-w-0 truncate">{file.name}</span>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className="text-[10px] text-muted-foreground">{file.kind}</span>
+                                <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => removeTaskMemoryAttachment(index)} aria-label={`Remove ${file.name}`}>
+                                  <X className="size-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">Chosen files are recorded with this Task Memory workflow.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2040,6 +2158,23 @@ function canManageTaskMemoryForProfile(profile: PositionProfile, currentUser: Us
 function memoryMetadataText(memory: PositionProfileTaskMemory, key: "guidelines" | "importantInformation" | "attachmentReferences") {
   const value = memory.learnedFrom?.[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function memoryAttachmentFiles(memory: PositionProfileTaskMemory): CapturedAttachment[] {
+  const value = memory.learnedFrom?.attachmentFiles;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Partial<CapturedAttachment>;
+      if (!record.name || !record.kind) return null;
+      return {
+        name: String(record.name),
+        kind: ["Document", "Image", "Spreadsheet", "Other"].includes(String(record.kind)) ? record.kind : "Other",
+        size: Number(record.size ?? 0),
+      } satisfies CapturedAttachment;
+    })
+    .filter((item): item is CapturedAttachment => Boolean(item));
 }
 
 function buildReadinessItems(profile: PositionProfile, users: User[], learnedHowToCount: number, recurringGapCount: number) {

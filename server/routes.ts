@@ -4535,6 +4535,11 @@ const taskMemoryCreateSchema = z.object({
   guidelines: z.string().trim().max(4000).optional().default(""),
   importantInformation: z.string().trim().max(4000).optional().default(""),
   attachmentReferences: z.string().trim().max(4000).optional().default(""),
+  attachmentFiles: z.array(z.object({
+    name: z.string().trim().min(1).max(240),
+    kind: z.enum(["Document", "Image", "Spreadsheet", "Other"]),
+    size: z.number().int().min(0).max(250_000_000),
+  })).max(12).optional().default([]),
   steps: z.array(taskMemoryStepSchema).max(80).optional().default([]),
 });
 
@@ -8695,6 +8700,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           guidelines: input.guidelines,
           importantInformation: input.importantInformation,
           attachmentReferences: input.attachmentReferences,
+          attachmentFiles: input.attachmentFiles,
           workflowMode: "sequential_steps",
         },
         created_by: auth.userId,
