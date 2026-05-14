@@ -39,6 +39,7 @@ export const DONNIT_TABLES = {
   positionProfileTaskMemorySteps: "position_profile_task_memory_steps",
   positionProfileTaskMemoryRuns: "position_profile_task_memory_runs",
   positionProfileTaskMemoryStepRuns: "position_profile_task_memory_step_runs",
+  positionProfileTaskMemoryAttachments: "position_profile_task_memory_attachments",
 } as const;
 
 export function getSupabaseConfig() {

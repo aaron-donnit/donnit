@@ -70,6 +70,8 @@ type CapturedAttachment = {
   name: string;
   kind: "Document" | "Image" | "Spreadsheet" | "Other";
   size: number;
+  contentType: string;
+  file?: File;
 };
 
 type TaskMemoryDraft = {
@@ -134,6 +136,15 @@ function classifyAttachment(file: File): CapturedAttachment["kind"] {
 
 function attachmentSummaryLines(attachments: CapturedAttachment[]) {
   return attachments.map((file) => `Attachment captured: [${file.kind}] ${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`);
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? "").split(",").pop() ?? "");
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read attachment."));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function PositionProfilesPanel({
@@ -415,6 +426,7 @@ export default function PositionProfilesPanel({
   const createTaskMemory = useMutation({
     mutationFn: async (input: TaskMemoryDraft) => {
       if (!selectedProfile) throw new Error("Choose a Position Profile first.");
+      const profileId = selectedProfile.id;
       const cleanedSteps = input.steps
         .map((step, index) => ({
           title: step.title.trim(),
@@ -427,7 +439,8 @@ export default function PositionProfilesPanel({
           position: index,
         }))
         .filter((step) => step.title.length > 0);
-      const res = await apiRequest("POST", `/api/position-profiles/${selectedProfile.id}/task-memory`, {
+      const pendingUploads = input.attachments.filter((attachment) => attachment.file);
+      const res = await apiRequest("POST", `/api/position-profiles/${profileId}/task-memory`, {
         title: input.title.trim(),
         objective: input.objective.trim(),
         cadence: input.cadence,
@@ -440,18 +453,44 @@ export default function PositionProfilesPanel({
         guidelines: input.guidelines.trim(),
         importantInformation: input.importantInformation.trim(),
         attachmentReferences: [input.attachmentReferences.trim(), ...attachmentSummaryLines(input.attachments)].filter(Boolean).join("\n"),
-        attachmentFiles: input.attachments,
+        attachmentFiles: input.attachments.map((attachment) => ({
+          name: attachment.name,
+          kind: attachment.kind,
+          size: attachment.size,
+          contentType: attachment.contentType,
+        })),
         steps: cleanedSteps,
       });
-      return (await res.json()) as PositionProfileTaskMemory;
+      const memory = (await res.json()) as PositionProfileTaskMemory;
+      const uploadFailures: string[] = [];
+      for (const attachment of pendingUploads) {
+        try {
+          if (!attachment.file) continue;
+          const dataBase64 = await fileToBase64(attachment.file);
+          await apiRequest("POST", `/api/position-profiles/${profileId}/task-memory/${memory.id}/attachments`, {
+            fileName: attachment.name,
+            contentType: attachment.contentType || "application/octet-stream",
+            size: attachment.size,
+            kind: attachment.kind,
+            dataBase64,
+          });
+        } catch (error) {
+          uploadFailures.push(`${attachment.name}: ${error instanceof Error ? error.message : "upload failed"}`);
+        }
+      }
+      return { memory, uploadFailures };
     },
-    onSuccess: async (memory) => {
+    onSuccess: async ({ memory, uploadFailures }) => {
       await queryClient.invalidateQueries({ queryKey: ["position-profile-task-memory", selectedProfile?.id ?? ""] });
       setTaskMemoryOpen(false);
       setTaskMemoryDraft(emptyTaskMemoryDraft());
       setSheetOpen(true);
       setSheetTab("recurring");
-      toast({ title: "Task Memory created", description: `${memory.title} is ready as a reusable workflow.` });
+      toast({
+        title: uploadFailures.length > 0 ? "Task Memory saved, attachment issue" : "Task Memory created",
+        description: uploadFailures.length > 0 ? uploadFailures[0] : `${memory.title} is ready as a reusable workflow.`,
+        variant: uploadFailures.length > 0 ? "destructive" : undefined,
+      });
     },
     onError: (error: unknown) => {
       toast({
@@ -824,6 +863,8 @@ export default function PositionProfilesPanel({
       name: file.name,
       kind: classifyAttachment(file),
       size: file.size,
+      contentType: file.type || "application/octet-stream",
+      file,
     }));
     if (captured.length === 0) return;
     setTaskMemoryDraft((current) => ({
@@ -837,6 +878,21 @@ export default function PositionProfilesPanel({
       ...current,
       attachments: current.attachments.filter((_, itemIndex) => itemIndex !== index),
     }));
+  }
+
+  async function downloadTaskMemoryAttachment(memory: PositionProfileTaskMemory, attachmentId: Id) {
+    if (!selectedProfile) return;
+    try {
+      const res = await apiRequest("GET", `/api/position-profiles/${selectedProfile.id}/task-memory/${memory.id}/attachments/${attachmentId}/download`);
+      const data = (await res.json()) as { ok: boolean; url: string };
+      if (data.url && typeof window !== "undefined") window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      toast({
+        title: "Could not open attachment",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
+    }
   }
 
   function toggleExpanded(profileId: string) {
@@ -1304,12 +1360,24 @@ export default function PositionProfilesPanel({
                             )}
                             {memoryAttachmentFiles(memory).length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-1">
-                                {memoryAttachmentFiles(memory).slice(0, 4).map((file) => (
-                                  <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-[10px] text-muted-foreground">
-                                    <Paperclip className="size-3" />
-                                    {file.name}
-                                  </span>
-                                ))}
+                                {memory.attachments.length > 0
+                                  ? memory.attachments.slice(0, 4).map((file) => (
+                                      <button
+                                        key={String(file.id)}
+                                        type="button"
+                                        onClick={() => downloadTaskMemoryAttachment(memory, file.id)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                                      >
+                                        <Paperclip className="size-3" />
+                                        {file.fileName}
+                                      </button>
+                                    ))
+                                  : memoryAttachmentFiles(memory).slice(0, 4).map((file) => (
+                                      <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-[10px] text-muted-foreground">
+                                        <Paperclip className="size-3" />
+                                        {file.name}
+                                      </span>
+                                    ))}
                               </div>
                             )}
                             {memory.steps.length > 0 && (
@@ -2161,6 +2229,14 @@ function memoryMetadataText(memory: PositionProfileTaskMemory, key: "guidelines"
 }
 
 function memoryAttachmentFiles(memory: PositionProfileTaskMemory): CapturedAttachment[] {
+  if (memory.attachments?.length > 0) {
+    return memory.attachments.map((attachment) => ({
+      name: attachment.fileName,
+      kind: attachment.kind,
+      size: attachment.fileSize,
+      contentType: attachment.contentType,
+    }));
+  }
   const value = memory.learnedFrom?.attachmentFiles;
   if (!Array.isArray(value)) return [];
   return value
@@ -2172,6 +2248,7 @@ function memoryAttachmentFiles(memory: PositionProfileTaskMemory): CapturedAttac
         name: String(record.name),
         kind: ["Document", "Image", "Spreadsheet", "Other"].includes(String(record.kind)) ? record.kind : "Other",
         size: Number(record.size ?? 0),
+        contentType: String((record as { contentType?: unknown }).contentType ?? "application/octet-stream"),
       } satisfies CapturedAttachment;
     })
     .filter((item): item is CapturedAttachment => Boolean(item));

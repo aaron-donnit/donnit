@@ -52,6 +52,7 @@ export async function createApiApp(httpServer: Server | null): Promise<Express> 
 
   app.use(
     express.json({
+      limit: "30mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },

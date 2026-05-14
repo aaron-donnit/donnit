@@ -39,6 +39,7 @@ import {
   type DonnitEmailSuggestion,
   type DonnitPositionProfile,
   type DonnitPositionProfileKnowledge,
+  type DonnitPositionProfileTaskMemoryAttachment,
   type DonnitPositionProfileTaskMemory,
   type DonnitWorkspaceMemoryAlias,
   type DonnitTask,
@@ -1785,6 +1786,19 @@ function toClientPositionProfileTaskMemory(memory: DonnitPositionProfileTaskMemo
       createdAt: step.created_at,
       updatedAt: step.updated_at,
     })),
+    attachments: (memory.attachments ?? []).map(toClientPositionProfileTaskMemoryAttachment),
+  };
+}
+
+function toClientPositionProfileTaskMemoryAttachment(attachment: DonnitPositionProfileTaskMemoryAttachment) {
+  return {
+    id: attachment.id,
+    taskMemoryId: attachment.task_memory_id,
+    fileName: attachment.file_name,
+    contentType: attachment.content_type,
+    fileSize: attachment.file_size,
+    kind: attachment.kind,
+    createdAt: attachment.created_at,
   };
 }
 
@@ -1881,6 +1895,16 @@ function canManagePositionProfileTaskMemory(
   if (String(actor?.role ?? "") !== "manager") return false;
   const owner = members.find((member) => member.user_id === profile.current_owner_id);
   return owner?.manager_id === actorId;
+}
+
+function taskMemoryStoragePath(input: { orgId: string; profileId: string; memoryId: string; fileName: string }) {
+  const safeName = input.fileName
+    .normalize("NFKD")
+    .replace(/[^\w.\- ]+/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 120) || "attachment";
+  return `${input.orgId}/${input.profileId}/${input.memoryId}/${crypto.randomUUID()}-${safeName}`;
 }
 
 function isWorkspaceMember(member: { role?: string | null; status?: string | null } | null | undefined) {
@@ -4541,6 +4565,14 @@ const taskMemoryCreateSchema = z.object({
     size: z.number().int().min(0).max(250_000_000),
   })).max(12).optional().default([]),
   steps: z.array(taskMemoryStepSchema).max(80).optional().default([]),
+});
+
+const taskMemoryAttachmentUploadSchema = z.object({
+  fileName: z.string().trim().min(1).max(240),
+  contentType: z.string().trim().max(160).optional().default("application/octet-stream"),
+  size: z.number().int().min(1).max(25_000_000),
+  kind: z.enum(["Document", "Image", "Spreadsheet", "Other"]).default("Other"),
+  dataBase64: z.string().min(1),
 });
 
 type DemoTaskSeed = {
@@ -8720,6 +8752,167 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       res.status(201).json(toClientPositionProfileTaskMemory(memory));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/position-profiles/:id/task-memory/:memoryId/attachments", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskMemoryAttachmentUploadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Attachment details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Task Memory file storage needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const store = new DonnitStore(admin, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles, memories] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+        store.listPositionProfileTaskMemories(orgId, String(req.params.id)),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      const memory = memories.find((item) => item.id === String(req.params.memoryId));
+      if (!profile || !memory) {
+        res.status(404).json({ message: "Task Memory workflow not found." });
+        return;
+      }
+      if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can upload Task Memory attachments." });
+        return;
+      }
+      const input = parsed.data;
+      const base64 = input.dataBase64.includes(",") ? input.dataBase64.split(",").pop() ?? "" : input.dataBase64;
+      const buffer = Buffer.from(base64, "base64");
+      if (buffer.length === 0 || buffer.length > 25_000_000 || Math.abs(buffer.length - input.size) > 4) {
+        res.status(400).json({ message: "Attachment payload size is invalid." });
+        return;
+      }
+      const bucketId = "donnit-task-memory-attachments";
+      const storagePath = taskMemoryStoragePath({ orgId, profileId: profile.id, memoryId: memory.id, fileName: input.fileName });
+      const { error: uploadError } = await admin.storage
+        .from(bucketId)
+        .upload(storagePath, buffer, {
+          contentType: input.contentType || "application/octet-stream",
+          upsert: false,
+        });
+      if (uploadError) {
+        res.status(500).json({ message: `Could not upload attachment: ${uploadError.message}` });
+        return;
+      }
+      const attachment = await store.createPositionProfileTaskMemoryAttachment(orgId, {
+        position_profile_id: profile.id,
+        task_memory_id: memory.id,
+        bucket_id: bucketId,
+        storage_path: storagePath,
+        file_name: input.fileName,
+        content_type: input.contentType || "application/octet-stream",
+        file_size: buffer.length,
+        kind: input.kind,
+        uploaded_by: auth.userId,
+      });
+      if (!attachment) {
+        await admin.storage.from(bucketId).remove([storagePath]);
+        res.status(409).json({ message: "Task Memory attachment table is not available. Apply the latest Supabase migration." });
+        return;
+      }
+      res.status(201).json(toClientPositionProfileTaskMemoryAttachment(attachment));
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/position-profiles/:id/task-memory/:memoryId/attachments/:attachmentId/download", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Task Memory file downloads need SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const store = new DonnitStore(admin, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles, memories, attachments] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+        store.listPositionProfileTaskMemories(orgId, String(req.params.id)),
+        store.listPositionProfileTaskMemoryAttachments(orgId, String(req.params.memoryId)),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      const memory = memories.find((item) => item.id === String(req.params.memoryId));
+      const attachment = attachments.find((item) => item.id === String(req.params.attachmentId));
+      if (!profile || !memory || !attachment) {
+        res.status(404).json({ message: "Attachment not found." });
+        return;
+      }
+      if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
+        res.status(403).json({ message: "You do not have access to this Task Memory attachment." });
+        return;
+      }
+      const { data, error } = await admin.storage
+        .from(attachment.bucket_id)
+        .createSignedUrl(attachment.storage_path, 60, { download: attachment.file_name });
+      if (error || !data?.signedUrl) {
+        res.status(500).json({ message: error?.message ?? "Could not create attachment download link." });
+        return;
+      }
+      res.json({ ok: true, url: data.signedUrl });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.delete("/api/position-profiles/:id/task-memory/:memoryId/attachments/:attachmentId", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        res.status(503).json({ message: "Task Memory file management needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        return;
+      }
+      const store = new DonnitStore(admin, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles, memories, attachments] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+        store.listPositionProfileTaskMemories(orgId, String(req.params.id)),
+        store.listPositionProfileTaskMemoryAttachments(orgId, String(req.params.memoryId)),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      const memory = memories.find((item) => item.id === String(req.params.memoryId));
+      const attachment = attachments.find((item) => item.id === String(req.params.attachmentId));
+      if (!profile || !memory || !attachment) {
+        res.status(404).json({ message: "Attachment not found." });
+        return;
+      }
+      if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can delete Task Memory attachments." });
+        return;
+      }
+      await admin.storage.from(attachment.bucket_id).remove([attachment.storage_path]);
+      await store.deletePositionProfileTaskMemoryAttachment(orgId, attachment.id);
+      res.status(204).end();
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }

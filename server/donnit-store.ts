@@ -176,6 +176,21 @@ export type DonnitPositionProfileTaskMemoryStep = {
   updated_at: string;
 };
 
+export type DonnitPositionProfileTaskMemoryAttachment = {
+  id: string;
+  org_id: string;
+  position_profile_id: string;
+  task_memory_id: string;
+  bucket_id: string;
+  storage_path: string;
+  file_name: string;
+  content_type: string;
+  file_size: number;
+  kind: "Document" | "Image" | "Spreadsheet" | "Other";
+  uploaded_by: string | null;
+  created_at: string;
+};
+
 export type DonnitPositionProfileTaskMemory = {
   id: string;
   org_id: string;
@@ -197,6 +212,7 @@ export type DonnitPositionProfileTaskMemory = {
   updated_at: string;
   last_learned_at: string;
   steps?: DonnitPositionProfileTaskMemoryStep[];
+  attachments?: DonnitPositionProfileTaskMemoryAttachment[];
 };
 
 export type DonnitTaskEvent = {
@@ -816,11 +832,74 @@ export class DonnitStore {
       list.push({ ...step, dependency_step_ids: Array.isArray(step.dependency_step_ids) ? step.dependency_step_ids : [] });
       byMemory.set(step.task_memory_id, list);
     }
+    const { data: attachments, error: attachmentsError } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemoryAttachments)
+      .select("*")
+      .eq("org_id", orgId)
+      .in("task_memory_id", memoryIds)
+      .order("created_at", { ascending: false });
+    if (attachmentsError) {
+      if (!isMissingRelationError(attachmentsError) && !isMissingColumnError(attachmentsError)) {
+        throw wrapSupabaseError("list position_profile_task_memory_attachments failed", attachmentsError);
+      }
+    }
+    const attachmentsByMemory = new Map<string, DonnitPositionProfileTaskMemoryAttachment[]>();
+    for (const attachment of (attachments ?? []) as DonnitPositionProfileTaskMemoryAttachment[]) {
+      const list = attachmentsByMemory.get(attachment.task_memory_id) ?? [];
+      list.push(attachment);
+      attachmentsByMemory.set(attachment.task_memory_id, list);
+    }
     return ((memories ?? []) as DonnitPositionProfileTaskMemory[]).map((memory) => ({
       ...memory,
       learned_from: typeof memory.learned_from === "object" && memory.learned_from !== null ? memory.learned_from : {},
       steps: byMemory.get(memory.id) ?? [],
+      attachments: attachmentsByMemory.get(memory.id) ?? [],
     }));
+  }
+
+  async listPositionProfileTaskMemoryAttachments(
+    orgId: string,
+    taskMemoryId: string,
+  ): Promise<DonnitPositionProfileTaskMemoryAttachment[]> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemoryAttachments)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("task_memory_id", taskMemoryId)
+      .order("created_at", { ascending: false });
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return [];
+      throw wrapSupabaseError("list position_profile_task_memory_attachments failed", error);
+    }
+    return (data ?? []) as DonnitPositionProfileTaskMemoryAttachment[];
+  }
+
+  async createPositionProfileTaskMemoryAttachment(
+    orgId: string,
+    input: Omit<DonnitPositionProfileTaskMemoryAttachment, "id" | "org_id" | "created_at">,
+  ): Promise<DonnitPositionProfileTaskMemoryAttachment | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemoryAttachments)
+      .insert({ ...input, org_id: orgId })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("create position_profile_task_memory_attachment failed", error);
+    }
+    return data as DonnitPositionProfileTaskMemoryAttachment;
+  }
+
+  async deletePositionProfileTaskMemoryAttachment(orgId: string, attachmentId: string) {
+    const { error } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemoryAttachments)
+      .delete()
+      .eq("org_id", orgId)
+      .eq("id", attachmentId);
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return;
+      throw wrapSupabaseError("delete position_profile_task_memory_attachment failed", error);
+    }
   }
 
   async upsertPositionProfileTaskMemory(

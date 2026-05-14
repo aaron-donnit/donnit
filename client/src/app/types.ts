@@ -145,6 +145,16 @@ export type PositionProfileTaskMemoryStep = {
   updatedAt: string;
 };
 
+export type PositionProfileTaskMemoryAttachment = {
+  id: Id;
+  taskMemoryId: Id;
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  kind: "Document" | "Image" | "Spreadsheet" | "Other";
+  createdAt: string;
+};
+
 export type PositionProfileTaskMemory = {
   id: Id;
   positionProfileId: Id;
@@ -165,6 +175,7 @@ export type PositionProfileTaskMemory = {
   updatedAt: string;
   lastLearnedAt: string;
   steps: PositionProfileTaskMemoryStep[];
+  attachments: PositionProfileTaskMemoryAttachment[];
 };
 
 export type WorkspaceState = {
