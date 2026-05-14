@@ -266,6 +266,17 @@ const evalCases: Array<{
     },
   },
   {
+    name: "uses dictionary spelling before routing and date extraction",
+    message: "assign Nina to drafft the clent proposal by tomorow",
+    expected: {
+      assignedToId: "user-nina",
+      title: "Draft the client proposal",
+      dueDate: "2026-05-15",
+      missing: [],
+      titleExcludes: ["drafft", "clent", "tomorow"],
+    },
+  },
+  {
     name: "cleans basic typo and asks for specific action on vague deck work",
     message: "assign Nina to work on tha client deck for our processing call by May 21",
     expected: {
@@ -278,7 +289,7 @@ const evalCases: Array<{
   },
   {
     name: "routes misspelled assistant role to Executive Assistant profile owner",
-    message: "have the assisnt draft a poposal for the new lease in manhattan",
+    message: "have the assistnt draft a poposal for the new lease in manhattan",
     expected: {
       assignedToId: "user-jordan",
       positionProfileId: "profile-ea",

@@ -53,6 +53,7 @@ import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-draft
 import { draftTaskUpdateWithAgent } from "./intelligence/skills/task-update-assistant";
 import { executeDonnitComposioReadTool, isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
 import { starterMemoryPromptBlock } from "./intelligence/donnit-starter-memory";
+import { englishSpellingClarification, normalizeEnglishSpelling } from "./intelligence/spellcheck";
 
 const DEMO_USER_ID = 1;
 
@@ -1239,8 +1240,17 @@ function normalizeLikelyContextTypos(value: string) {
   });
 }
 
+function protectedSpellingTerms() {
+  return [
+    ...Array.from(neverAutoCorrectWords),
+    ...Array.from(protectedBusinessTokens),
+    ...operationalCorrectionVocabulary,
+  ];
+}
+
 function languageClarificationFromMessage(message: string) {
-  const tokens = Array.from(message.matchAll(/\b[a-z]{3,16}\b/gi)).map((match) => match[0]);
+  const normalizedMessage = normalizeCommonTaskTypos(message);
+  const tokens = Array.from(normalizedMessage.matchAll(/\b[a-z]{3,16}\b/gi)).map((match) => match[0]);
   for (const token of tokens) {
     const matches = correctionCandidatesForToken(token.toLowerCase());
     if (matches.length > 1) {
@@ -1251,7 +1261,7 @@ function languageClarificationFromMessage(message: string) {
       };
     }
   }
-  return null;
+  return englishSpellingClarification(normalizedMessage, { protectedTerms: protectedSpellingTerms() });
 }
 
 function normalizeCommonTaskTypos(value: string) {
@@ -1281,7 +1291,9 @@ function normalizeCommonTaskTypos(value: string) {
     .replace(/\breouccring\b/gi, "recurring")
     .replace(/\breoccuring\b/gi, "recurring")
     .replace(/\breoccur\b/gi, "recur");
-  return normalizeLikelyContextTypos(normalized);
+  return normalizeEnglishSpelling(normalizeLikelyContextTypos(normalized), {
+    protectedTerms: protectedSpellingTerms(),
+  });
 }
 
 function stripRoleAssignmentPhrases(message: string, roleLabels: string[]) {

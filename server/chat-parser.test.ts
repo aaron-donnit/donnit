@@ -124,6 +124,19 @@ describe("chat task parser", () => {
     expect(__chatParserTest.normalizeCommonTaskTypos("complete all of our wok")).toBe("complete all of our work");
   });
 
+  it("uses the English dictionary for broader typo coverage", () => {
+    vi.setSystemTime(new Date("2026-05-14T10:00:00-04:00"));
+    const prompt = "assign Nina to drafft the clent proposal by tomorow";
+
+    expect(__chatParserTest.normalizeCommonTaskTypos(prompt)).toBe(
+      "assign Nina to draft the client proposal by tomorrow",
+    );
+    expect(__chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina", "nina@example.com"])).toBe(
+      "Draft the client proposal",
+    );
+    expect(__chatParserTest.parseDueDate(prompt)).toBe("2026-05-15");
+  });
+
   it("normalizes basic grammar typos and flags vague deck work", () => {
     const prompt = "assign Nina to work on tha client deck for our processing call by May 21";
 
@@ -135,7 +148,7 @@ describe("chat task parser", () => {
   });
 
   it("normalizes assistant and proposal typos in role-based assignment", () => {
-    const prompt = "have the assisnt draft a poposal for the new lease in manhattan";
+    const prompt = "have the assistnt draft a poposal for the new lease in manhattan";
 
     expect(__chatParserTest.normalizeCommonTaskTypos(prompt)).toBe(
       "have the assistant draft a proposal for the new lease in manhattan",
