@@ -11,9 +11,41 @@ type SlashCommand = {
   text: string;
 };
 
+type SlashCommandOption = {
+  id: "memory" | "donnit";
+  label: string;
+  description: string;
+  insertText: string;
+};
+
+const slashCommands: SlashCommandOption[] = [
+  {
+    id: "donnit",
+    label: "/donnit",
+    description: "Assign Donnit AI to review or draft an update.",
+    insertText: "/donnit ",
+  },
+  {
+    id: "memory",
+    label: "/memory",
+    description: "Create a Task Memory workflow for a Position Profile.",
+    insertText: "/memory ",
+  },
+];
+
+const SLASH_USAGE_KEY = "donnit.slashCommandUsage";
+
 export default function ChatPanel({ messages, onSlashCommand }: { messages: ChatMessage[]; onSlashCommand?: (command: SlashCommand) => void }) {
   const [message, setMessage] = useState("");
   const [localAssistantMessage, setLocalAssistantMessage] = useState<ChatMessage | null>(null);
+  const [slashUsage, setSlashUsage] = useState<Record<string, number>>(() => {
+    try {
+      if (typeof window === "undefined") return {};
+      return JSON.parse(window.localStorage.getItem(SLASH_USAGE_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const parsedPreview = useMemo(() => {
@@ -102,20 +134,42 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
     },
   });
 
+  const recordSlashUse = (id: SlashCommandOption["id"]) => {
+    setSlashUsage((current) => {
+      const next = { ...current, [id]: (current[id] ?? 0) + 1 };
+      try {
+        if (typeof window !== "undefined") window.localStorage.setItem(SLASH_USAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Local ordering is a convenience only.
+      }
+      return next;
+    });
+  };
+
   const send = () => {
     const text = message.trim();
     if (text.length < 2 || chat.isPending) return;
     const memoryMatch = text.match(/^\/memory\b\s*/i);
     if (memoryMatch) {
+      recordSlashUse("memory");
       onSlashCommand?.({ command: "memory", text: text.slice(memoryMatch[0].length).trim() });
       setMessage("");
       return;
     }
+    if (/^\/donnit\b/i.test(text)) recordSlashUse("donnit");
     chat.mutate(text);
   };
   const isDonnitCommand = /^\/donnit\b/i.test(message.trim());
   const isMemoryCommand = /^\/memory\b/i.test(message.trim());
   const showSlashHelp = message.trim().startsWith("/");
+  const slashQuery = showSlashHelp ? message.trim().replace(/^\//, "").split(/\s+/)[0].toLowerCase() : "";
+  const visibleSlashCommands = slashCommands
+    .filter((command) => command.id.includes(slashQuery) || command.label.toLowerCase().includes(slashQuery))
+    .sort((a, b) => {
+      const usageDelta = (slashUsage[b.id] ?? 0) - (slashUsage[a.id] ?? 0);
+      if (usageDelta !== 0) return usageDelta;
+      return a.label.localeCompare(b.label);
+    });
 
   const chips: Array<[string, string | undefined]> = [
     ["Assignee", parsedPreview?.assignee],
@@ -171,15 +225,32 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
       </div>
 
       {showSlashHelp && (
-        <div className="mt-2 grid gap-2 rounded-md border border-border bg-card p-2 text-sm sm:grid-cols-2" data-testid="chat-slash-command-menu">
-          <button type="button" className="rounded-md px-3 py-2 text-left hover:bg-muted" onClick={() => setMessage("/memory ")}>
-            <span className="block font-medium text-foreground">/memory</span>
-            <span className="text-xs text-muted-foreground">Create a Task Memory workflow for a Position Profile.</span>
-          </button>
-          <button type="button" className="rounded-md px-3 py-2 text-left hover:bg-muted" onClick={() => setMessage("/donnit ")}>
-            <span className="block font-medium text-foreground">/donnit</span>
-            <span className="text-xs text-muted-foreground">Assign Donnit AI to review or draft an update.</span>
-          </button>
+        <div className="mt-2 rounded-md border border-border bg-card p-2 text-sm shadow-sm" data-testid="chat-slash-command-menu">
+          <div className="mb-1 flex items-center justify-between px-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            <span>Commands</span>
+            <span>{Object.values(slashUsage).some(Boolean) ? "Most used first" : "A-Z"}</span>
+          </div>
+          <div className="grid gap-1">
+            {visibleSlashCommands.map((command) => (
+              <button
+                key={command.id}
+                type="button"
+                className="rounded-md px-3 py-2 text-left hover:bg-muted"
+                onClick={() => {
+                  setMessage(command.insertText);
+                  window.setTimeout(() => taRef.current?.focus(), 0);
+                }}
+              >
+                <span className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-foreground">{command.label}</span>
+                  {(slashUsage[command.id] ?? 0) > 0 && (
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{slashUsage[command.id]}</span>
+                  )}
+                </span>
+                <span className="text-xs text-muted-foreground">{command.description}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
