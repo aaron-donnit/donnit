@@ -1863,6 +1863,26 @@ function isWorkspaceAdmin(member: { role?: string | null } | null | undefined) {
   return ["owner", "admin"].includes(String(member?.role ?? ""));
 }
 
+function canManagePositionProfileTaskMemory(
+  profile: Pick<DonnitPositionProfile, "current_owner_id" | "temporary_owner_id" | "delegate_user_id" | "direct_manager_id">,
+  actorId: string,
+  actor: { role?: string | null } | null | undefined,
+  members: Array<{ user_id: string; manager_id?: string | null }>,
+) {
+  if (isWorkspaceAdmin(actor)) return true;
+  if (
+    profile.current_owner_id === actorId ||
+    profile.temporary_owner_id === actorId ||
+    profile.delegate_user_id === actorId ||
+    profile.direct_manager_id === actorId
+  ) {
+    return true;
+  }
+  if (String(actor?.role ?? "") !== "manager") return false;
+  const owner = members.find((member) => member.user_id === profile.current_owner_id);
+  return owner?.manager_id === actorId;
+}
+
 function isWorkspaceMember(member: { role?: string | null; status?: string | null } | null | undefined) {
   return Boolean(member?.role) && String(member?.status ?? "active") !== "inactive";
 }
@@ -4512,6 +4532,9 @@ const taskMemoryCreateSchema = z.object({
   defaultEstimatedMinutes: z.number().int().min(5).max(1440).optional().default(30),
   status: z.enum(["suggested", "active", "archived"]).optional().default("active"),
   confidenceScore: z.number().min(0).max(1).optional().default(0.72),
+  guidelines: z.string().trim().max(4000).optional().default(""),
+  importantInformation: z.string().trim().max(4000).optional().default(""),
+  attachmentReferences: z.string().trim().max(4000).optional().default(""),
   steps: z.array(taskMemoryStepSchema).max(80).optional().default([]),
 });
 
@@ -8595,7 +8618,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/position-profiles/:id/task-memory", requireDonnitAuth, async (req: Request, res: Response) => {
     try {
       const auth = req.donnitAuth!;
-      const store = new DonnitStore(auth.client, auth.userId);
+      const admin = createSupabaseAdminClient();
+      const store = new DonnitStore(admin ?? auth.client, auth.userId);
       const orgId = await store.getDefaultOrgId();
       if (!orgId) {
         res.status(409).json({ message: "Workspace not bootstrapped." });
@@ -8611,12 +8635,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(404).json({ message: "Position Profile not found." });
         return;
       }
-      const canView =
-        isWorkspaceAdmin(actor) ||
-        profile.current_owner_id === auth.userId ||
-        profile.temporary_owner_id === auth.userId ||
-        profile.delegate_user_id === auth.userId ||
-        profile.direct_manager_id === auth.userId;
+      const canView = canManagePositionProfileTaskMemory(profile, auth.userId, actor, members);
       if (!canView) {
         res.status(403).json({ message: "You do not have access to this Position Profile task memory." });
         return;
@@ -8636,7 +8655,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const auth = req.donnitAuth!;
-      const store = new DonnitStore(auth.client, auth.userId);
+      const admin = createSupabaseAdminClient();
+      const store = new DonnitStore(admin ?? auth.client, auth.userId);
       const orgId = await store.getDefaultOrgId();
       if (!orgId) {
         res.status(409).json({ message: "Workspace not bootstrapped." });
@@ -8647,13 +8667,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         store.listPositionProfiles(orgId),
       ]);
       const actor = members.find((member) => member.user_id === auth.userId);
-      if (!isWorkspaceAdmin(actor)) {
-        res.status(403).json({ message: "Only admins can create Position Profile Task Memory." });
-        return;
-      }
       const profile = profiles.find((item) => item.id === String(req.params.id));
       if (!profile) {
         res.status(404).json({ message: "Position Profile not found." });
+        return;
+      }
+      if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can create Position Profile Task Memory." });
         return;
       }
       const input = parsed.data;
@@ -8669,7 +8689,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         default_estimated_minutes: input.defaultEstimatedMinutes,
         status: input.status,
         confidence_score: input.confidenceScore,
-        learned_from: { source: "manual", createdAt: new Date().toISOString() },
+        learned_from: {
+          source: input.sourceTaskId ? "task" : "manual",
+          createdAt: new Date().toISOString(),
+          guidelines: input.guidelines,
+          importantInformation: input.importantInformation,
+          attachmentReferences: input.attachmentReferences,
+          workflowMode: "sequential_steps",
+        },
         created_by: auth.userId,
         steps: input.steps.map((step, index) => ({
           title: step.title,

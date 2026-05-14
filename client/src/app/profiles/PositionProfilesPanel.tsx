@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 import type {
@@ -54,6 +55,29 @@ import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
 type ProfileFilter = "all" | "active" | "at_risk" | "vacant" | "archived";
 type SheetTab = "overview" | "work" | "recurring" | "memory" | "tools" | "activity";
 type ConfirmAction = "archive" | "delete" | null;
+type TaskMemoryFormStep = {
+  title: string;
+  instructions: string;
+  toolName: string;
+  toolUrl: string;
+  expectedOutput: string;
+  relativeDueOffsetDays: number;
+  estimatedMinutes: number;
+};
+
+type TaskMemoryDraft = {
+  title: string;
+  objective: string;
+  cadence: PositionProfileTaskMemory["cadence"];
+  dueRule: string;
+  startOffsetDays: number;
+  defaultUrgency: PositionProfileTaskMemory["defaultUrgency"];
+  defaultEstimatedMinutes: number;
+  guidelines: string;
+  importantInformation: string;
+  attachmentReferences: string;
+  steps: TaskMemoryFormStep[];
+};
 
 const accessStatusLabels: Record<ProfileAccessItem["status"], string> = {
   active: "Active",
@@ -62,6 +86,34 @@ const accessStatusLabels: Record<ProfileAccessItem["status"], string> = {
   remove_access: "Remove access",
   pending: "Pending",
 };
+
+function emptyTaskMemoryStep(position = 0): TaskMemoryFormStep {
+  return {
+    title: position === 0 ? "Start the workflow" : "Next step",
+    instructions: "",
+    toolName: "",
+    toolUrl: "",
+    expectedOutput: "",
+    relativeDueOffsetDays: 0,
+    estimatedMinutes: 30,
+  };
+}
+
+function emptyTaskMemoryDraft(): TaskMemoryDraft {
+  return {
+    title: "",
+    objective: "",
+    cadence: "none",
+    dueRule: "",
+    startOffsetDays: 0,
+    defaultUrgency: "normal",
+    defaultEstimatedMinutes: 30,
+    guidelines: "",
+    importantInformation: "",
+    attachmentReferences: "",
+    steps: [emptyTaskMemoryStep(0), emptyTaskMemoryStep(1)],
+  };
+}
 
 export default function PositionProfilesPanel({
   profiles,
@@ -119,6 +171,8 @@ export default function PositionProfilesPanel({
   const [editOpen, setEditOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [taskMemoryOpen, setTaskMemoryOpen] = useState(false);
+  const [taskMemoryDraft, setTaskMemoryDraft] = useState<TaskMemoryDraft>(() => emptyTaskMemoryDraft());
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [assignmentDialogOpen, setAssignmentDialogOpen] = useState(false);
   const [newProfileTitle, setNewProfileTitle] = useState("");
@@ -170,6 +224,7 @@ export default function PositionProfilesPanel({
   const selectedProfile = repositoryProfiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const assignmentUsers = useMemo(() => users.filter(isActiveUser), [users]);
   const targetUsers = useMemo(() => assignableUsersForProfile(selectedProfile, users), [selectedProfile, users]);
+  const canManageSelectedTaskMemory = Boolean(selectedProfile && canManageTaskMemoryForProfile(selectedProfile, currentUser, currentUserId, users));
 
   const createProfile = useMutation({
     mutationFn: async (input: { title: string; ownerId: Id | null; status?: "active" | "vacant" | "covered" }) => {
@@ -327,6 +382,55 @@ export default function PositionProfilesPanel({
   });
 
   const taskMemories = taskMemoryQuery.data ?? [];
+
+  const createTaskMemory = useMutation({
+    mutationFn: async (input: TaskMemoryDraft) => {
+      if (!selectedProfile) throw new Error("Choose a Position Profile first.");
+      const cleanedSteps = input.steps
+        .map((step, index) => ({
+          title: step.title.trim(),
+          instructions: step.instructions.trim(),
+          toolName: step.toolName.trim(),
+          toolUrl: step.toolUrl.trim(),
+          expectedOutput: step.expectedOutput.trim(),
+          relativeDueOffsetDays: Number(step.relativeDueOffsetDays) || 0,
+          estimatedMinutes: Math.max(5, Number(step.estimatedMinutes) || 30),
+          position: index,
+        }))
+        .filter((step) => step.title.length > 0);
+      const res = await apiRequest("POST", `/api/position-profiles/${selectedProfile.id}/task-memory`, {
+        title: input.title.trim(),
+        objective: input.objective.trim(),
+        cadence: input.cadence,
+        dueRule: input.dueRule.trim(),
+        startOffsetDays: Number(input.startOffsetDays) || 0,
+        defaultUrgency: input.defaultUrgency,
+        defaultEstimatedMinutes: Math.max(5, Number(input.defaultEstimatedMinutes) || 30),
+        status: "active",
+        confidenceScore: 0.9,
+        guidelines: input.guidelines.trim(),
+        importantInformation: input.importantInformation.trim(),
+        attachmentReferences: input.attachmentReferences.trim(),
+        steps: cleanedSteps,
+      });
+      return (await res.json()) as PositionProfileTaskMemory;
+    },
+    onSuccess: async (memory) => {
+      await queryClient.invalidateQueries({ queryKey: ["position-profile-task-memory", selectedProfile?.id ?? ""] });
+      setTaskMemoryOpen(false);
+      setTaskMemoryDraft(emptyTaskMemoryDraft());
+      setSheetOpen(true);
+      setSheetTab("recurring");
+      toast({ title: "Task Memory created", description: `${memory.title} is ready as a reusable workflow.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not create Task Memory",
+        description: error instanceof Error ? error.message : "Check the workflow details and try again.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const createTaskMemoryFromTask = useMutation({
     mutationFn: async (task: Task) => {
@@ -656,6 +760,26 @@ export default function PositionProfilesPanel({
     setSheetOpen(true);
   }
 
+  function openTaskMemoryBuilder(profile: PositionProfile) {
+    setSelectedProfileId(profile.id);
+    setTaskMemoryDraft(emptyTaskMemoryDraft());
+    setTaskMemoryOpen(true);
+  }
+
+  function updateTaskMemoryStep(index: number, patch: Partial<TaskMemoryFormStep>) {
+    setTaskMemoryDraft((current) => ({
+      ...current,
+      steps: current.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)),
+    }));
+  }
+
+  function removeTaskMemoryStep(index: number) {
+    setTaskMemoryDraft((current) => ({
+      ...current,
+      steps: current.steps.length <= 1 ? current.steps : current.steps.filter((_, stepIndex) => stepIndex !== index),
+    }));
+  }
+
   function toggleExpanded(profileId: string) {
     setExpandedProfileIds((current) => {
       if (current.has(profileId)) return new Set();
@@ -893,6 +1017,7 @@ export default function PositionProfilesPanel({
                             <div className="flex flex-wrap gap-2">
                               <ActionButton icon={<Eye className="size-4" />} label="View profile" onClick={() => openProfileSheet(profile.id)} testId={`button-position-profile-view-${profile.id}`} />
                               <ActionButton icon={<ShieldCheck className="size-4" />} label="Task Memory" onClick={() => openProfileSheet(profile.id, "recurring")} testId={`button-position-profile-task-memory-${profile.id}`} />
+                              <ActionButton icon={<ListPlus className="size-4" />} label="Add workflow" onClick={() => openTaskMemoryBuilder(profile)} disabled={!canManageTaskMemoryForProfile(profile, currentUser, currentUserId, users)} testId={`button-position-profile-add-task-memory-${profile.id}`} />
                               <ActionButton icon={<UserCog className="size-4" />} label="Transfer ownership" primary onClick={() => openAssignment("transfer", profile)} disabled={!canManageProfiles} />
                               <ActionButton icon={<Edit3 className="size-4" />} label="Edit details" onClick={() => { setSelectedProfileId(profile.id); setEditTitle(profile.title); setEditStatus(profile.status); setEditOpen(true); }} disabled={!canManageProfiles} />
                               <ActionButton icon={<KeyRound className="size-4" />} label="Assign tools" onClick={() => { setSelectedProfileId(profile.id); setToolsOpen(true); }} disabled={!canManageProfiles} />
@@ -903,7 +1028,7 @@ export default function PositionProfilesPanel({
                               <ActionButton icon={<Trash2 className="size-4" />} label="Delete" danger onClick={() => { setSelectedProfileId(profile.id); setConfirmAction("delete"); }} disabled={!canManageProfiles} />
                             </div>
                             <div className="mt-4 grid gap-3 xl:grid-cols-3">
-                              <TaskMemorySummaryCard profile={profile} onOpen={() => openProfileSheet(profile.id, "recurring")} />
+                              <TaskMemorySummaryCard profile={profile} onOpen={() => openProfileSheet(profile.id, "recurring")} onCreate={() => openTaskMemoryBuilder(profile)} canCreate={canManageTaskMemoryForProfile(profile, currentUser, currentUserId, users)} />
                               <MiniWorkCard title="Current tasks" icon={<ListChecks className="size-4" />} tasks={profile.currentIncompleteTasks} empty="No current work captured." onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))} />
                               <MiniWorkCard title="Recurring" icon={<Repeat2 className="size-4" />} tasks={profile.recurringTasks} empty="No recurring work mapped yet." onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))} />
                             </div>
@@ -1078,6 +1203,15 @@ export default function PositionProfilesPanel({
                 <div className="space-y-3">
                   <InfoCard title="Task Memory" icon={<ShieldCheck className="size-4" />}>
                     <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-3 rounded-md bg-brand-green/5 px-3 py-2">
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          Build reusable workflows with ordered steps, tools, guidelines, and reference links. Each completed step can become the trigger for the next task.
+                        </p>
+                        <Button size="sm" onClick={() => openTaskMemoryBuilder(selectedProfile)} disabled={!canManageSelectedTaskMemory}>
+                          <ListPlus className="size-4" />
+                          Add workflow
+                        </Button>
+                      </div>
                       {taskMemoryQuery.isFetching ? (
                         <p className="text-xs text-muted-foreground">Loading stored task sequences...</p>
                       ) : taskMemories.length === 0 ? (
@@ -1099,6 +1233,16 @@ export default function PositionProfilesPanel({
                               </span>
                             </div>
                             {memory.objective && <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{memory.objective}</p>}
+                            {memoryMetadataText(memory, "guidelines") && (
+                              <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                                <span className="font-medium text-foreground">Guidelines:</span> {memoryMetadataText(memory, "guidelines")}
+                              </p>
+                            )}
+                            {memoryMetadataText(memory, "attachmentReferences") && (
+                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                <span className="font-medium text-foreground">References:</span> {memoryMetadataText(memory, "attachmentReferences")}
+                              </p>
+                            )}
                             {memory.steps.length > 0 && (
                               <ol className="mt-2 space-y-1 text-xs text-muted-foreground">
                                 {memory.steps.slice(0, 4).map((step, index) => (
@@ -1121,7 +1265,7 @@ export default function PositionProfilesPanel({
                     onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))}
                     actionLabel="Save as Task Memory"
                     actionPendingId={createTaskMemoryFromTask.isPending ? "pending" : null}
-                    onTaskAction={(task) => createTaskMemoryFromTask.mutate(task)}
+                    onTaskAction={canManageSelectedTaskMemory ? (task) => createTaskMemoryFromTask.mutate(task) : undefined}
                   />
                   {learnedRecurringResponsibilities.length > 0 && (
                     <div className="rounded-md border border-border p-3">
@@ -1202,6 +1346,232 @@ export default function PositionProfilesPanel({
           </aside>
         </div>
       )}
+
+      <Dialog open={taskMemoryOpen} onOpenChange={setTaskMemoryOpen}>
+        <DialogContent className={`${dialogShellClass} sm:max-w-5xl`}>
+          <DialogHeader className={dialogHeaderClass}>
+            <DialogTitle>Add Task Memory workflow</DialogTitle>
+            <DialogDescription>
+              Save a repeatable task sequence for {selectedProfile?.title ?? "this profile"} so future holders can complete the outcome step by step.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className={`${dialogBodyClass} space-y-5`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!taskMemoryDraft.title.trim()) {
+                toast({ title: "Name the workflow", description: "Task Memory needs a clear outcome title.", variant: "destructive" });
+                return;
+              }
+              if (!taskMemoryDraft.steps.some((step) => step.title.trim())) {
+                toast({ title: "Add at least one step", description: "Task Memory should guide the next person through the work.", variant: "destructive" });
+                return;
+              }
+              createTaskMemory.mutate(taskMemoryDraft);
+            }}
+          >
+            <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-memory-title">Workflow name</Label>
+                  <Input
+                    id="task-memory-title"
+                    value={taskMemoryDraft.title}
+                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="Monthly CEO financial report"
+                    maxLength={160}
+                    data-testid="input-task-memory-title"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-memory-objective">Desired outcome</Label>
+                  <Textarea
+                    id="task-memory-objective"
+                    value={taskMemoryDraft.objective}
+                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, objective: event.target.value }))}
+                    placeholder="Produce the financial report packet the CEO receives each month, with payroll, P&L, revenue, and EBITDA updates."
+                    rows={3}
+                    maxLength={1500}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-memory-cadence">Repeat</Label>
+                    <select
+                      id="task-memory-cadence"
+                      value={taskMemoryDraft.cadence}
+                      onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, cadence: event.target.value as TaskMemoryDraft["cadence"] }))}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="none">As needed</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="quarterly">Quarterly</option>
+                      <option value="annual">Annual</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-memory-start-offset">Start days before</Label>
+                    <Input
+                      id="task-memory-start-offset"
+                      type="number"
+                      min={0}
+                      max={365}
+                      value={taskMemoryDraft.startOffsetDays}
+                      onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, startOffsetDays: Number(event.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-memory-minutes">Default minutes</Label>
+                    <Input
+                      id="task-memory-minutes"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={taskMemoryDraft.defaultEstimatedMinutes}
+                      onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, defaultEstimatedMinutes: Number(event.target.value) }))}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-[0.8fr_1.2fr]">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-memory-urgency">Default urgency</Label>
+                    <select
+                      id="task-memory-urgency"
+                      value={taskMemoryDraft.defaultUrgency}
+                      onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, defaultUrgency: event.target.value as TaskMemoryDraft["defaultUrgency"] }))}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="low">Low</option>
+                      <option value="normal">Normal</option>
+                      <option value="high">High</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-memory-due-rule">Timing rule</Label>
+                    <Input
+                      id="task-memory-due-rule"
+                      value={taskMemoryDraft.dueRule}
+                      onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, dueRule: event.target.value }))}
+                      placeholder="First business day of each month, start 5 days before"
+                      maxLength={500}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-memory-guidelines">Guidelines</Label>
+                  <Textarea
+                    id="task-memory-guidelines"
+                    value={taskMemoryDraft.guidelines}
+                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, guidelines: event.target.value }))}
+                    placeholder="Formatting rules, approval expectations, quality bar, and anything that should stay consistent."
+                    rows={4}
+                    maxLength={4000}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-memory-important-info">Important information</Label>
+                  <Textarea
+                    id="task-memory-important-info"
+                    value={taskMemoryDraft.importantInformation}
+                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, importantInformation: event.target.value }))}
+                    placeholder="Key contacts, judgment calls, exceptions, passwords stored elsewhere, or things that break first."
+                    rows={4}
+                    maxLength={4000}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="task-memory-attachments">Attachments / references</Label>
+                  <Textarea
+                    id="task-memory-attachments"
+                    value={taskMemoryDraft.attachmentReferences}
+                    onChange={(event) => setTaskMemoryDraft((current) => ({ ...current, attachmentReferences: event.target.value }))}
+                    placeholder="Paste links, filenames, folder paths, or source systems. File upload comes after storage permissions are finalized."
+                    rows={3}
+                    maxLength={4000}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Workflow steps</p>
+                  <p className="text-xs text-muted-foreground">Each step can become the next task after the prior step is completed.</p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setTaskMemoryDraft((current) => ({ ...current, steps: [...current.steps, emptyTaskMemoryStep(current.steps.length)] }))}
+                >
+                  <ListPlus className="size-4" />
+                  Add step
+                </Button>
+              </div>
+              <div className="space-y-3">
+                {taskMemoryDraft.steps.map((step, index) => (
+                  <div key={index} className="rounded-md bg-muted/30 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">Step {index + 1}</p>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => removeTaskMemoryStep(index)} disabled={taskMemoryDraft.steps.length <= 1}>
+                        Remove
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label>Step title</Label>
+                        <Input value={step.title} onChange={(event) => updateTaskMemoryStep(index, { title: event.target.value })} maxLength={180} />
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label>Tool</Label>
+                          <Input value={step.toolName} onChange={(event) => updateTaskMemoryStep(index, { toolName: event.target.value })} placeholder="Payroll system" maxLength={160} />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label>Link</Label>
+                          <Input value={step.toolUrl} onChange={(event) => updateTaskMemoryStep(index, { toolUrl: event.target.value })} placeholder="https://..." maxLength={500} />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Instructions</Label>
+                        <Textarea value={step.instructions} onChange={(event) => updateTaskMemoryStep(index, { instructions: event.target.value })} rows={3} maxLength={4000} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Expected output</Label>
+                        <Textarea value={step.expectedOutput} onChange={(event) => updateTaskMemoryStep(index, { expectedOutput: event.target.value })} rows={3} maxLength={1000} />
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label>Due offset days</Label>
+                          <Input type="number" min={-365} max={365} value={step.relativeDueOffsetDays} onChange={(event) => updateTaskMemoryStep(index, { relativeDueOffsetDays: Number(event.target.value) })} />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label>Minutes</Label>
+                          <Input type="number" min={5} max={1440} value={step.estimatedMinutes} onChange={(event) => updateTaskMemoryStep(index, { estimatedMinutes: Number(event.target.value) })} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <DialogFooter className={dialogFooterClass}>
+              <Button type="button" variant="outline" onClick={() => setTaskMemoryOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={createTaskMemory.isPending || !canManageSelectedTaskMemory}>
+                {createTaskMemory.isPending ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+                Save workflow
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <TaskDetailDialog
         task={selectedProfileTask}
@@ -1619,6 +1989,28 @@ function defaultTargetUserIdForProfile(profile: PositionProfile | null | undefin
   return String((currentUserCandidate ?? candidates[0])?.id ?? "");
 }
 
+function canManageTaskMemoryForProfile(profile: PositionProfile, currentUser: User | null | undefined, currentUserId: Id, users: User[]) {
+  if (!currentUser) return false;
+  if (currentUser.role === "owner" || currentUser.role === "admin") return true;
+  const actorId = String(currentUserId);
+  if (
+    String(profile.currentOwnerId ?? "") === actorId ||
+    String(profile.temporaryOwnerId ?? "") === actorId ||
+    String(profile.delegateUserId ?? "") === actorId ||
+    String(profile.directManagerId ?? "") === actorId
+  ) {
+    return true;
+  }
+  if (currentUser.role !== "manager") return false;
+  const owner = users.find((user) => String(user.id) === String(profile.currentOwnerId ?? ""));
+  return String(owner?.managerId ?? "") === actorId;
+}
+
+function memoryMetadataText(memory: PositionProfileTaskMemory, key: "guidelines" | "importantInformation" | "attachmentReferences") {
+  const value = memory.learnedFrom?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function buildReadinessItems(profile: PositionProfile, users: User[], learnedHowToCount: number, recurringGapCount: number) {
   const ownerId = profilePrimaryOwnerId(profile);
   const owner = ownerId ? users.find((user) => String(user.id) === String(ownerId)) : null;
@@ -1827,14 +2219,22 @@ function MiniWorkCard({
   );
 }
 
-function TaskMemorySummaryCard({ profile, onOpen }: { profile: PositionProfile; onOpen: () => void }) {
+function TaskMemorySummaryCard({
+  profile,
+  onOpen,
+  onCreate,
+  canCreate,
+}: {
+  profile: PositionProfile;
+  onOpen: () => void;
+  onCreate: () => void;
+  canCreate: boolean;
+}) {
   const sequenceCount = profile.recurringTasks.length;
   const historicalCount = profile.completedTasks.length;
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="rounded-md border border-brand-green/40 bg-brand-green/5 p-3 text-left transition hover:border-brand-green hover:bg-brand-green/10"
+    <div
+      className="rounded-md border border-brand-green/40 bg-brand-green/5 p-3 text-left"
       data-testid={`button-position-profile-task-memory-card-${profile.id}`}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -1847,7 +2247,7 @@ function TaskMemorySummaryCard({ profile, onOpen }: { profile: PositionProfile; 
         </span>
       </div>
       <p className="text-xs leading-5 text-muted-foreground">
-        Store recurring work as step-by-step sequences a new holder can inherit and follow.
+        Store repeatable work as step-by-step workflows. Completed steps can trigger the next task for the profile holder.
       </p>
       <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
         <span className="rounded-md bg-background/80 px-2 py-1">
@@ -1857,11 +2257,15 @@ function TaskMemorySummaryCard({ profile, onOpen }: { profile: PositionProfile; 
           {historicalCount} historical
         </span>
       </div>
-      <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-brand-green">
-        Open memory
-        <ChevronDown className="-rotate-90 size-3.5" />
-      </span>
-    </button>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="outline" className="h-8 px-2 text-xs" onClick={onOpen}>
+          Open
+        </Button>
+        <Button type="button" size="sm" className="h-8 px-2 text-xs" onClick={onCreate} disabled={!canCreate}>
+          Add workflow
+        </Button>
+      </div>
+    </div>
   );
 }
 
