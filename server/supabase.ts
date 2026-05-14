@@ -35,6 +35,10 @@ export const DONNIT_TABLES = {
   assistantRunEvents: "assistant_run_events",
   workspaceMemoryAliases: "workspace_memory_aliases",
   taskResolutionEvents: "task_resolution_events",
+  positionProfileTaskMemories: "position_profile_task_memories",
+  positionProfileTaskMemorySteps: "position_profile_task_memory_steps",
+  positionProfileTaskMemoryRuns: "position_profile_task_memory_runs",
+  positionProfileTaskMemoryStepRuns: "position_profile_task_memory_step_runs",
 } as const;
 
 export function getSupabaseConfig() {

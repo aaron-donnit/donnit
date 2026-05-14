@@ -27,13 +27,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 import type {
   ContinuityAssignmentPreview,
   Id,
   PersistedPositionProfile,
   PositionProfile,
+  PositionProfileTaskMemory,
   ProfileAccessItem,
   Task,
   TaskEvent,
@@ -309,6 +310,73 @@ export default function PositionProfilesPanel({
       toast({
         title: "Could not assign profile",
         description: error instanceof Error ? error.message : "Check the profile assignment and try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const taskMemoryQuery = useQuery({
+    queryKey: ["position-profile-task-memory", selectedProfile?.id ?? ""],
+    enabled: Boolean(authenticated && selectedProfile?.id && sheetOpen),
+    queryFn: async () => {
+      if (!selectedProfile) return [] as PositionProfileTaskMemory[];
+      const res = await apiRequest("GET", `/api/position-profiles/${selectedProfile.id}/task-memory`);
+      const data = await res.json() as { ok: boolean; memories: PositionProfileTaskMemory[] };
+      return data.memories ?? [];
+    },
+  });
+
+  const taskMemories = taskMemoryQuery.data ?? [];
+
+  const createTaskMemoryFromTask = useMutation({
+    mutationFn: async (task: Task) => {
+      if (!selectedProfile) throw new Error("Choose a Position Profile first.");
+      const taskSubtasks = subtasks
+        .filter((subtask) => String(subtask.taskId) === String(task.id))
+        .sort((a, b) => a.position - b.position);
+      const steps = taskSubtasks.length > 0
+        ? taskSubtasks.map((subtask, index) => ({
+            title: subtask.title,
+            instructions: index === 0 ? [task.description, task.completionNotes].filter(Boolean).join("\n\n") : "",
+            expectedOutput: index === taskSubtasks.length - 1 ? `Completed contribution toward ${task.title}` : "",
+            estimatedMinutes: Math.max(5, Math.round(task.estimatedMinutes / Math.max(taskSubtasks.length, 1))),
+            relativeDueOffsetDays: Math.min(0, index - Math.max(taskSubtasks.length - 1, 0)),
+            position: index,
+          }))
+        : [{
+            title: task.title,
+            instructions: [task.description, task.completionNotes].filter(Boolean).join("\n\n"),
+            expectedOutput: `Complete ${task.title}`,
+            estimatedMinutes: task.estimatedMinutes,
+            relativeDueOffsetDays: 0,
+            position: 0,
+          }];
+      const res = await apiRequest("POST", `/api/position-profiles/${selectedProfile.id}/task-memory`, {
+        sourceTaskId: String(task.id),
+        title: task.title,
+        objective: `Complete ${task.title}${task.recurrence !== "none" ? ` as a ${task.recurrence} recurring responsibility` : ""}.`,
+        cadence: task.recurrence === "none" ? "none" : task.recurrence,
+        dueRule: [
+          task.dueDate ? `Current due date anchor: ${task.dueDate}` : "",
+          task.reminderDaysBefore > 0 ? `Start ${task.reminderDaysBefore} day(s) before due date` : "",
+        ].filter(Boolean).join(". "),
+        startOffsetDays: task.reminderDaysBefore,
+        defaultUrgency: task.urgency,
+        defaultEstimatedMinutes: task.estimatedMinutes,
+        status: "active",
+        confidenceScore: 0.72,
+        steps,
+      });
+      return (await res.json()) as PositionProfileTaskMemory;
+    },
+    onSuccess: async (memory) => {
+      await queryClient.invalidateQueries({ queryKey: ["position-profile-task-memory", selectedProfile?.id ?? ""] });
+      toast({ title: "Task Memory saved", description: `${memory.title} now has a reusable role sequence.` });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save Task Memory",
+        description: error instanceof Error ? error.message : "Apply the latest Supabase migration and try again.",
         variant: "destructive",
       });
     },
@@ -1006,11 +1074,52 @@ export default function PositionProfilesPanel({
               )}
               {sheetTab === "recurring" && (
                 <div className="space-y-3">
+                  <InfoCard title="Task Memory" icon={<ShieldCheck className="size-4" />}>
+                    <div className="space-y-2">
+                      {taskMemoryQuery.isFetching ? (
+                        <p className="text-xs text-muted-foreground">Loading stored task sequences...</p>
+                      ) : taskMemories.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          No Task Memory has been saved for this profile yet. Convert recurring work below to preserve the sequence, timing, and how-to context.
+                        </p>
+                      ) : (
+                        taskMemories.map((memory) => (
+                          <div key={String(memory.id)} className="rounded-md border border-border bg-muted/25 px-3 py-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold text-foreground">{memory.title}</span>
+                                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                                  {memory.cadence === "none" ? "Reusable sequence" : titleCase(memory.cadence)} / starts {memory.startOffsetDays} day{memory.startOffsetDays === 1 ? "" : "s"} before / v{memory.version}
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-md bg-background px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                                {memory.steps.length} step{memory.steps.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            {memory.objective && <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{memory.objective}</p>}
+                            {memory.steps.length > 0 && (
+                              <ol className="mt-2 space-y-1 text-xs text-muted-foreground">
+                                {memory.steps.slice(0, 4).map((step, index) => (
+                                  <li key={String(step.id)} className="flex gap-2">
+                                    <span className="tabular-nums text-foreground">{index + 1}.</span>
+                                    <span className="line-clamp-1">{step.title}</span>
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </InfoCard>
                   <TaskListSection
                     title="Recurring tasks"
                     tasks={selectedProfile.recurringTasks}
                     empty="No recurring tasks are tied to this profile yet."
                     onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))}
+                    actionLabel="Save as Task Memory"
+                    actionPendingId={createTaskMemoryFromTask.isPending ? "pending" : null}
+                    onTaskAction={(task) => createTaskMemoryFromTask.mutate(task)}
                   />
                   {learnedRecurringResponsibilities.length > 0 && (
                     <div className="rounded-md border border-border p-3">
@@ -1716,7 +1825,23 @@ function MiniWorkCard({
   );
 }
 
-function TaskListSection({ title, tasks, empty, onTaskOpen }: { title: string; tasks: Task[]; empty: string; onTaskOpen: (task: Task) => void }) {
+function TaskListSection({
+  title,
+  tasks,
+  empty,
+  onTaskOpen,
+  actionLabel,
+  onTaskAction,
+  actionPendingId,
+}: {
+  title: string;
+  tasks: Task[];
+  empty: string;
+  onTaskOpen: (task: Task) => void;
+  actionLabel?: string;
+  onTaskAction?: (task: Task) => void;
+  actionPendingId?: string | null;
+}) {
   return (
     <div className="rounded-md border border-border p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -1728,15 +1853,29 @@ function TaskListSection({ title, tasks, empty, onTaskOpen }: { title: string; t
       ) : (
         <div className="space-y-1.5">
           {tasks.slice(0, 12).map((task) => (
-            <button key={String(task.id)} type="button" onClick={() => onTaskOpen(task)} className="flex w-full items-start justify-between gap-3 rounded-md bg-muted/30 px-3 py-2 text-left hover:bg-muted">
-              <span className="min-w-0">
+            <div key={String(task.id)} className="flex items-start justify-between gap-3 rounded-md bg-muted/30 px-3 py-2">
+              <button type="button" onClick={() => onTaskOpen(task)} className="min-w-0 flex-1 text-left">
                 <span className="block truncate text-sm font-medium text-foreground">{task.title}</span>
                 <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                   {task.dueDate ?? "No date"} / {urgencyLabel(task.urgency)} / {task.recurrence === "none" ? task.status : taskRepeatLabel(task) || task.recurrence}
                 </span>
-              </span>
-              <Eye className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-            </button>
+              </button>
+              {actionLabel && onTaskAction ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  onClick={() => onTaskAction(task)}
+                  disabled={Boolean(actionPendingId)}
+                >
+                  {actionPendingId ? <Loader2 className="size-3 animate-spin" /> : <ShieldCheck className="size-3" />}
+                  {actionLabel}
+                </Button>
+              ) : (
+                <Eye className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              )}
+            </div>
           ))}
         </div>
       )}

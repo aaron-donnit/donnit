@@ -28,7 +28,7 @@ Current focus:
 - Build a cloud-backed Position Profile memory vault using Supabase `position_profile_knowledge`, inspired by Obsidian's durable Markdown-file model but workspace-scoped and transition-safe.
 - Make Donnit AI read from this durable role memory when drafting task updates or handoff intelligence.
 - Build the workspace task-resolution layer documented in `docs/intelligence/task-resolution-memory-architecture.md`: entity memory, relationship memory, alias memory, session memory, procedural memory, bounded candidate retrieval, confidence scoring, clarification merge, and correction-to-memory learning.
-- Tabled next task after the Position Profiles UI overhaul: **Recurring Work Reliability**. Reconfirm recurring work transfers correctly, recurring responsibilities appear in role intelligence, and recurring cadence/visible-window details remain attached after assignment, transfer, or delegation.
+- Active recurring-work direction: **Task Memory**. Donnit should preserve repeatable role responsibilities as position-scoped task sequences with timing, instructions, systems, expected outputs, and learned changes, so a new profile holder can complete one clear step at a time without relearning the whole process.
 
 Next implementation sequence:
 

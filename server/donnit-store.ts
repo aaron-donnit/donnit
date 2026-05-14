@@ -157,6 +157,48 @@ export type DonnitTaskTemplate = {
   subtasks?: DonnitTaskTemplateSubtask[];
 };
 
+export type DonnitPositionProfileTaskMemoryStep = {
+  id: string;
+  org_id: string;
+  task_memory_id: string;
+  position_profile_id: string;
+  source_task_id: string | null;
+  title: string;
+  instructions: string;
+  tool_name: string;
+  tool_url: string;
+  expected_output: string;
+  relative_due_offset_days: number;
+  estimated_minutes: number;
+  dependency_step_ids: string[];
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DonnitPositionProfileTaskMemory = {
+  id: string;
+  org_id: string;
+  position_profile_id: string;
+  source_task_id: string | null;
+  title: string;
+  objective: string;
+  cadence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+  due_rule: string;
+  start_offset_days: number;
+  default_urgency: "low" | "normal" | "high" | "critical";
+  default_estimated_minutes: number;
+  status: "suggested" | "active" | "archived";
+  version: number;
+  confidence_score: number;
+  learned_from: Record<string, unknown>;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  last_learned_at: string;
+  steps?: DonnitPositionProfileTaskMemoryStep[];
+};
+
 export type DonnitTaskEvent = {
   id: string;
   org_id: string;
@@ -739,6 +781,162 @@ export class DonnitStore {
       .eq("org_id", orgId)
       .eq("id", templateId);
     if (error) throw wrapSupabaseError("delete task_template failed", error);
+  }
+
+  async listPositionProfileTaskMemories(orgId: string, positionProfileId: string): Promise<DonnitPositionProfileTaskMemory[]> {
+    const { data: memories, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemories)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("position_profile_id", positionProfileId)
+      .neq("status", "archived")
+      .order("updated_at", { ascending: false });
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return [];
+      throw wrapSupabaseError("list position_profile_task_memories failed", error);
+    }
+    const memoryIds = ((memories ?? []) as DonnitPositionProfileTaskMemory[]).map((memory) => memory.id);
+    if (memoryIds.length === 0) return [];
+    const { data: steps, error: stepsError } = await this.client
+      .from(DONNIT_TABLES.positionProfileTaskMemorySteps)
+      .select("*")
+      .eq("org_id", orgId)
+      .in("task_memory_id", memoryIds)
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (stepsError) {
+      if (isMissingRelationError(stepsError) || isMissingColumnError(stepsError)) {
+        return ((memories ?? []) as DonnitPositionProfileTaskMemory[]).map((memory) => ({ ...memory, steps: [] }));
+      }
+      throw wrapSupabaseError("list position_profile_task_memory_steps failed", stepsError);
+    }
+    const byMemory = new Map<string, DonnitPositionProfileTaskMemoryStep[]>();
+    for (const step of (steps ?? []) as DonnitPositionProfileTaskMemoryStep[]) {
+      const list = byMemory.get(step.task_memory_id) ?? [];
+      list.push({ ...step, dependency_step_ids: Array.isArray(step.dependency_step_ids) ? step.dependency_step_ids : [] });
+      byMemory.set(step.task_memory_id, list);
+    }
+    return ((memories ?? []) as DonnitPositionProfileTaskMemory[]).map((memory) => ({
+      ...memory,
+      learned_from: typeof memory.learned_from === "object" && memory.learned_from !== null ? memory.learned_from : {},
+      steps: byMemory.get(memory.id) ?? [],
+    }));
+  }
+
+  async upsertPositionProfileTaskMemory(
+    orgId: string,
+    input: Pick<DonnitPositionProfileTaskMemory, "position_profile_id" | "title"> &
+      Partial<
+        Pick<
+          DonnitPositionProfileTaskMemory,
+          | "source_task_id"
+          | "objective"
+          | "cadence"
+          | "due_rule"
+          | "start_offset_days"
+          | "default_urgency"
+          | "default_estimated_minutes"
+          | "status"
+          | "confidence_score"
+          | "learned_from"
+          | "created_by"
+        >
+      > & {
+        steps?: Array<
+          Pick<DonnitPositionProfileTaskMemoryStep, "title"> &
+            Partial<
+              Pick<
+                DonnitPositionProfileTaskMemoryStep,
+                | "source_task_id"
+                | "instructions"
+                | "tool_name"
+                | "tool_url"
+                | "expected_output"
+                | "relative_due_offset_days"
+                | "estimated_minutes"
+                | "dependency_step_ids"
+                | "position"
+              >
+            >
+        >;
+      },
+  ): Promise<DonnitPositionProfileTaskMemory | null> {
+    const now = new Date().toISOString();
+    const existing = (await this.listPositionProfileTaskMemories(orgId, input.position_profile_id)).find((memory) => {
+      if (input.source_task_id && memory.source_task_id === input.source_task_id) return true;
+      return memory.title.trim().toLowerCase() === input.title.trim().toLowerCase() && memory.cadence === (input.cadence ?? memory.cadence);
+    });
+    const memoryPayload = {
+      position_profile_id: input.position_profile_id,
+      source_task_id: input.source_task_id ?? existing?.source_task_id ?? null,
+      title: input.title,
+      objective: input.objective ?? existing?.objective ?? "",
+      cadence: input.cadence ?? existing?.cadence ?? "none",
+      due_rule: input.due_rule ?? existing?.due_rule ?? "",
+      start_offset_days: input.start_offset_days ?? existing?.start_offset_days ?? 0,
+      default_urgency: input.default_urgency ?? existing?.default_urgency ?? "normal",
+      default_estimated_minutes: input.default_estimated_minutes ?? existing?.default_estimated_minutes ?? 30,
+      status: input.status ?? existing?.status ?? "active",
+      version: existing ? existing.version + 1 : 1,
+      confidence_score: input.confidence_score ?? existing?.confidence_score ?? 0.65,
+      learned_from: input.learned_from ?? existing?.learned_from ?? {},
+      created_by: input.created_by ?? existing?.created_by ?? this.userId,
+      updated_at: now,
+      last_learned_at: now,
+    };
+
+    const { data, error } = existing
+      ? await this.client
+          .from(DONNIT_TABLES.positionProfileTaskMemories)
+          .update(memoryPayload)
+          .eq("org_id", orgId)
+          .eq("id", existing.id)
+          .select("*")
+          .single()
+      : await this.client
+          .from(DONNIT_TABLES.positionProfileTaskMemories)
+          .insert({ ...memoryPayload, org_id: orgId })
+          .select("*")
+          .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("upsert position_profile_task_memory failed", error);
+    }
+    const memory = data as DonnitPositionProfileTaskMemory;
+    if (input.steps) {
+      const { error: deleteError } = await this.client
+        .from(DONNIT_TABLES.positionProfileTaskMemorySteps)
+        .delete()
+        .eq("org_id", orgId)
+        .eq("task_memory_id", memory.id);
+      if (deleteError) {
+        if (isMissingRelationError(deleteError) || isMissingColumnError(deleteError)) return { ...memory, steps: [] };
+        throw wrapSupabaseError("replace position_profile_task_memory_steps failed", deleteError);
+      }
+      if (input.steps.length > 0) {
+        const { error: insertError } = await this.client
+          .from(DONNIT_TABLES.positionProfileTaskMemorySteps)
+          .insert(
+            input.steps.map((step, index) => ({
+              org_id: orgId,
+              task_memory_id: memory.id,
+              position_profile_id: input.position_profile_id,
+              source_task_id: step.source_task_id ?? input.source_task_id ?? null,
+              title: step.title,
+              instructions: step.instructions ?? "",
+              tool_name: step.tool_name ?? "",
+              tool_url: step.tool_url ?? "",
+              expected_output: step.expected_output ?? "",
+              relative_due_offset_days: step.relative_due_offset_days ?? 0,
+              estimated_minutes: step.estimated_minutes ?? input.default_estimated_minutes ?? 30,
+              dependency_step_ids: step.dependency_step_ids ?? [],
+              position: step.position ?? index,
+            })),
+          );
+        if (insertError) throw wrapSupabaseError("replace position_profile_task_memory_steps failed", insertError);
+      }
+    }
+    return (await this.listPositionProfileTaskMemories(orgId, input.position_profile_id)).find((item) => item.id === memory.id) ?? memory;
   }
 
   async addEvent(orgId: string, input: Omit<DonnitTaskEvent, "id" | "org_id" | "created_at">): Promise<DonnitTaskEvent> {

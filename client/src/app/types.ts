@@ -128,6 +128,45 @@ export type TaskTemplate = {
   subtasks: TaskTemplateSubtask[];
 };
 
+export type PositionProfileTaskMemoryStep = {
+  id: Id;
+  taskMemoryId: Id;
+  sourceTaskId: Id | null;
+  title: string;
+  instructions: string;
+  toolName: string;
+  toolUrl: string;
+  expectedOutput: string;
+  relativeDueOffsetDays: number;
+  estimatedMinutes: number;
+  dependencyStepIds: Id[];
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PositionProfileTaskMemory = {
+  id: Id;
+  positionProfileId: Id;
+  sourceTaskId: Id | null;
+  title: string;
+  objective: string;
+  cadence: "none" | "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+  dueRule: string;
+  startOffsetDays: number;
+  defaultUrgency: "low" | "normal" | "high" | "critical";
+  defaultEstimatedMinutes: number;
+  status: "suggested" | "active" | "archived";
+  version: number;
+  confidenceScore: number;
+  learnedFrom: Record<string, unknown>;
+  createdBy: Id | null;
+  createdAt: string;
+  updatedAt: string;
+  lastLearnedAt: string;
+  steps: PositionProfileTaskMemoryStep[];
+};
+
 export type WorkspaceState = {
   reviewedNotificationIds: string[];
   agenda: {

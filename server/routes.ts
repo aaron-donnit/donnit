@@ -39,6 +39,7 @@ import {
   type DonnitEmailSuggestion,
   type DonnitPositionProfile,
   type DonnitPositionProfileKnowledge,
+  type DonnitPositionProfileTaskMemory,
   type DonnitWorkspaceMemoryAlias,
   type DonnitTask,
   type DonnitTaskEvent,
@@ -1748,6 +1749,45 @@ function toClientPositionProfileKnowledge(item: DonnitPositionProfileKnowledge) 
   };
 }
 
+function toClientPositionProfileTaskMemory(memory: DonnitPositionProfileTaskMemory) {
+  return {
+    id: memory.id,
+    positionProfileId: memory.position_profile_id,
+    sourceTaskId: memory.source_task_id,
+    title: memory.title,
+    objective: memory.objective,
+    cadence: memory.cadence,
+    dueRule: memory.due_rule,
+    startOffsetDays: memory.start_offset_days,
+    defaultUrgency: memory.default_urgency,
+    defaultEstimatedMinutes: memory.default_estimated_minutes,
+    status: memory.status,
+    version: memory.version,
+    confidenceScore: Number(memory.confidence_score ?? 0.65),
+    learnedFrom: memory.learned_from ?? {},
+    createdBy: memory.created_by,
+    createdAt: memory.created_at,
+    updatedAt: memory.updated_at,
+    lastLearnedAt: memory.last_learned_at,
+    steps: (memory.steps ?? []).map((step) => ({
+      id: step.id,
+      taskMemoryId: step.task_memory_id,
+      sourceTaskId: step.source_task_id,
+      title: step.title,
+      instructions: step.instructions,
+      toolName: step.tool_name,
+      toolUrl: step.tool_url,
+      expectedOutput: step.expected_output,
+      relativeDueOffsetDays: step.relative_due_offset_days,
+      estimatedMinutes: step.estimated_minutes,
+      dependencyStepIds: step.dependency_step_ids ?? [],
+      position: step.position,
+      createdAt: step.created_at,
+      updatedAt: step.updated_at,
+    })),
+  };
+}
+
 type ClientTaskShape = ReturnType<typeof toClientTask>;
 
 function cleanStringArray(value: unknown, maxItems = 300) {
@@ -2364,6 +2404,58 @@ function taskMemoryMarkdown(input: {
   ].filter(Boolean).join("\n");
 }
 
+function taskMemoryObjectiveFromTask(task: DonnitTask) {
+  const source = compactMemoryText(task.description || task.completion_notes, 700);
+  const repeat = task.recurrence !== "none"
+    ? ` This repeats ${task.recurrence}${task.reminder_days_before > 0 ? ` and should start ${task.reminder_days_before} day(s) before the due date` : ""}.`
+    : "";
+  return compactMemoryText(`Complete ${task.title}.${repeat}${source ? ` Prior context: ${source}` : ""}`, 1200);
+}
+
+function taskMemoryDueRuleFromTask(task: DonnitTask) {
+  const repeatDetails = repeatDetailsFromDescription(task.description);
+  const parts = [
+    task.due_date ? `Current due date anchor: ${task.due_date}` : "",
+    repeatDetails ? `Repeat details: ${repeatDetails}` : "",
+    task.reminder_days_before > 0 ? `Start ${task.reminder_days_before} day(s) before due date` : "",
+  ].filter(Boolean);
+  return parts.join(". ");
+}
+
+function taskMemoryStepsFromTask(input: {
+  task: DonnitTask;
+  subtasks: DonnitTaskSubtask[];
+  note?: string;
+}) {
+  const { task, subtasks, note } = input;
+  const context = compactMemoryText(note || task.completion_notes || task.description, 2200);
+  if (subtasks.length > 0) {
+    return subtasks
+      .sort((a, b) => a.position - b.position)
+      .slice(0, 50)
+      .map((subtask, index) => ({
+        source_task_id: task.id,
+        title: subtask.title,
+        instructions: index === 0 && context ? context : "",
+        expected_output: index === subtasks.length - 1 ? `Completed contribution toward ${task.title}` : "",
+        estimated_minutes: Math.max(5, Math.round(task.estimated_minutes / Math.max(subtasks.length, 1))),
+        relative_due_offset_days: Math.min(0, index - Math.max(subtasks.length - 1, 0)),
+        position: index,
+      }));
+  }
+  return [
+    {
+      source_task_id: task.id,
+      title: task.title,
+      instructions: context,
+      expected_output: `Complete ${task.title}`,
+      estimated_minutes: task.estimated_minutes,
+      relative_due_offset_days: 0,
+      position: 0,
+    },
+  ];
+}
+
 async function enrichPositionProfileMemoryFromTask(input: {
   store: DonnitStore;
   orgId: string;
@@ -2536,6 +2628,31 @@ async function enrichPositionProfileMemoryFromTask(input: {
       capturedAt,
     };
     const sourceKind = sourceKindForTaskMemory(input.task.source, input.eventType);
+    if (recurringSignal) {
+      await writeStore.upsertPositionProfileTaskMemory(input.orgId, {
+        position_profile_id: profile.id,
+        source_task_id: input.task.id,
+        title: input.task.title,
+        objective: taskMemoryObjectiveFromTask(input.task),
+        cadence: input.task.recurrence,
+        due_rule: taskMemoryDueRuleFromTask(input.task),
+        start_offset_days: input.task.reminder_days_before,
+        default_urgency: input.task.urgency,
+        default_estimated_minutes: input.task.estimated_minutes,
+        status: "active",
+        confidence_score: Math.max(confidenceScore, input.eventType === "completed" ? 0.88 : 0.72),
+        learned_from: {
+          sourceTaskId: input.task.id,
+          eventType: input.eventType,
+          capturedAt,
+          source: input.task.source,
+          visibility,
+          note: noteText,
+        },
+        created_by: input.store.userId,
+        steps: taskMemoryStepsFromTask({ task: input.task, subtasks, note: noteText }),
+      });
+    }
     await Promise.all([
       writeStore.upsertPositionProfileKnowledge(input.orgId, {
         position_profile_id: profile.id,
@@ -4371,6 +4488,31 @@ const positionProfileUpdateSchema = z.object({
   delegateUntil: z.string().trim().max(20).nullable().optional(),
   riskSummary: z.string().trim().max(500).optional(),
   institutionalMemory: z.record(z.unknown()).optional(),
+});
+
+const taskMemoryStepSchema = z.object({
+  title: z.string().trim().min(2).max(180),
+  instructions: z.string().trim().max(4000).optional().default(""),
+  toolName: z.string().trim().max(160).optional().default(""),
+  toolUrl: z.string().trim().max(500).optional().default(""),
+  expectedOutput: z.string().trim().max(1000).optional().default(""),
+  relativeDueOffsetDays: z.number().int().min(-365).max(365).optional().default(0),
+  estimatedMinutes: z.number().int().min(5).max(1440).optional().default(30),
+  position: z.number().int().min(0).max(500).optional(),
+});
+
+const taskMemoryCreateSchema = z.object({
+  sourceTaskId: z.string().trim().min(1).nullable().optional(),
+  title: z.string().trim().min(2).max(160),
+  objective: z.string().trim().max(1500).optional().default(""),
+  cadence: z.enum(["none", "daily", "weekly", "monthly", "quarterly", "annual"]).default("none"),
+  dueRule: z.string().trim().max(500).optional().default(""),
+  startOffsetDays: z.number().int().min(0).max(365).optional().default(0),
+  defaultUrgency: z.enum(["low", "normal", "high", "critical"]).default("normal"),
+  defaultEstimatedMinutes: z.number().int().min(5).max(1440).optional().default(30),
+  status: z.enum(["suggested", "active", "archived"]).optional().default("active"),
+  confidenceScore: z.number().min(0).max(1).optional().default(0.72),
+  steps: z.array(taskMemoryStepSchema).max(80).optional().default([]),
 });
 
 type DemoTaskSeed = {
@@ -8445,6 +8587,106 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               };
         }),
       });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/position-profiles/:id/task-memory", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      if (!profile) {
+        res.status(404).json({ message: "Position Profile not found." });
+        return;
+      }
+      const canView =
+        isWorkspaceAdmin(actor) ||
+        profile.current_owner_id === auth.userId ||
+        profile.temporary_owner_id === auth.userId ||
+        profile.delegate_user_id === auth.userId ||
+        profile.direct_manager_id === auth.userId;
+      if (!canView) {
+        res.status(403).json({ message: "You do not have access to this Position Profile task memory." });
+        return;
+      }
+      const memories = await store.listPositionProfileTaskMemories(orgId, profile.id);
+      res.json({ ok: true, memories: memories.map(toClientPositionProfileTaskMemory) });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/position-profiles/:id/task-memory", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = taskMemoryCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Task Memory details are incomplete." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const [members, profiles] = await Promise.all([
+        store.listOrgMembers(orgId),
+        store.listPositionProfiles(orgId),
+      ]);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!isWorkspaceAdmin(actor)) {
+        res.status(403).json({ message: "Only admins can create Position Profile Task Memory." });
+        return;
+      }
+      const profile = profiles.find((item) => item.id === String(req.params.id));
+      if (!profile) {
+        res.status(404).json({ message: "Position Profile not found." });
+        return;
+      }
+      const input = parsed.data;
+      const memory = await store.upsertPositionProfileTaskMemory(orgId, {
+        position_profile_id: profile.id,
+        source_task_id: input.sourceTaskId ?? null,
+        title: input.title,
+        objective: input.objective,
+        cadence: input.cadence,
+        due_rule: input.dueRule,
+        start_offset_days: input.startOffsetDays,
+        default_urgency: input.defaultUrgency,
+        default_estimated_minutes: input.defaultEstimatedMinutes,
+        status: input.status,
+        confidence_score: input.confidenceScore,
+        learned_from: { source: "manual", createdAt: new Date().toISOString() },
+        created_by: auth.userId,
+        steps: input.steps.map((step, index) => ({
+          title: step.title,
+          instructions: step.instructions,
+          tool_name: step.toolName,
+          tool_url: step.toolUrl,
+          expected_output: step.expectedOutput,
+          relative_due_offset_days: step.relativeDueOffsetDays,
+          estimated_minutes: step.estimatedMinutes,
+          position: step.position ?? index,
+        })),
+      });
+      if (!memory) {
+        res.status(409).json({ message: "Task Memory storage is not available. Apply the latest Supabase migration." });
+        return;
+      }
+      res.status(201).json(toClientPositionProfileTaskMemory(memory));
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }
