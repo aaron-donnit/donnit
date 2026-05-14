@@ -38,8 +38,10 @@ import {
   DonnitStore,
   type DonnitEmailSuggestion,
   type DonnitPositionProfile,
+  type DonnitPositionProfileKnowledge,
   type DonnitWorkspaceMemoryAlias,
   type DonnitTask,
+  type DonnitTaskEvent,
   type DonnitTaskSubtask,
   type DonnitTaskTemplate,
   type DonnitUserWorkspaceState,
@@ -2242,6 +2244,93 @@ function sourceKindForTaskMemory(source: DonnitTask["source"], eventType: string
   return "task" as const;
 }
 
+function taskMemoryTitleKey(title: string) {
+  return compactNaturalText(title).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "task";
+}
+
+function lifecycleMemoryKind(eventType: string): DonnitPositionProfileKnowledge["kind"] {
+  if (eventType === "due_date_postponed") return "decision_rule";
+  if (eventType === "accepted" || eventType === "denied") return "relationship";
+  if (eventType === "completed" || eventType === "note_added") return "handoff_note";
+  return "process";
+}
+
+function taskDueSummary(task: DonnitTask) {
+  const due = task.due_date ? `Due ${task.due_date}` : "No due date";
+  const time = task.due_time ?? task.start_time;
+  return time ? `${due} at ${time}` : due;
+}
+
+function taskContinuitySummary(input: {
+  task: DonnitTask;
+  eventType: string;
+  note: string;
+  subtasks: DonnitTaskSubtask[];
+  events: DonnitTaskEvent[];
+}) {
+  const { task, eventType, note, subtasks, events } = input;
+  const lines = [
+    `${task.title} is a ${task.visibility} task for this position profile.`,
+    `${taskDueSummary(task)}. Urgency: ${task.urgency}. Status after this signal: ${task.status}.`,
+  ];
+  if (task.recurrence !== "none") {
+    lines.push(`This is recurring ${task.recurrence}${task.reminder_days_before > 0 ? ` and should appear ${task.reminder_days_before} day(s) before it is due` : ""}.`);
+  }
+  const repeatDetails = repeatDetailsFromDescription(task.description);
+  if (repeatDetails) lines.push(`Repeat details: ${repeatDetails}.`);
+  if (task.estimated_minutes) lines.push(`Expected effort: about ${task.estimated_minutes} minute(s).`);
+  if (note) lines.push(`Latest ${eventType.replace(/_/g, " ")} signal: ${compactMemoryText(note, 500)}`);
+  if (task.completion_notes && task.completion_notes !== note) {
+    lines.push(`Completion/status notes: ${compactMemoryText(task.completion_notes, 500)}`);
+  }
+  const openSubtasks = subtasks.filter((subtask) => subtask.status !== "completed").map((subtask) => subtask.title).slice(0, 6);
+  if (openSubtasks.length > 0) lines.push(`Open subtasks: ${openSubtasks.join("; ")}.`);
+  const recentEvents = events
+    .filter((event) => event.note)
+    .slice(0, 4)
+    .map((event) => `${event.type}: ${compactMemoryText(event.note, 180)}`);
+  if (recentEvents.length > 0) lines.push(`Recent activity: ${recentEvents.join(" | ")}`);
+  return compactMemoryText(lines.join(" "), 1400);
+}
+
+function taskMemoryMarkdown(input: {
+  task: DonnitTask;
+  eventType: string;
+  note: string;
+  subtasks: DonnitTaskSubtask[];
+  events: DonnitTaskEvent[];
+  summary: string;
+}) {
+  const { task, eventType, note, subtasks, events, summary } = input;
+  const subtaskLines = subtasks.slice(0, 12).map((subtask) => `- [${subtask.status === "completed" ? "x" : " "}] ${subtask.title}`);
+  const eventLines = events.slice(0, 8).map((event) => `- ${event.created_at}: ${event.type}${event.note ? ` - ${compactMemoryText(event.note, 220)}` : ""}`);
+  return [
+    `# ${task.title}`,
+    "",
+    "## Continuity summary",
+    summary,
+    "",
+    "## Task facts",
+    `- Event captured: ${eventType.replace(/_/g, " ")}`,
+    `- Status: ${task.status}`,
+    `- Urgency: ${task.urgency}`,
+    `- Source: ${task.source}`,
+    `- ${taskDueSummary(task)}`,
+    `- Estimated effort: ${task.estimated_minutes} minute(s)`,
+    task.recurrence !== "none" ? `- Recurrence: ${task.recurrence}` : "",
+    task.reminder_days_before > 0 ? `- Show early: ${task.reminder_days_before} day(s)` : "",
+    "",
+    note ? "## Latest note" : "",
+    note ? compactMemoryText(note, 1000) : "",
+    subtaskLines.length > 0 ? "## Subtasks" : "",
+    ...subtaskLines,
+    eventLines.length > 0 ? "## Recent activity" : "",
+    ...eventLines,
+    task.description ? "## Source detail" : "",
+    task.description ? compactMemoryText(task.description, 1600) : "",
+  ].filter(Boolean).join("\n");
+}
+
 async function enrichPositionProfileMemoryFromTask(input: {
   store: DonnitStore;
   orgId: string;
@@ -2259,15 +2348,40 @@ async function enrichPositionProfileMemoryFromTask(input: {
     const profiles = await writeStore.listPositionProfiles(input.orgId);
     const profile = profiles.find((item) => item.id === profileId);
     if (!profile) return;
+    const [allSubtasks, allEvents] = await Promise.all([
+      writeStore.listTaskSubtasks(input.orgId).catch(() => [] as DonnitTaskSubtask[]),
+      writeStore.listEvents(input.orgId).catch(() => [] as DonnitTaskEvent[]),
+    ]);
+    const subtasks = allSubtasks.filter((subtask) => subtask.task_id === input.task.id);
+    const events = allEvents.filter((event) => event.task_id === input.task.id);
     const previous = (profile.institutional_memory ?? {}) as Record<string, unknown>;
     const existingRecent = Array.isArray(previous.recentTaskSignals) ? previous.recentTaskSignals as Array<Record<string, unknown>> : [];
     const existingRecurring = Array.isArray(previous.recurringResponsibilities) ? previous.recurringResponsibilities as Array<Record<string, unknown>> : [];
     const existingHowTo = Array.isArray(previous.howToNotes) ? previous.howToNotes as Array<Record<string, unknown>> : [];
+    const existingActive = Array.isArray(previous.activeResponsibilities) ? previous.activeResponsibilities as Array<Record<string, unknown>> : [];
+    const existingLifecycle = Array.isArray(previous.lifecycleSignals) ? previous.lifecycleSignals as Array<Record<string, unknown>> : [];
     const existingSources = typeof previous.sourceMix === "object" && previous.sourceMix !== null ? previous.sourceMix as Record<string, number> : {};
     const existingStats = typeof previous.stats === "object" && previous.stats !== null ? previous.stats as Record<string, number> : {};
     const capturedAt = new Date().toISOString();
     const confidenceScore = confidenceScoreForTaskMemory(input.eventType, visibility);
     const confidence = confidenceLabelForScore(confidenceScore);
+    const noteText = compactMemoryText(input.note || input.task.completion_notes || input.task.description, 500);
+    const continuitySummary = taskContinuitySummary({
+      task: input.task,
+      eventType: input.eventType,
+      note: noteText,
+      subtasks,
+      events,
+    });
+    const markdownBody = taskMemoryMarkdown({
+      task: input.task,
+      eventType: input.eventType,
+      note: noteText,
+      subtasks,
+      events,
+      summary: continuitySummary,
+    });
+    const isClosed = input.task.status === "completed" || input.task.status === "denied";
     const taskSignal = {
       taskId: input.task.id,
       title: input.task.title,
@@ -2275,11 +2389,27 @@ async function enrichPositionProfileMemoryFromTask(input: {
       urgency: input.task.urgency,
       dueDate: input.task.due_date,
       dueTime: input.task.due_time ?? input.task.start_time ?? null,
+      estimatedMinutes: input.task.estimated_minutes,
       source: input.task.source,
       recurrence: input.task.recurrence,
       visibility,
       eventType: input.eventType,
+      subtaskCount: subtasks.length,
+      openSubtaskCount: subtasks.filter((subtask) => subtask.status !== "completed").length,
+      latestNote: noteText,
       capturedAt,
+    };
+    const activeSignal = {
+      taskId: input.task.id,
+      title: input.task.title,
+      status: input.task.status,
+      urgency: input.task.urgency,
+      dueDate: input.task.due_date,
+      dueTime: input.task.due_time ?? input.task.start_time ?? null,
+      recurrence: input.task.recurrence,
+      showEarlyDays: input.task.reminder_days_before,
+      summary: continuitySummary,
+      updatedAt: capturedAt,
     };
     const recurringSignal =
       input.task.recurrence !== "none" || input.task.reminder_days_before > 0
@@ -2289,11 +2419,14 @@ async function enrichPositionProfileMemoryFromTask(input: {
             cadence: input.task.recurrence,
             repeatDetails: repeatDetailsFromDescription(input.task.description),
             dueDate: input.task.due_date,
+            dueTime: input.task.due_time ?? input.task.start_time ?? null,
+            urgency: input.task.urgency,
+            estimatedMinutes: input.task.estimated_minutes,
             showEarlyDays: input.task.reminder_days_before,
+            summary: continuitySummary,
             updatedAt: capturedAt,
           }
         : null;
-    const noteText = compactMemoryText(input.note || input.task.completion_notes || input.task.description, 500);
     const howToSignal = noteText
       ? {
           taskId: input.task.id,
@@ -2304,9 +2437,12 @@ async function enrichPositionProfileMemoryFromTask(input: {
         }
       : null;
     const recentTaskSignals = uniqueMemoryItems([taskSignal, ...existingRecent], (item) => `${item.taskId}:${item.eventType}`, 30);
+    const activeResponsibilities = isClosed
+      ? existingActive.filter((item) => item.taskId !== input.task.id)
+      : uniqueMemoryItems([activeSignal, ...existingActive], (item) => String(item.taskId), 40);
     const recurringResponsibilities = uniqueMemoryItems(
       recurringSignal ? [recurringSignal, ...existingRecurring] : existingRecurring,
-      (item) => String(item.taskId || item.title),
+      (item) => `${String(item.title || "").toLowerCase()}:${String(item.cadence || "")}`,
       25,
     );
     const howToNotes = uniqueMemoryItems(
@@ -2314,11 +2450,23 @@ async function enrichPositionProfileMemoryFromTask(input: {
       (item) => `${item.taskId}:${item.note}`,
       25,
     );
+    const lifecycleSignal = {
+      taskId: input.task.id,
+      title: input.task.title,
+      eventType: input.eventType,
+      note: noteText || `${input.eventType.replace(/_/g, " ")} captured.`,
+      dueDate: input.task.due_date,
+      capturedAt,
+    };
+    const lifecycleSignals = uniqueMemoryItems([lifecycleSignal, ...existingLifecycle], (item) => `${item.taskId}:${item.eventType}:${item.capturedAt}`, 40);
     const stats = {
       ...existingStats,
       taskSignals: (existingStats.taskSignals ?? 0) + 1,
       completedTasks: (existingStats.completedTasks ?? 0) + (input.eventType === "completed" ? 1 : 0),
       recurringTasks: recurringResponsibilities.length,
+      activeTasks: activeResponsibilities.length,
+      howToNotes: howToNotes.length,
+      lastSignalAt: capturedAt,
     };
     const nextMemory = {
       ...previous,
@@ -2328,8 +2476,10 @@ async function enrichPositionProfileMemoryFromTask(input: {
         [input.task.source]: (existingSources[input.task.source] ?? 0) + 1,
       },
       recentTaskSignals,
+      activeResponsibilities,
       recurringResponsibilities,
       howToNotes,
+      lifecycleSignals,
       lastAutoUpdatedAt: capturedAt,
     };
     const riskScore = Math.min(100, Math.max(profile.risk_score ?? 0, recurringResponsibilities.length * 8 + howToNotes.length * 3));
@@ -2344,7 +2494,12 @@ async function enrichPositionProfileMemoryFromTask(input: {
       source: input.task.source,
       visibility,
       dueDate: input.task.due_date,
+      dueTime: input.task.due_time ?? input.task.start_time ?? null,
       recurrence: input.task.recurrence,
+      reminderDaysBefore: input.task.reminder_days_before,
+      estimatedMinutes: input.task.estimated_minutes,
+      subtasks: subtasks.map((subtask) => ({ id: subtask.id, title: subtask.title, status: subtask.status })),
+      recentEvents: events.slice(0, 8).map((event) => ({ id: event.id, type: event.type, createdAt: event.created_at })),
       capturedAt,
     };
     const sourceKind = sourceKindForTaskMemory(input.task.source, input.eventType);
@@ -2354,18 +2509,8 @@ async function enrichPositionProfileMemoryFromTask(input: {
         source_task_id: input.task.id,
         kind: "process",
         title: input.task.title,
-        body: compactMemoryText(input.task.description || input.note || input.task.title, 900),
-        markdown_body: [
-          `# ${input.task.title}`,
-          "",
-          `- Status: ${input.task.status}`,
-          `- Urgency: ${input.task.urgency}`,
-          `- Source: ${input.task.source}`,
-          input.task.due_date ? `- Due: ${input.task.due_date}` : "",
-          input.task.recurrence !== "none" ? `- Recurrence: ${input.task.recurrence}` : "",
-          "",
-          compactMemoryText(input.task.description || input.note || "", 1400),
-        ].filter(Boolean).join("\n"),
+        body: continuitySummary,
+        markdown_body: markdownBody,
         memory_key: memoryKeyFromParts(["task", input.task.id, "process"]),
         source_kind: sourceKind,
         evidence,
@@ -2381,8 +2526,8 @@ async function enrichPositionProfileMemoryFromTask(input: {
             kind: "recurring_responsibility",
             title: input.task.title,
             body: compactMemoryText(
-              `${input.task.title}. Cadence: ${recurringSignal.cadence}. ${recurringSignal.repeatDetails ? `Repeat details: ${recurringSignal.repeatDetails}. ` : ""}${input.task.description}`,
-              900,
+              `${input.task.title}. Cadence: ${recurringSignal.cadence}. ${recurringSignal.repeatDetails ? `Repeat details: ${recurringSignal.repeatDetails}. ` : ""}${continuitySummary}`,
+              1200,
             ),
             markdown_body: [
               `# Recurring responsibility: ${input.task.title}`,
@@ -2390,11 +2535,14 @@ async function enrichPositionProfileMemoryFromTask(input: {
               `- Cadence: ${recurringSignal.cadence}`,
               recurringSignal.repeatDetails ? `- Repeat details: ${recurringSignal.repeatDetails}` : "",
               recurringSignal.dueDate ? `- Current due date: ${recurringSignal.dueDate}` : "",
+              recurringSignal.dueTime ? `- Time: ${recurringSignal.dueTime}` : "",
+              `- Urgency: ${recurringSignal.urgency}`,
+              `- Estimated effort: ${recurringSignal.estimatedMinutes} minute(s)`,
               `- Show early: ${recurringSignal.showEarlyDays} day(s)`,
               "",
-              compactMemoryText(input.task.description, 1400),
+              recurringSignal.summary,
             ].filter(Boolean).join("\n"),
-            memory_key: memoryKeyFromParts(["task", input.task.id, "recurring"]),
+            memory_key: memoryKeyFromParts(["recurring", taskMemoryTitleKey(input.task.title), recurringSignal.cadence]),
             source_kind: sourceKind,
             evidence,
             confidence: "high",
@@ -2409,20 +2557,46 @@ async function enrichPositionProfileMemoryFromTask(input: {
             source_task_id: input.task.id,
             kind: "how_to",
             title: input.task.title,
-            body: howToSignal.note,
+            body: compactMemoryText(`${howToSignal.note} ${continuitySummary}`, 1200),
             markdown_body: [
               `# How to: ${input.task.title}`,
               "",
               howToSignal.note,
               "",
+              "## Continuity context",
+              continuitySummary,
+              "",
               `Source event: ${input.eventType.replace(/_/g, " ")}`,
             ].join("\n"),
-            memory_key: memoryKeyFromParts(["task", input.task.id, "how-to", input.eventType]),
+            memory_key: memoryKeyFromParts(["how-to", taskMemoryTitleKey(input.task.title)]),
             source_kind: sourceKind,
             evidence,
             confidence,
             confidence_score: confidenceScore,
             importance: input.eventType === "completed" ? 84 : 66,
+            created_by: input.store.userId,
+          })
+        : Promise.resolve(null),
+      ["accepted", "denied", "completed", "note_added", "due_date_postponed"].includes(input.eventType)
+        ? writeStore.upsertPositionProfileKnowledge(input.orgId, {
+            position_profile_id: profile.id,
+            source_task_id: input.task.id,
+            kind: lifecycleMemoryKind(input.eventType),
+            title: `${input.task.title} - ${input.eventType.replace(/_/g, " ")}`,
+            body: continuitySummary,
+            markdown_body: [
+              `# ${input.eventType.replace(/_/g, " ")}: ${input.task.title}`,
+              "",
+              continuitySummary,
+              "",
+              markdownBody,
+            ].join("\n"),
+            memory_key: memoryKeyFromParts(["lifecycle", input.task.id, input.eventType]),
+            source_kind: sourceKind,
+            evidence,
+            confidence,
+            confidence_score: confidenceScore,
+            importance: input.eventType === "completed" ? 86 : input.eventType === "due_date_postponed" ? 78 : 70,
             created_by: input.store.userId,
           })
         : Promise.resolve(null),
@@ -5654,6 +5828,9 @@ export const __chatParserTest = {
   resolveChatPositionProfile,
   rewriteRequesterReferencesInTitle,
   shouldLearnAliasPhrase,
+  taskContinuitySummary,
+  taskMemoryMarkdown,
+  taskMemoryTitleKey,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
   titleFromMessage,

@@ -401,3 +401,84 @@ describe("Donnit task intelligence evals", () => {
     }
   });
 });
+
+describe("Position Profile memory helpers", () => {
+  it("captures role continuity context from task facts, notes, subtasks, and events", () => {
+    const task = {
+      id: "task-1",
+      org_id: "org-1",
+      title: "Update company financial reports",
+      description: "Repeat details: first Monday of every month. Pull bank data and review variance notes.",
+      status: "completed",
+      urgency: "high",
+      due_date: "2026-06-01",
+      due_time: "09:00",
+      start_time: null,
+      end_time: null,
+      is_all_day: false,
+      estimated_minutes: 90,
+      assigned_to: "user-nina",
+      assigned_by: "user-aaron",
+      delegated_to: null,
+      collaborator_ids: [],
+      source: "chat",
+      recurrence: "monthly",
+      reminder_days_before: 5,
+      position_profile_id: "profile-finance",
+      visibility: "work",
+      visible_from: null,
+      accepted_at: null,
+      denied_at: null,
+      completed_at: "2026-05-14T15:00:00.000Z",
+      completion_notes: "Use the variance tab before sending to leadership.",
+      created_at: "2026-05-14T10:00:00.000Z",
+    } as never;
+    const subtasks = [
+      {
+        id: "subtask-1",
+        task_id: "task-1",
+        org_id: "org-1",
+        title: "Pull bank data",
+        status: "open",
+        position: 0,
+        completed_at: null,
+        created_at: "2026-05-14T10:01:00.000Z",
+      },
+    ] as never;
+    const events = [
+      {
+        id: "event-1",
+        org_id: "org-1",
+        task_id: "task-1",
+        actor_id: "user-nina",
+        type: "completed",
+        note: "Sent after checking the variance tab.",
+        created_at: "2026-05-14T15:00:00.000Z",
+      },
+    ] as never;
+
+    const summary = __chatParserTest.taskContinuitySummary({
+      task,
+      eventType: "completed",
+      note: "Sent after checking the variance tab.",
+      subtasks,
+      events,
+    });
+    const markdown = __chatParserTest.taskMemoryMarkdown({
+      task,
+      eventType: "completed",
+      note: "Sent after checking the variance tab.",
+      subtasks,
+      events,
+      summary,
+    });
+
+    expect(summary).toContain("recurring monthly");
+    expect(summary).toContain("appear 5 day(s) before");
+    expect(summary).toContain("Open subtasks: Pull bank data");
+    expect(summary).toContain("Recent activity: completed");
+    expect(markdown).toContain("## Continuity summary");
+    expect(markdown).toContain("- [ ] Pull bank data");
+    expect(__chatParserTest.taskMemoryTitleKey("Update company financial reports")).toBe("update-company-financial-reports");
+  });
+});
