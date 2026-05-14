@@ -31,12 +31,14 @@ Current focus:
 
 Next implementation sequence:
 
-1. Expand the task-intelligence eval set around aliases, roles, recurring work, vague times, corrections, and session follow-ups.
+1. Expand the task-intelligence eval set around aliases, roles, recurring work, vague times, corrections, and session follow-ups. First pass is implemented for member/profile alias routing and ambiguity.
 2. Add workspace alias memory for people, Position Profiles, departments, recurring artifacts, and task-template triggers.
 3. Build a shared task-resolution context provider that retrieves bounded candidate sets before the LLM resolves the input.
-4. Replace ad hoc chat extraction with a structured resolution contract that returns confidence, inferred fields, gaps, and one clarifying question.
-5. Persist pending task drafts so follow-up answers update the existing task instead of creating malformed new tasks.
-6. Log user corrections and accepted inferences back into workspace or Position Profile memory.
+4. Add staged retrieval and margin-aware ranking: exact alias/name first, structured fuzzy second, semantic/vector fallback later, then confidence based on the gap between top and runner-up candidates. First deterministic member/profile version is implemented.
+5. Replace ad hoc chat extraction with a structured resolution contract that returns confidence, inferred fields, gaps, and one clarifying question.
+6. Persist pending task drafts so follow-up answers update the existing task instead of creating malformed new tasks.
+7. Log user corrections and accepted inferences back into workspace or Position Profile memory.
+8. Add contested alias handling and alias decay so ambiguous or stale aliases ask instead of auto-writing.
 
 ### Agentic AI Assistant
 

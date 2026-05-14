@@ -39,6 +39,13 @@ const profiles = [
     temporary_owner_id: null,
     delegate_user_id: null,
   },
+  {
+    id: "profile-recruiting-manager",
+    title: "Recruiting Manager",
+    current_owner_id: "user-nina",
+    temporary_owner_id: null,
+    delegate_user_id: null,
+  },
 ] as never;
 
 type EvalExpected = Partial<ReturnType<typeof __chatParserTest.evaluateDeterministicChatTask>> & {
@@ -84,12 +91,21 @@ const evalCases: Array<{
   },
   {
     name: "routes recruiting shorthand to Recruiting Coordinator",
-    message: "ask recruiting to schedule first round interviews by EOW",
+    message: "ask Recruiting Coordinator to schedule first round interviews by EOW",
     expected: {
       assignedToId: "user-jordan",
       positionProfileId: "profile-recruiting",
       dueDate: "2026-05-15",
       titleIncludes: "first round interviews",
+    },
+  },
+  {
+    name: "asks when a bare role alias is contested",
+    message: "ask recruiting to schedule first round interviews by EOW",
+    expected: {
+      assignedToId: "user-aaron",
+      missing: ["assignee", "positionProfile"],
+      dueDate: "2026-05-15",
     },
   },
   {
@@ -148,6 +164,16 @@ const evalCases: Array<{
       assignedToId: "user-aaron-b",
       dueDate: "2026-05-15",
       title: "Update the company financial reports",
+    },
+  },
+  {
+    name: "asks on contested first-name assignment",
+    message: "assign Aaron to review the vendor contract by EOW",
+    expected: {
+      assignedToId: "user-aaron",
+      missing: ["assignee"],
+      dueDate: "2026-05-15",
+      titleIncludes: "vendor contract",
     },
   },
   {

@@ -904,14 +904,43 @@ function findBestMentionedCandidates<T>(
   getName: (candidate: T) => string | null | undefined,
   getEmail: (candidate: T) => string | null | undefined,
 ) {
-  const scored = candidates
+  const scored = rankMentionedCandidates(message, candidates, getName, getEmail);
+  const topScore = Math.max(0, ...scored.map((item) => item.score));
+  return scored.filter((item) => item.score === topScore).map((item) => item.candidate);
+}
+
+function rankMentionedCandidates<T>(
+  message: string,
+  candidates: T[],
+  getName: (candidate: T) => string | null | undefined,
+  getEmail: (candidate: T) => string | null | undefined,
+) {
+  return candidates
     .map((candidate) => ({
       candidate,
       score: assigneeMentionScore(message, getName(candidate), getEmail(candidate)),
     }))
-    .filter((item) => item.score > 0);
-  const topScore = Math.max(0, ...scored.map((item) => item.score));
-  return scored.filter((item) => item.score === topScore).map((item) => item.candidate);
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function confidenceFromRankedScores(
+  ranked: Array<{ score: number }>,
+  options: { maxScore: number; ambiguityMargin: number },
+) {
+  if (ranked.length === 0) return 0;
+  const top = ranked[0].score;
+  const second = ranked[1]?.score ?? 0;
+  const normalizedTop = Math.min(1, top / options.maxScore);
+  if (ranked.length === 1) return Math.min(0.95, normalizedTop);
+  const margin = top - second;
+  return Math.min(0.99, normalizedTop * (0.5 + 0.5 * Math.min(margin / options.ambiguityMargin, 1)));
+}
+
+function topCandidatesWithinMargin<T>(ranked: Array<{ candidate: T; score: number }>, margin = 0.25) {
+  if (ranked.length === 0) return [];
+  const topScore = ranked[0].score;
+  return ranked.filter((item) => topScore - item.score <= margin).map((item) => item.candidate);
 }
 
 function findAssignee(message: string, users: User[]) {
@@ -3029,6 +3058,18 @@ function findMentionedMemberCandidates(
   );
 }
 
+function rankMentionedMembers(
+  message: string,
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>,
+) {
+  return rankMentionedCandidates(
+    message,
+    members,
+    (member) => member.profile?.full_name,
+    (member) => member.profile?.email,
+  );
+}
+
 function compactNaturalText(value: string) {
   return value
     .toLowerCase()
@@ -3119,7 +3160,7 @@ function findMentionedPositionProfiles(message: string, profiles: DonnitPosition
   return profiles.filter((profile) => profileMatchesText(profile, message));
 }
 
-function findMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
+function rankMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
   const normalized = compactNaturalText(message);
   return profiles
     .map((profile) => {
@@ -3138,7 +3179,12 @@ function findMentionedPositionProfileCandidates(message: string, profiles: Donni
     })
     .filter((item) => item.score > 0 || profileMatchesText(item.profile, message))
     .sort((a, b) => b.score - a.score)
-    .map((item) => item.profile);
+    .map((item) => ({ candidate: item.profile, score: item.score || 5 }));
+}
+
+function findMentionedPositionProfileCandidates(message: string, profiles: DonnitPositionProfile[]) {
+  const ranked = rankMentionedPositionProfileCandidates(message, profiles);
+  return topCandidatesWithinMargin(ranked, 0.25);
 }
 
 function ownerIdForPositionProfile(profile: DonnitPositionProfile | null | undefined) {
@@ -3169,7 +3215,9 @@ function resolveChatAssigneeFromWorkspace(input: {
 
   const targetPhrases = extractAssignmentTargetPhrases(input.message);
   for (const phrase of targetPhrases) {
-    const memberCandidates = findMentionedMemberCandidates(phrase, input.members);
+    const rankedMembers = rankMentionedMembers(phrase, input.members);
+    const memberConfidence = confidenceFromRankedScores(rankedMembers, { maxScore: 10, ambiguityMargin: 3 });
+    const memberCandidates = memberConfidence >= 0.8 ? [rankedMembers[0].candidate] : topCandidatesWithinMargin(rankedMembers, 1);
     if (memberCandidates.length > 1) {
       return {
         assignedToId: fallbackMember?.user_id ?? input.requesterId,
@@ -3191,13 +3239,15 @@ function resolveChatAssigneeFromWorkspace(input: {
         ambiguousMembers: [],
         ambiguousProfiles: [],
         missingAssignee: false,
-        confidence: 0.95,
+        confidence: Math.max(0.85, memberConfidence),
         matchedPhrase: phrase,
         labelsToStrip: assigneeAliases(memberCandidates[0].profile?.full_name, memberCandidates[0].profile?.email),
       };
     }
 
-    const profileCandidates = findMentionedPositionProfileCandidates(phrase, input.profiles);
+    const rankedProfiles = rankMentionedPositionProfileCandidates(phrase, input.profiles);
+    const profileConfidence = confidenceFromRankedScores(rankedProfiles, { maxScore: 10, ambiguityMargin: 3 });
+    const profileCandidates = profileConfidence >= 0.8 ? [rankedProfiles[0].candidate] : topCandidatesWithinMargin(rankedProfiles, 0.25);
     if (profileCandidates.length > 1) {
       return {
         assignedToId: fallbackMember?.user_id ?? input.requesterId,
@@ -3222,7 +3272,7 @@ function resolveChatAssigneeFromWorkspace(input: {
         ambiguousMembers: [],
         ambiguousProfiles: [],
         missingAssignee: !ownerId,
-        confidence: ownerId ? 0.9 : 0.55,
+        confidence: ownerId ? Math.max(0.8, profileConfidence) : 0.55,
         matchedPhrase: phrase,
         labelsToStrip: [
           ...(owner ? assigneeAliases(owner.profile?.full_name, owner.profile?.email) : []),
@@ -3232,8 +3282,12 @@ function resolveChatAssigneeFromWorkspace(input: {
     }
   }
 
-  const memberCandidates = findMentionedMemberCandidates(input.message, input.members);
-  const profileCandidates = findMentionedPositionProfileCandidates(input.message, input.profiles);
+  const rankedMembers = rankMentionedMembers(input.message, input.members);
+  const memberConfidence = confidenceFromRankedScores(rankedMembers, { maxScore: 10, ambiguityMargin: 3 });
+  const memberCandidates = memberConfidence >= 0.8 ? [rankedMembers[0].candidate] : topCandidatesWithinMargin(rankedMembers, 1);
+  const rankedProfiles = rankMentionedPositionProfileCandidates(input.message, input.profiles);
+  const profileConfidence = confidenceFromRankedScores(rankedProfiles, { maxScore: 10, ambiguityMargin: 3 });
+  const profileCandidates = profileConfidence >= 0.8 ? [rankedProfiles[0].candidate] : topCandidatesWithinMargin(rankedProfiles, 0.25);
   if (memberCandidates.length > 1) {
     return {
       assignedToId: fallbackMember?.user_id ?? input.requesterId,
@@ -3255,7 +3309,7 @@ function resolveChatAssigneeFromWorkspace(input: {
       ambiguousMembers: [],
       ambiguousProfiles: [],
       missingAssignee: false,
-      confidence: 0.75,
+      confidence: Math.max(0.7, memberConfidence),
       matchedPhrase: null,
       labelsToStrip: assigneeAliases(memberCandidates[0].profile?.full_name, memberCandidates[0].profile?.email),
     };
@@ -3271,7 +3325,7 @@ function resolveChatAssigneeFromWorkspace(input: {
       ambiguousMembers: [],
       ambiguousProfiles: [],
       missingAssignee: !ownerId,
-      confidence: ownerId ? 0.75 : 0.45,
+      confidence: ownerId ? Math.max(0.7, profileConfidence) : 0.45,
       matchedPhrase: null,
       labelsToStrip: [
         ...(owner ? assigneeAliases(owner.profile?.full_name, owner.profile?.email) : []),

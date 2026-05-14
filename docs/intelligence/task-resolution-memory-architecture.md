@@ -200,6 +200,37 @@ Candidate sources:
 
 Retrieval should cap each candidate group to roughly five entries. If retrieval returns too many plausible options, that is itself a signal to ask a clarifying question.
 
+Retrieval should run in stages:
+
+1. Hard filters: active entity, correct slot type, same organization, and reachable scope.
+2. Exact lookups: scoped alias, canonical name, email, and Position Profile title.
+3. Structured fuzzy: prefix matches, role tags, title acronyms, and role shorthand such as EA or recruiting.
+4. Semantic fallback: vector similarity over aliases, artifacts, and profile memory only after exact/structured retrieval returns too little signal.
+5. Score and rank: use a small candidate set with margin-aware confidence.
+
+Vector search is useful later, but it should be a fallback, not the first path. Most Donnit task routing should be solved through exact alias, role, org chart, session recency, and procedure/template signals.
+
+### Step 2.5: Margin-Aware Ranking
+
+Donnit should score candidates and convert the score to confidence using both the top score and the distance between the top candidate and the runner-up.
+
+Why:
+
+- "Aaron Blake" should beat "Aaron Hassett" because the full-name match creates a large score margin.
+- "Aaron" should ask when there are two Aarons because the top two candidates are tied or close.
+- "Recruiting Coordinator" should resolve when it is exact, but "recruiting" should ask if there are multiple recruiting profiles.
+
+Starting score factors:
+
+- Surface match: exact alias, prefix, canonical name, email, title, acronym.
+- Scope: user-scoped aliases beat team aliases; team aliases beat global workspace aliases.
+- Session recency: recently mentioned people/artifacts matter more for pronouns and vague references.
+- Long-term recency: recently used aliases should rank higher than stale aliases.
+- Usage frequency: repeated accepted aliases should strengthen slowly.
+- Slot fit: people who are frequently assignees are stronger assignee candidates; artifacts/templates are stronger object candidates.
+
+Confidence should be lowered when the top candidate and runner-up are close, even if the top score is high. That margin rule is the main guardrail against repeated wrong assignments in workspaces with duplicate names or similar roles.
+
 ### Step 3: Resolution And Inference
 
 The LLM receives:
@@ -322,6 +353,19 @@ The system should log:
 - User correction or acceptance.
 - Final task created.
 
+Feedback signals should be weighted:
+
+- Explicit correction: strongest signal. Example: "No, I meant Priya."
+- Clarification answer: strongest positive signal for the chosen candidate and mild negative signal for unchosen candidates.
+- Silent edit: strong signal when the user changes assignee, profile, due date, recurrence, or title after creation.
+- Implicit acceptance: weak signal only. The user may not have noticed a mistake.
+- Undo/recreate: strong negative signal for the original resolution.
+- Task completion: weak-to-medium validation that the assignment probably made sense.
+
+Learned aliases should start below the auto-execute threshold. They should participate in future resolution, but Donnit should confirm until repeated user behavior strengthens them. If the same surface form resolves to multiple entities over time, mark it contested and always ask.
+
+Aliases should decay when unused, especially for role-based terms like "the assistant" or project-based terms that can change after role transfers or employee churn.
+
 ## Donnit-Specific Decisions
 
 Accepted from the review:
@@ -329,10 +373,13 @@ Accepted from the review:
 - Five-layer memory model.
 - Bounded candidate retrieval before reasoning.
 - Confidence scoring for entity resolution.
+- Margin-aware confidence based on top-vs-runner-up score.
 - Code-owned thresholds.
 - One targeted clarification at a time.
 - Pending-task session memory.
 - Correction-to-memory feedback loop.
+- Contested alias guardrails.
+- Alias decay for stale or role-changed terms.
 
 Modified for Donnit:
 
@@ -464,7 +511,12 @@ Acceptance:
 
 - Chat parsing no longer scans loosely across all members without confidence.
 - Candidate set is logged with each task resolution event.
+- Candidate scoring uses top-vs-runner-up margin so similar names/roles ask instead of guessing.
 - New evals pass without special-casing every phrase.
+
+Current implementation note:
+
+- The chat parser now uses a first-pass margin-aware resolver for members and Position Profiles. It is still deterministic and does not yet persist workspace aliases or correction signals.
 
 ### Phase 4: Structured Resolution Contract
 
@@ -495,6 +547,8 @@ Acceptance:
 - Accepted corrections improve future routing.
 - Personal/confidential rules are respected.
 - Admins can view and remove workspace memory later.
+- Contested aliases always ask before writing.
+- Stale aliases decay or archive after inactivity.
 
 ## MVP Impact
 
