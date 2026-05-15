@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
-import type { Bootstrap, Id, PositionProfile, TaskEvent, TaskSubtask, TaskTemplate, User } from "@/app/types";
+import type { Bootstrap, Id, PositionProfile, TaskEvent, TaskSubtask, TaskTemplate, User, WorkspaceLearningMode, WorkspaceLearningPolicy } from "@/app/types";
 import { dialogShellClass, dialogHeaderClass, dialogBodyClass, dialogFooterClass, EMAIL_SIGNATURE_CUSTOM_KEY, EMAIL_SIGNATURE_TEMPLATE_KEY } from "@/app/constants";
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import { apiErrorMessage } from "@/app/lib/tasks";
@@ -115,6 +115,7 @@ export default function WorkspaceSettingsDialog({
   subtasks,
   events,
   taskTemplates,
+  learningPolicy,
   currentUserId,
   integrations,
   oauthStatus,
@@ -136,6 +137,7 @@ export default function WorkspaceSettingsDialog({
   subtasks: TaskSubtask[];
   events: TaskEvent[];
   taskTemplates: TaskTemplate[];
+  learningPolicy?: WorkspaceLearningPolicy;
   currentUserId: Id;
   integrations: Bootstrap["integrations"];
   oauthStatus?: GmailOAuthStatus;
@@ -192,6 +194,7 @@ export default function WorkspaceSettingsDialog({
     return Number(window.localStorage.getItem("donnit.unreadDelayMinutes") ?? "2") || 2;
   });
   const [emailSignature, setEmailSignature] = useState(() => currentUser?.emailSignature ?? readCustomEmailSignature());
+  const [learningMode, setLearningMode] = useState<WorkspaceLearningMode>(learningPolicy?.mode ?? "balanced");
   useEffect(() => {
     const nextSignature = currentUser?.emailSignature ?? readCustomEmailSignature();
     setEmailSignature(nextSignature);
@@ -202,6 +205,9 @@ export default function WorkspaceSettingsDialog({
       }
     }
   }, [currentUser?.id, currentUser?.emailSignature]);
+  useEffect(() => {
+    setLearningMode(learningPolicy?.mode ?? "balanced");
+  }, [learningPolicy?.mode]);
   const slackDelay = slackData?.unreadDelayMinutes ?? integrations.slack?.unreadDelayMinutes ?? unreadDelayMinutes;
   const updateAutoEmailScan = (value: boolean) => {
     setAutoEmailScan(value);
@@ -302,6 +308,32 @@ export default function WorkspaceSettingsDialog({
       });
     },
   });
+  const saveLearningPolicy = useMutation({
+    mutationFn: async (mode: WorkspaceLearningMode) => {
+      const res = await apiRequest("PATCH", "/api/workspace/learning-policy", { mode });
+      return (await res.json()) as { ok: boolean; policy: WorkspaceLearningPolicy };
+    },
+    onSuccess: async (result) => {
+      setLearningMode(result.policy.mode);
+      await invalidateWorkspace();
+      toast({
+        title: "Learning mode saved",
+        description:
+          result.policy.mode === "automatic"
+            ? "Donnit will automatically promote high-confidence learning with an audit trail."
+            : result.policy.mode === "conservative"
+              ? "Donnit will record learning signals and wait for review before changing memory."
+              : "Donnit will auto-learn low-risk memory and review higher-impact changes.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: "Could not save learning mode",
+        description: apiErrorMessage(error, "Apply the latest Supabase learning ledger migration, then try again."),
+        variant: "destructive",
+      });
+    },
+  });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dialogShellClass} sm:max-w-4xl`}>
@@ -384,6 +416,65 @@ export default function WorkspaceSettingsDialog({
               authenticated={authenticated}
             />
           )}
+
+          <div className="rounded-md border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <p className="text-sm font-medium text-foreground">Memory learning</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Workspace-owned knowledge Donnit uses to understand language, roles, task patterns, and Position Profile workflows.
+              </p>
+            </div>
+            <div className="grid gap-3 px-3 py-3">
+              <div className="grid gap-1.5 sm:grid-cols-[1fr_180px] sm:items-center">
+                <div>
+                  <Label htmlFor="workspace-learning-mode" className="text-sm font-medium text-foreground">
+                    Learning mode
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Balanced is the MVP default: Donnit auto-learns low-risk memory and keeps bigger workflow changes auditable.
+                  </p>
+                </div>
+                <select
+                  id="workspace-learning-mode"
+                  value={learningMode}
+                  onChange={(event) => setLearningMode(event.target.value as WorkspaceLearningMode)}
+                  disabled={!isAdmin || saveLearningPolicy.isPending}
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                  data-testid="select-learning-mode"
+                >
+                  <option value="conservative">Conservative</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="automatic">Automatic</option>
+                </select>
+              </div>
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <p className="font-medium text-foreground">Conservative</p>
+                  <p className="mt-1">Record signals, ask before changing memory.</p>
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <p className="font-medium text-foreground">Balanced</p>
+                  <p className="mt-1">Auto-learn aliases and low-risk patterns; review bigger rules.</p>
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <p className="font-medium text-foreground">Automatic</p>
+                  <p className="mt-1">Promote high-confidence workflow rules with audit history.</p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => saveLearningPolicy.mutate(learningMode)}
+                  disabled={!isAdmin || saveLearningPolicy.isPending || learningMode === (learningPolicy?.mode ?? "balanced")}
+                  data-testid="button-save-learning-mode"
+                >
+                  {saveLearningPolicy.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                  Save learning mode
+                </Button>
+              </div>
+            </div>
+          </div>
 
           <div className="rounded-md border border-border">
             <div className="border-b border-border px-3 py-2">

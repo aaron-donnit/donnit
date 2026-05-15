@@ -3927,6 +3927,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     reviewedState,
     agendaState,
     onboardingState,
+    learningPolicy,
   ] = await Promise.all([
     store.listOrgMembers(orgId),
     store.listTasks(orgId),
@@ -3939,6 +3940,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     store.getWorkspaceState(orgId, "reviewed_notifications"),
     store.getWorkspaceState(orgId, "agenda_state"),
     store.getWorkspaceState(orgId, "onboarding_state"),
+    store.getWorkspaceLearningPolicy(orgId),
   ]);
   const users = members.map((m) => ({
     id: m.user_id,
@@ -3985,6 +3987,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
     positionProfiles: positionProfiles.map(toClientPositionProfile),
     subtasks: subtasks.map(toClientTaskSubtask),
     taskTemplates: taskTemplates.map(toClientTaskTemplate),
+    workspaceLearningPolicy: learningPolicy,
     workspaceState,
     agenda: buildClientAgenda(
       clientTasks,
@@ -5589,6 +5592,39 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
 
 const profileSignatureSchema = z.object({
   emailSignature: z.string().max(1000).default("").transform((value) => value.trim()),
+});
+
+const workspaceLearningPolicySchema = z.object({
+  mode: z.enum(["conservative", "balanced", "automatic"]),
+}).transform(({ mode }) => {
+  if (mode === "conservative") {
+    return {
+      mode,
+      autoApplyLowRisk: false,
+      autoPromoteAliases: false,
+      autoPromoteHighConfidenceRules: false,
+      requireReviewForHighImpact: true,
+      auditLogEnabled: true,
+    };
+  }
+  if (mode === "automatic") {
+    return {
+      mode,
+      autoApplyLowRisk: true,
+      autoPromoteAliases: true,
+      autoPromoteHighConfidenceRules: true,
+      requireReviewForHighImpact: false,
+      auditLogEnabled: true,
+    };
+  }
+  return {
+    mode,
+    autoApplyLowRisk: true,
+    autoPromoteAliases: true,
+    autoPromoteHighConfidenceRules: false,
+    requireReviewForHighImpact: true,
+    auditLogEnabled: true,
+  };
 });
 
 const memberRoleSchema = z.enum(["owner", "admin", "manager", "member", "viewer"]);
@@ -7327,6 +7363,8 @@ async function learnAliasesFromChatResolution(input: {
   const phrase = input.workspaceResolution.matchedPhrase?.trim();
   if (!phrase || input.workspaceResolution.missingAssignee || input.workspaceResolution.confidence < 0.8) return;
   try {
+    const policy = await input.store.getWorkspaceLearningPolicy(input.orgId);
+    if (!policy.autoPromoteAliases) return;
     const member = input.workspaceResolution.member;
     if (member?.user_id) {
       const canonical = member.profile?.full_name || member.profile?.email || member.user_id;
@@ -7474,6 +7512,8 @@ async function recordTaskLearningEvent(input: {
 }) {
   if (input.after.visibility === "personal") return;
   try {
+    const policy = await input.store.getWorkspaceLearningPolicy(input.orgId);
+    if (!policy.auditLogEnabled) return;
     const derived = taskLearningSignalFromChange(input);
     const event = await input.store.createLearningEvent(input.orgId, {
       actor_id: input.actorId,
@@ -7501,7 +7541,8 @@ async function recordTaskLearningEvent(input: {
         : derived.signal.dueDateChanged
           ? "due_rule"
           : "owner_rule";
-      await input.store.createLearningCandidate(input.orgId, {
+      const shouldPromote = policy.autoPromoteHighConfidenceRules && derived.confidenceScore >= 0.74;
+      const candidate = await input.store.createLearningCandidate(input.orgId, {
         scope_type: "position_profile",
         scope_id: input.after.position_profile_id,
         candidate_type: candidateType,
@@ -7517,10 +7558,22 @@ async function recordTaskLearningEvent(input: {
         evidence_event_ids: [event.id],
         signal_count: 1,
         confidence_score: derived.confidenceScore,
-        status: "pending_review",
-        rationale: "User changed a task field that may represent a durable Position Profile operating rule.",
+        status: shouldPromote ? "promoted" : "pending_review",
+        rationale: shouldPromote
+          ? "Automatic learning mode promoted a high-confidence Position Profile operating rule from a user task change."
+          : "User changed a task field that may represent a durable Position Profile operating rule.",
         created_by: input.actorId,
       });
+      if (shouldPromote && candidate) {
+        await input.store.upsertActivePolicyVersion(input.orgId, {
+          scope_type: "position_profile",
+          scope_id: input.after.position_profile_id,
+          policy_type: candidateType,
+          policy: candidate.proposed_policy,
+          source_candidate_id: candidate.id,
+          created_by: input.actorId,
+        });
+      }
     }
   } catch (error) {
     console.error("[donnit] task learning event log failed", error instanceof Error ? error.message : String(error));
@@ -8004,6 +8057,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const stateKey = parsed.data.key as DonnitUserWorkspaceState["state_key"];
       const state = await store.upsertWorkspaceState(orgId, stateKey, parsed.data.value);
       res.json({ ok: true, state });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.patch("/api/workspace/learning-policy", requireDonnitAuth, async (req: Request, res: Response) => {
+    const parsed = workspaceLearningPolicySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Learning policy payload is invalid." });
+      return;
+    }
+    try {
+      const auth = req.donnitAuth!;
+      const context = await requireWorkspaceAdminContext(auth);
+      if (!context.ok) {
+        res.status(context.status).json({ message: context.message });
+        return;
+      }
+      const admin = createSupabaseAdminClient();
+      const store = new DonnitStore(admin ?? auth.client, auth.userId);
+      const policy = await store.setWorkspaceLearningPolicy(context.orgId, parsed.data);
+      if (!policy) {
+        res.status(409).json({
+          message: "Learning policy storage is not available. Apply the latest Supabase learning ledger migration.",
+        });
+        return;
+      }
+      res.json({ ok: true, policy });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }

@@ -195,6 +195,17 @@ export type WorkspaceState = {
   };
 };
 
+export type WorkspaceLearningMode = "conservative" | "balanced" | "automatic";
+
+export type WorkspaceLearningPolicy = {
+  mode: WorkspaceLearningMode;
+  autoApplyLowRisk: boolean;
+  autoPromoteAliases: boolean;
+  autoPromoteHighConfidenceRules: boolean;
+  requireReviewForHighImpact: boolean;
+  auditLogEnabled: boolean;
+};
+
 export type ChatMessage = {
   id: Id;
   role: string;
@@ -269,6 +280,7 @@ export type Bootstrap = {
   subtasks?: TaskSubtask[];
   taskTemplates?: TaskTemplate[];
   workspaceState?: WorkspaceState;
+  workspaceLearningPolicy?: WorkspaceLearningPolicy;
   agenda: AgendaItem[];
   integrations: {
     auth: { provider: string; status: string; projectId: string; schema?: string };

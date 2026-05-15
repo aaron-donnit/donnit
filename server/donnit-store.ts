@@ -548,6 +548,26 @@ export type DonnitPolicyVersion = {
   created_at: string;
 };
 
+export type DonnitWorkspaceLearningMode = "conservative" | "balanced" | "automatic";
+
+export type DonnitWorkspaceLearningPolicy = {
+  mode: DonnitWorkspaceLearningMode;
+  autoApplyLowRisk: boolean;
+  autoPromoteAliases: boolean;
+  autoPromoteHighConfidenceRules: boolean;
+  requireReviewForHighImpact: boolean;
+  auditLogEnabled: boolean;
+};
+
+export const DONNIT_DEFAULT_LEARNING_POLICY: DonnitWorkspaceLearningPolicy = {
+  mode: "balanced",
+  autoApplyLowRisk: true,
+  autoPromoteAliases: true,
+  autoPromoteHighConfidenceRules: false,
+  requireReviewForHighImpact: true,
+  auditLogEnabled: true,
+};
+
 export class DonnitStore {
   constructor(private readonly client: SupabaseClient, public readonly userId: string) {}
 
@@ -1801,6 +1821,7 @@ export class DonnitStore {
       rationale: input.rationale ?? "",
       created_by: input.created_by ?? this.userId,
       reviewed_by: input.reviewed_by ?? null,
+      promoted_at: input.status === "promoted" ? new Date().toISOString() : null,
     };
     const { data, error } = await this.client
       .from(DONNIT_TABLES.learningCandidates)
@@ -1813,4 +1834,142 @@ export class DonnitStore {
     }
     return data as DonnitLearningCandidate;
   }
+
+  async getActivePolicyVersion(
+    orgId: string,
+    input: Pick<DonnitPolicyVersion, "scope_type" | "policy_type"> & Partial<Pick<DonnitPolicyVersion, "scope_id">>,
+  ): Promise<DonnitPolicyVersion | null> {
+    let query = this.client
+      .from(DONNIT_TABLES.policyVersions)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("scope_type", input.scope_type)
+      .eq("policy_type", input.policy_type)
+      .eq("active", true)
+      .order("version", { ascending: false })
+      .limit(1);
+    query = input.scope_id ? query.eq("scope_id", input.scope_id) : query.is("scope_id", null);
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("get policy_version failed", error);
+    }
+    return (data as DonnitPolicyVersion | null) ?? null;
+  }
+
+  async upsertActivePolicyVersion(
+    orgId: string,
+    input: Pick<DonnitPolicyVersion, "scope_type" | "policy_type" | "policy"> &
+      Partial<Pick<DonnitPolicyVersion, "scope_id" | "source_candidate_id" | "created_by">>,
+  ): Promise<DonnitPolicyVersion | null> {
+    const scopeId = input.scope_id ?? null;
+    let readQuery = this.client
+      .from(DONNIT_TABLES.policyVersions)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("scope_type", input.scope_type)
+      .eq("policy_type", input.policy_type)
+      .order("version", { ascending: false })
+      .limit(1);
+    readQuery = scopeId ? readQuery.eq("scope_id", scopeId) : readQuery.is("scope_id", null);
+    const { data: latest, error: readError } = await readQuery.maybeSingle();
+    if (readError) {
+      if (isMissingRelationError(readError) || isMissingColumnError(readError)) return null;
+      throw wrapSupabaseError("read policy_version failed", readError);
+    }
+    let updateQuery = this.client
+      .from(DONNIT_TABLES.policyVersions)
+      .update({ active: false })
+      .eq("org_id", orgId)
+      .eq("scope_type", input.scope_type)
+      .eq("policy_type", input.policy_type)
+      .eq("active", true);
+    updateQuery = scopeId ? updateQuery.eq("scope_id", scopeId) : updateQuery.is("scope_id", null);
+    const { error: updateError } = await updateQuery;
+    if (updateError) {
+      if (isMissingRelationError(updateError) || isMissingColumnError(updateError)) return null;
+      throw wrapSupabaseError("deactivate policy_version failed", updateError);
+    }
+    const nextVersion = Number((latest as DonnitPolicyVersion | null)?.version ?? 0) + 1;
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.policyVersions)
+      .insert({
+        org_id: orgId,
+        scope_type: input.scope_type,
+        scope_id: scopeId,
+        policy_type: input.policy_type,
+        version: nextVersion,
+        policy: input.policy ?? {},
+        source_candidate_id: input.source_candidate_id ?? null,
+        active: true,
+        created_by: input.created_by ?? this.userId,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("create policy_version failed", error);
+    }
+    return data as DonnitPolicyVersion;
+  }
+
+  async getWorkspaceLearningPolicy(orgId: string): Promise<DonnitWorkspaceLearningPolicy> {
+    const active = await this.getActivePolicyVersion(orgId, {
+      scope_type: "workspace",
+      scope_id: null,
+      policy_type: "memory_learning_settings",
+    });
+    return normalizeWorkspaceLearningPolicy(active?.policy);
+  }
+
+  async setWorkspaceLearningPolicy(
+    orgId: string,
+    policy: Partial<DonnitWorkspaceLearningPolicy>,
+  ): Promise<DonnitWorkspaceLearningPolicy | null> {
+    const normalized = normalizeWorkspaceLearningPolicy(policy);
+    const saved = await this.upsertActivePolicyVersion(orgId, {
+      scope_type: "workspace",
+      scope_id: null,
+      policy_type: "memory_learning_settings",
+      policy: normalized,
+      created_by: this.userId,
+    });
+    return saved ? normalizeWorkspaceLearningPolicy(saved.policy) : null;
+  }
+}
+
+export function normalizeWorkspaceLearningPolicy(input: unknown): DonnitWorkspaceLearningPolicy {
+  const raw = typeof input === "object" && input !== null ? input as Partial<DonnitWorkspaceLearningPolicy> : {};
+  const mode: DonnitWorkspaceLearningMode =
+    raw.mode === "conservative" || raw.mode === "automatic" || raw.mode === "balanced"
+      ? raw.mode
+      : DONNIT_DEFAULT_LEARNING_POLICY.mode;
+  if (mode === "conservative") {
+    return {
+      mode,
+      autoApplyLowRisk: raw.autoApplyLowRisk ?? false,
+      autoPromoteAliases: raw.autoPromoteAliases ?? false,
+      autoPromoteHighConfidenceRules: raw.autoPromoteHighConfidenceRules ?? false,
+      requireReviewForHighImpact: raw.requireReviewForHighImpact ?? true,
+      auditLogEnabled: raw.auditLogEnabled ?? true,
+    };
+  }
+  if (mode === "automatic") {
+    return {
+      mode,
+      autoApplyLowRisk: raw.autoApplyLowRisk ?? true,
+      autoPromoteAliases: raw.autoPromoteAliases ?? true,
+      autoPromoteHighConfidenceRules: raw.autoPromoteHighConfidenceRules ?? true,
+      requireReviewForHighImpact: raw.requireReviewForHighImpact ?? false,
+      auditLogEnabled: raw.auditLogEnabled ?? true,
+    };
+  }
+  return {
+    mode,
+    autoApplyLowRisk: raw.autoApplyLowRisk ?? true,
+    autoPromoteAliases: raw.autoPromoteAliases ?? true,
+    autoPromoteHighConfidenceRules: raw.autoPromoteHighConfidenceRules ?? false,
+    requireReviewForHighImpact: raw.requireReviewForHighImpact ?? true,
+    auditLogEnabled: raw.auditLogEnabled ?? true,
+  };
 }

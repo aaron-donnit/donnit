@@ -2187,6 +2187,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         subtasks={data.subtasks ?? []}
         events={data.events}
         taskTemplates={data.taskTemplates ?? []}
+        learningPolicy={data.workspaceLearningPolicy}
         currentUserId={data.currentUserId}
         integrations={data.integrations}
         oauthStatus={oauthData}
