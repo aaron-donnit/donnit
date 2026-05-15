@@ -38,7 +38,7 @@ export default function AppShellNav({
     <>
       {/* Desktop rail — collapses to icon-only, expands to 220px on hover */}
       <aside
-        className={`hidden shrink-0 border-r border-border bg-muted/20 transition-[width] duration-[140ms] ease-out lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:overflow-y-auto ${
+        className={`hidden shrink-0 border-r border-border bg-muted/20 transition-[width] duration-150 ease-out lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:overflow-y-auto ${
           expanded ? "w-[220px]" : "w-14"
         }`}
         onMouseEnter={() => setExpanded(true)}
@@ -56,7 +56,7 @@ export default function AppShellNav({
           onClick={() => onViewChange("home")}
           aria-label="Home"
           data-testid="button-app-nav-logo"
-          className={`flex shrink-0 items-center gap-2.5 border-b border-border px-3.5 transition-[height] duration-[140ms] ${
+          className={`flex shrink-0 items-center gap-2.5 border-b border-border px-3.5 transition-[height] duration-150 ${
             expanded ? "h-11 justify-start" : "h-11 justify-center"
           }`}
         >
@@ -76,7 +76,7 @@ export default function AppShellNav({
             <div key={group.label} className={gIdx > 0 ? "mt-1 border-t border-border pt-1" : ""}>
               {/* Section label — fades in when rail is open */}
               <p
-                className={`px-3.5 pb-0.5 pt-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground transition-opacity duration-[140ms] ${
+                className={`px-3.5 pb-0.5 pt-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground transition-opacity duration-150 ${
                   expanded ? "opacity-100" : "opacity-0"
                 }`}
               >
@@ -93,7 +93,7 @@ export default function AppShellNav({
                     title={item.label}
                     disabled={item.disabled}
                     onClick={() => onViewChange(item.id)}
-                    className={`relative flex h-[30px] w-full min-w-0 items-center gap-2.5 px-2.5 text-[13px] font-medium transition-colors duration-[140ms] disabled:pointer-events-none disabled:opacity-40 ${
+                    className={`relative flex h-[30px] w-full min-w-0 items-center gap-2.5 px-2.5 text-[13px] font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40 ${
                       active
                         ? "text-foreground"
                         : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -116,7 +116,7 @@ export default function AppShellNav({
 
                     {/* Label — fades in with rail */}
                     <span
-                      className={`flex-1 truncate text-left transition-opacity duration-[140ms] ${
+                      className={`flex-1 truncate text-left transition-opacity duration-150 ${
                         expanded ? "opacity-100" : "opacity-0"
                       }`}
                     >
@@ -126,7 +126,7 @@ export default function AppShellNav({
                     {/* Count badge */}
                     {item.count ? (
                       <span
-                        className={`font-mono text-[10px] tabular-nums transition-opacity duration-[140ms] ${
+                        className={`font-mono text-[10px] tabular-nums transition-opacity duration-150 ${
                           expanded ? "opacity-100" : "opacity-0"
                         } ${
                           active
