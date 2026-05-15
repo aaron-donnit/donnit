@@ -1682,6 +1682,10 @@ function formatClockMinute(minute: number) {
   return `${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
 }
 
+function roundUpToHalfHour(minute: number) {
+  return Math.min(Math.ceil(Math.max(minute, 0) / 30) * 30, 23 * 60 + 30);
+}
+
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -1890,12 +1894,15 @@ function scheduleTasks<T extends {
   const workdayStartMinute = parseClockMinute(preferences.workdayStart, DEFAULT_AGENDA_PREFERENCES.workdayStart);
   const workdayEndMinute = parseClockMinute(preferences.workdayEnd, DEFAULT_AGENDA_PREFERENCES.workdayEnd);
   const workdayMinutes = Math.max(workdayEndMinute - workdayStartMinute, 60);
+  const nowParts = getZonedParts(new Date(), timeZone);
+  const earliestTodayMinute = roundUpToHalfHour(nowParts.minute);
   const agendaByTaskId = new Map<string, AgendaItem>();
 
   candidates.forEach((task, index) => {
     if (!task.dueDate || task.isAllDay) return;
     const fixedStart = timeToMinute(task.startTime ?? task.dueTime ?? null);
     if (fixedStart === null) return;
+    if (task.dueDate === nowParts.date && fixedStart < earliestTodayMinute) return;
     const fixedEnd = timeToMinute(task.endTime) ?? fixedStart + Math.min(Math.max(task.estimatedMinutes, 5), workdayMinutes);
     const endMinute = Math.min(Math.max(fixedEnd, fixedStart + 5), 23 * 60 + 59);
     mutableBusy.set(task.dueDate, [
@@ -1924,6 +1931,11 @@ function scheduleTasks<T extends {
     for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
       const date = addDaysIso(firstDate, offset);
       const slot = getFreeSlotsForDate(date, mutableBusy, preferences)
+        .map((free) => ({
+          ...free,
+          startMinute: date === nowParts.date ? Math.max(free.startMinute, earliestTodayMinute) : free.startMinute,
+        }))
+        .filter((free) => free.endMinute > free.startMinute)
         .filter((free) => free.endMinute - free.startMinute >= estimate)
         .sort((a, b) => scoreAgendaSlot({ ...task, estimatedMinutes: estimate }, b, preferences) - scoreAgendaSlot({ ...task, estimatedMinutes: estimate }, a, preferences))[0];
       if (!slot) continue;

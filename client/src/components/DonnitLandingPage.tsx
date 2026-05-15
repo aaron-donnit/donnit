@@ -721,19 +721,19 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
         <div className="block-head center reveal">
           <div className="eyebrow" style={{textAlign:'center'}}>Pricing</div>
           <h2>Simple pricing for the way <span className="green">work is captured.</span></h2>
-          <p>Start with personal task capture, add workforce continuity when the role itself needs memory, then scale with enterprise controls when the organization is ready.</p>
+          <p>Start free with chat-to-task capture, then add agenda automation, memory, and continuity controls as the team grows.</p>
         </div>
         <div className="price-grid">
           <div className="price-card reveal">
-            <div className="price-name">Individual</div>
-            <div className="price-desc">For one person who wants Donnit to capture and organize daily work.</div>
-            <div className="price-amount"><span className="currency">$</span>5</div>
-            <div className="price-period">per month</div>
+            <div className="price-name">Single User</div>
+            <div className="price-desc">For one person who wants fast task capture without setup friction.</div>
+            <div className="price-amount">Free</div>
+            <div className="price-period">chat-to-task workspace</div>
             <ul className="price-features">
-              <li>Task management workspace</li>
-              <li>Auto-import from email</li>
-              <li>Chat to task and manual input</li>
-              <li>Approval inbox for suggested tasks</li>
+              <li>Chat-to-task tool</li>
+              <li>Manual task input</li>
+              <li>Auto-scrape from email</li>
+              <li>Slack task capture</li>
             </ul>
             <div className="price-cta">
               <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("signup")}>Sign Up</button>
@@ -741,37 +741,52 @@ function Pricing({ onLead }: { onLead: (intent: LeadIntent) => void }) {
           </div>
 
           <div className="price-card featured reveal reveal-2">
-            <span className="price-tag">Full suite</span>
-            <div className="price-name">Business</div>
-            <div className="price-desc">For teams using Donnit as a workforce continuity system.</div>
-            <div className="price-amount"><span className="currency">$</span>19</div>
-            <div className="price-period">per profile / month</div>
+            <span className="price-tag">Popular</span>
+            <div className="price-name">Basic</div>
+            <div className="price-desc">For users who want Donnit to plan the day and connect work sources.</div>
+            <div className="price-amount"><span className="currency">$</span>9</div>
+            <div className="price-period">per user / month</div>
             <ul className="price-features">
-              <li>Everything in Individual</li>
-              <li>Position Profiles</li>
-              <li>Slack intake and SMS command preview</li>
-              <li>Admin portal and manager views</li>
-              <li>Task templates and team reporting</li>
+              <li>Everything in Single User</li>
+              <li>Agenda builder and approval</li>
+              <li>Connectors and integrations</li>
+              <li>Calendar export and workflow tools</li>
             </ul>
             <div className="price-cta">
-              <button type="button" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a demo</button>
+              <button type="button" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("signup")}>Start Basic</button>
             </div>
           </div>
 
           <div className="price-card reveal reveal-3">
-            <div className="price-name">Enterprise</div>
-            <div className="price-desc">For larger organizations with security, implementation, and procurement needs.</div>
-            <div className="price-amount enterprise-price">Contact us</div>
-            <div className="price-period">SSO / audit / custom retention</div>
+            <div className="price-name">Business</div>
+            <div className="price-desc">For teams that need Donnit memory and advanced task automation.</div>
+            <div className="price-amount"><span className="currency">$</span>19</div>
+            <div className="price-period">per user / month</div>
             <ul className="price-features">
-              <li>Everything in Business</li>
-              <li>SAML SSO &amp; SCIM provisioning</li>
-              <li>Audit log export &amp; retention</li>
-              <li>Dedicated success manager</li>
-              <li>Security review package</li>
+              <li>Everything in Basic</li>
+              <li>Workspace memory function</li>
+              <li>Task templates and reusable workflows</li>
+              <li>Advanced integrations and reporting</li>
             </ul>
             <div className="price-cta">
-              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Contact us</button>
+              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a demo</button>
+            </div>
+          </div>
+
+          <div className="price-card reveal reveal-4">
+            <div className="price-name">Enterprise</div>
+            <div className="price-desc">For workforce continuity, security, onboarding, and multi-level permissions.</div>
+            <div className="price-amount"><span className="currency">$</span>49</div>
+            <div className="price-period">per user / month, consult required</div>
+            <ul className="price-features">
+              <li>Everything in Business</li>
+              <li>Position Profiles</li>
+              <li>Additional security controls</li>
+              <li>Tailored onboarding</li>
+              <li>Multi-level permissions</li>
+            </ul>
+            <div className="price-cta">
+              <button type="button" className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onLead("demo")}>Book a consult</button>
             </div>
           </div>
         </div>

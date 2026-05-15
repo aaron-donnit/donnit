@@ -1817,7 +1817,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
           )}
 
           {appView === "agenda" && (
-            <section key={`agenda-${viewResetKeys.agenda}`} className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-6">
+            <section key={`agenda-${viewResetKeys.agenda}`} className="mx-auto w-full max-w-6xl px-4 py-4 lg:px-6">
               <AgendaPanel
                 agenda={orderedAgenda}
                 excludedTaskIds={agendaExcludedTaskIds}
@@ -1836,7 +1836,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     return next;
                   });
                 }}
-                onMoveTask={(taskId, direction) => {
+                onReorderTask={(sourceTaskId, targetTaskId) => {
                   setAgendaApproved(false);
                   setAgendaTaskOrder((current) => {
                     const ids = orderedAgenda.map((item) => String(item.taskId));
@@ -1844,10 +1844,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                     for (const id of ids) {
                       if (!next.includes(id)) next.push(id);
                     }
-                    const index = next.indexOf(String(taskId));
-                    const target = direction === "up" ? index - 1 : index + 1;
-                    if (index < 0 || target < 0 || target >= next.length) return next;
-                    [next[index], next[target]] = [next[target], next[index]];
+                    const sourceIndex = next.indexOf(String(sourceTaskId));
+                    const targetIndex = next.indexOf(String(targetTaskId));
+                    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return next;
+                    const [moved] = next.splice(sourceIndex, 1);
+                    next.splice(targetIndex, 0, moved);
                     persistAgendaState(agendaExcludedTaskIds, false, null, agendaPreferences, next);
                     return next;
                   });

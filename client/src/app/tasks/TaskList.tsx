@@ -61,7 +61,7 @@ export default function TaskList({
   const [dialogTaskId, setDialogTaskId] = useState<string | null>(null);
   const [locallyCompletedIds, setLocallyCompletedIds] = useState<Set<string>>(new Set());
   const [taskSearch, setTaskSearch] = useState("");
-  const [taskView, setTaskView] = useState<"active" | "review" | "done" | "all">("active");
+  const [taskView, setTaskView] = useState<"active" | "review" | "done">("active");
   const [reviewIndex, setReviewIndex] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const visibleTasks = useMemo(
@@ -310,14 +310,13 @@ export default function TaskList({
           ["active", "Active", visibleTasks.filter((task) => task.status !== "completed" && task.status !== "denied").length],
           ["review", "Needs Review", pendingTaskCount + pendingSuggestions.length],
           ["done", "Done", visibleTasks.filter((task) => task.status === "completed").length],
-          ["all", "All", null],
         ] as Array<[string, string, number | null]>).map(([id, label, count]) => (
           <button
             key={id}
             type="button"
             onClick={() => {
               onStatusFilterChange?.(null);
-              setTaskView(id as "active" | "review" | "done" | "all");
+              setTaskView(id as "active" | "review" | "done");
             }}
             className={`work-tab${effectiveTaskView === id ? " active" : ""}`}
             data-testid={`button-task-view-${id}`}

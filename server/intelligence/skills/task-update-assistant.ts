@@ -62,6 +62,25 @@ const taskContextOutputSchema = z.object({
     source_kind: z.string().optional(),
     last_seen_at: z.string(),
   })),
+  task_memory: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    objective: z.string(),
+    cadence: z.string(),
+    due_rule: z.string(),
+    start_offset_days: z.number(),
+    default_urgency: z.string(),
+    confidence_score: z.number(),
+    steps: z.array(z.object({
+      title: z.string(),
+      instructions: z.string(),
+      tool_name: z.string(),
+      tool_url: z.string(),
+      expected_output: z.string(),
+      relative_due_offset_days: z.number(),
+      position: z.number(),
+    })),
+  })),
 });
 
 export const taskUpdateAssistantOutputSchema = z.object({
@@ -140,6 +159,7 @@ function taskContextOutputJsonSchema() {
     recent_events: { type: "array", items: { type: "object", additionalProperties: true } },
     position_profile: { type: ["object", "null"], additionalProperties: true },
     role_memory: { type: "array", items: { type: "object", additionalProperties: true } },
+    task_memory: { type: "array", items: { type: "object", additionalProperties: true } },
   });
 }
 
@@ -156,7 +176,7 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
     execute: async ({ task_id }) => {
       const task = await input.store.getTask(task_id);
       if (!task || task.org_id !== input.orgId) {
-        return { found: false, task: null, subtasks: [], recent_events: [], position_profile: null, role_memory: [] };
+        return { found: false, task: null, subtasks: [], recent_events: [], position_profile: null, role_memory: [], task_memory: [] };
       }
       const [subtasks, events, profiles] = await Promise.all([
         input.store.listTaskSubtasks(input.orgId),
@@ -164,7 +184,12 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
         input.store.listPositionProfiles(input.orgId),
       ]);
       const profile = profiles.find((item) => item.id === task.position_profile_id) ?? null;
-      const roleMemory = profile ? await input.store.listPositionProfileKnowledge(input.orgId, profile.id) : [];
+      const [roleMemory, taskMemory] = profile
+        ? await Promise.all([
+            input.store.listPositionProfileKnowledge(input.orgId, profile.id),
+            input.store.listPositionProfileTaskMemories(input.orgId, profile.id),
+          ])
+        : [[], []];
       return {
         found: true,
         task: compactTask(task),
@@ -198,6 +223,28 @@ export function createTaskUpdateAssistantRegistry(input: { store: DonnitStore; o
           source_kind: item.source_kind,
           last_seen_at: item.last_seen_at,
         })),
+        task_memory: taskMemory
+          .filter((memory) => memory.status !== "archived")
+          .slice(0, 8)
+          .map((memory) => ({
+            id: memory.id,
+            title: memory.title,
+            objective: memory.objective,
+            cadence: memory.cadence,
+            due_rule: memory.due_rule,
+            start_offset_days: memory.start_offset_days,
+            default_urgency: memory.default_urgency,
+            confidence_score: memory.confidence_score,
+            steps: (memory.steps ?? []).slice(0, 10).map((step) => ({
+              title: step.title,
+              instructions: step.instructions,
+              tool_name: step.tool_name,
+              tool_url: step.tool_url,
+              expected_output: step.expected_output,
+              relative_due_offset_days: step.relative_due_offset_days,
+              position: step.position,
+            })),
+          })),
       };
     },
   });
@@ -246,7 +293,8 @@ export async function draftTaskUpdateWithAgent(input: {
         "You reason on behalf of the position profile or task owner, not as a generic chatbot.",
         "You must call get_task_context before answering.",
         "Do not claim to have completed external work; this v1 skill is read-only and reports what should happen next.",
-        "Use task notes, subtasks, activity, durable role_memory, and position memory when present.",
+        "Use task notes, subtasks, activity, durable role_memory, task_memory workflows, and position memory when present.",
+        "If the instruction asks you to send, submit, change an external system, book something, or do work requiring a connector/write tool you do not have, state that Donnit cannot complete that action yet and provide the exact next step a human should take.",
         "If context is missing, say exactly what is missing and keep confidence low.",
         "Return concise JSON. suggested_update should be written in a human work-update style that can be shown inside Donnit.",
         "profile_memory_candidate should contain one reusable role-learning insight only when the context reveals a repeatable duty, decision rule, relationship, or timing pattern.",

@@ -1021,7 +1021,7 @@
 /* =========== Pricing =========== */
 .donnit-landing-handoff .price-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 20px;
 }
 .donnit-landing-handoff .price-card {
@@ -1485,6 +1485,10 @@
 }
 
 /* =========== Responsive =========== */
+@media (max-width: 1180px) {
+  .donnit-landing-handoff .price-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 980px) {
   .donnit-landing-handoff .hero { padding: 60px 0 80px; }
   .donnit-landing-handoff .hero-grid, .donnit-landing-handoff .chat-grid { grid-template-columns: 1fr; gap: 50px; }

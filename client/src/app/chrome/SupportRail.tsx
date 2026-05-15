@@ -28,7 +28,7 @@ export default function SupportRail({
   onOpenInbox,
   onBuildAgenda,
   onToggleAgendaTask,
-  onMoveAgendaTask,
+  onReorderAgendaTask,
   onUpdateAgendaPreferences,
   onUpdateAgendaSchedule,
   onApproveAgenda,
@@ -54,7 +54,7 @@ export default function SupportRail({
   onOpenInbox: () => void;
   onBuildAgenda: () => void;
   onToggleAgendaTask: (taskId: Id) => void;
-  onMoveAgendaTask: (taskId: Id, direction: "up" | "down") => void;
+  onReorderAgendaTask: (sourceTaskId: Id, targetTaskId: Id) => void;
   onUpdateAgendaPreferences: (preferences: AgendaPreferences) => void;
   onUpdateAgendaSchedule: (schedule: AgendaSchedule) => void;
   onApproveAgenda: () => void;
@@ -139,7 +139,7 @@ export default function SupportRail({
           schedule={agendaSchedule}
           onBuild={onBuildAgenda}
           onToggleTask={onToggleAgendaTask}
-          onMoveTask={onMoveAgendaTask}
+          onReorderTask={onReorderAgendaTask}
           onPreferencesChange={onUpdateAgendaPreferences}
           onScheduleChange={onUpdateAgendaSchedule}
           onApprove={onApproveAgenda}

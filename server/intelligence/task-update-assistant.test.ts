@@ -116,6 +116,49 @@ function mockStore(overrides: Partial<DonnitStore> = {}) {
         confidence_score: 0.86,
       },
     ]),
+    listPositionProfileTaskMemories: vi.fn(async () => [
+      {
+        id: "task-memory-1",
+        org_id: "org-1",
+        position_profile_id: "role-1",
+        source_task_id: "task-1",
+        title: "Monthly payroll report",
+        objective: "Produce an accurate payroll report from the final hours file.",
+        cadence: "monthly",
+        due_rule: "By the first Friday of the month",
+        start_offset_days: 3,
+        default_urgency: "high",
+        default_estimated_minutes: 45,
+        status: "active",
+        version: 1,
+        confidence_score: 0.82,
+        learned_from: {},
+        created_by: "user-1",
+        created_at: "2026-05-13T13:00:00.000Z",
+        updated_at: "2026-05-13T13:00:00.000Z",
+        last_learned_at: "2026-05-13T13:00:00.000Z",
+        steps: [
+          {
+            id: "step-1",
+            org_id: "org-1",
+            task_memory_id: "task-memory-1",
+            source_task_id: "task-1",
+            title: "Pull final hours file",
+            instructions: "Collect the approved final hours file from managers.",
+            tool_name: "Payroll system",
+            tool_url: "https://example.com",
+            expected_output: "Final hours file",
+            relative_due_offset_days: -1,
+            estimated_minutes: 20,
+            dependency_step_ids: [],
+            position: 0,
+            created_at: "2026-05-13T13:00:00.000Z",
+            updated_at: "2026-05-13T13:00:00.000Z",
+          },
+        ],
+        attachments: [],
+      },
+    ]),
     ...overrides,
     __modelCalls: modelCalls,
     __toolCalls: toolCalls,
@@ -162,6 +205,7 @@ describe("task update assistant skill", () => {
     expect(result.profile_memory_candidate).toContain("Payroll reports");
     expect(store.getTask).toHaveBeenCalledWith("task-1");
     expect(store.listPositionProfileKnowledge).toHaveBeenCalledWith("org-1", "role-1");
+    expect(store.listPositionProfileTaskMemories).toHaveBeenCalledWith("org-1", "role-1");
     expect(store.__modelCalls).toHaveLength(2);
     expect(store.__toolCalls).toHaveLength(1);
     expect(store.updateAiSession).toHaveBeenCalledWith("session-1", expect.objectContaining({ status: "completed" }));
