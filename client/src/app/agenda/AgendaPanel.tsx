@@ -8,6 +8,15 @@ import { formatAgendaTime } from "@/app/lib/agenda";
 import { urgencyClass, urgencyLabel } from "@/app/lib/urgency";
 
 const SLOT_HEIGHT = 44;
+const WEEKDAYS = [
+  { id: 0, short: "Sun", label: "Sunday" },
+  { id: 1, short: "Mon", label: "Monday" },
+  { id: 2, short: "Tue", label: "Tuesday" },
+  { id: 3, short: "Wed", label: "Wednesday" },
+  { id: 4, short: "Thu", label: "Thursday" },
+  { id: 5, short: "Fri", label: "Friday" },
+  { id: 6, short: "Sat", label: "Saturday" },
+];
 
 function agendaDayKey(item: AgendaItem) {
   return item.startAt?.slice(0, 10) ?? item.dueDate ?? "unscheduled";
@@ -89,6 +98,8 @@ export default function AgendaPanel({
   const includedAgenda = agenda.filter((item) => !excludedTaskIds.has(String(item.taskId)));
   const totalMinutes = includedAgenda.reduce((sum, item) => sum + item.estimatedMinutes, 0);
   const scheduledCount = includedAgenda.filter((item) => item.scheduleStatus === "scheduled").length;
+  const todayWeekday = new Date().getDay();
+  const selectedWeekdays = new Set(schedule.selectedWeekdays.length > 0 ? schedule.selectedWeekdays : [todayWeekday]);
   const workdayStart = timeToMinutes(preferences.workdayStart);
   const workdayEnd = Math.max(timeToMinutes(preferences.workdayEnd), workdayStart + 60);
   const timelineRows = useMemo(() => {
@@ -108,6 +119,12 @@ export default function AgendaPanel({
   };
   const updateSchedule = <K extends keyof AgendaSchedule>(key: K, value: AgendaSchedule[K]) => {
     onScheduleChange({ ...schedule, [key]: value });
+  };
+  const toggleWeekday = (weekday: number) => {
+    const next = new Set(selectedWeekdays);
+    if (next.has(weekday) && next.size > 1) next.delete(weekday);
+    else next.add(weekday);
+    updateSchedule("selectedWeekdays", Array.from(next).sort((a, b) => a - b));
   };
 
   return (
@@ -146,6 +163,35 @@ export default function AgendaPanel({
             </Button>
           </div>
         )}
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.05em] text-foreground">Schedule days</p>
+            <p className="text-xs text-muted-foreground">Unchecked days are skipped. Past weekdays roll to next week.</p>
+          </div>
+          <div className="grid grid-cols-7 gap-1.5" data-testid="agenda-weekday-picker">
+            {WEEKDAYS.map((day) => {
+              const checked = selectedWeekdays.has(day.id);
+              return (
+                <label
+                  key={day.id}
+                  className={`flex cursor-pointer flex-col items-center gap-1 rounded-md border px-2 py-2 text-xs transition ${
+                    checked ? "border-brand-green bg-brand-green-pale text-brand-green" : "border-border bg-muted/20 text-muted-foreground hover:bg-muted"
+                  }`}
+                  title={day.label}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleWeekday(day.id)}
+                    className="size-3 accent-brand-green"
+                    data-testid={`checkbox-agenda-weekday-${day.short.toLowerCase()}`}
+                  />
+                  <span className="font-medium">{day.short}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <div className="space-y-3 px-4 py-3">

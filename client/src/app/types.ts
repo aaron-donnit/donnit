@@ -31,6 +31,7 @@ export type AgendaSchedule = {
   autoBuildEnabled: boolean;
   buildTime: string;
   lastAutoBuildDate: string | null;
+  selectedWeekdays: number[];
 };
 
 export type User = {

@@ -635,7 +635,11 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
 
   const buildAgenda = useMutation({
     mutationFn: async (_input?: { schedule?: AgendaSchedule }) => {
-      const res = await apiRequest("GET", "/api/agenda");
+      const schedule = _input?.schedule ?? agendaSchedule;
+      const query = schedule.selectedWeekdays.length > 0
+        ? `?selectedWeekdays=${encodeURIComponent(schedule.selectedWeekdays.join(","))}`
+        : "";
+      const res = await apiRequest("GET", `/api/agenda${query}`);
       const agenda = (await res.json()) as AgendaItem[];
       await invalidateWorkspace();
       return agenda;
@@ -703,6 +707,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
         excludedTaskIds: Array.from(agendaExcludedTaskIds),
         preferences: agendaPreferences,
         taskOrder: agendaTaskOrder,
+        schedule: agendaSchedule,
       });
       return (await res.json()) as { ok: boolean; exported: number; updated: number; skipped: number; total: number };
     },

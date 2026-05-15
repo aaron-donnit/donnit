@@ -16,6 +16,7 @@ export const DEFAULT_AGENDA_SCHEDULE: AgendaSchedule = {
   autoBuildEnabled: false,
   buildTime: "07:30",
   lastAutoBuildDate: null,
+  selectedWeekdays: [],
 };
 
 export const CLIENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";

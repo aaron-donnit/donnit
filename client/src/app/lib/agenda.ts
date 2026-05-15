@@ -48,10 +48,14 @@ export function normalizeAgendaSchedule(input?: Partial<AgendaSchedule> | null):
   const buildTime = /^\d{1,2}:\d{2}$/.test(String(input?.buildTime ?? ""))
     ? String(input?.buildTime)
     : DEFAULT_AGENDA_SCHEDULE.buildTime;
+  const selectedWeekdays = Array.isArray(input?.selectedWeekdays)
+    ? Array.from(new Set(input.selectedWeekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))).sort((a, b) => a - b)
+    : DEFAULT_AGENDA_SCHEDULE.selectedWeekdays;
   return {
     autoBuildEnabled: input?.autoBuildEnabled === true,
     buildTime,
     lastAutoBuildDate: typeof input?.lastAutoBuildDate === "string" ? input.lastAutoBuildDate : null,
+    selectedWeekdays,
   };
 }
 

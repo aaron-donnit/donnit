@@ -1645,6 +1645,7 @@ type AgendaSchedule = {
   autoBuildEnabled: boolean;
   buildTime: string;
   lastAutoBuildDate: string | null;
+  selectedWeekdays: number[];
 };
 
 const DEFAULT_AGENDA_PREFERENCES: AgendaPreferences = {
@@ -1663,6 +1664,7 @@ const DEFAULT_AGENDA_SCHEDULE: AgendaSchedule = {
   autoBuildEnabled: false,
   buildTime: "07:30",
   lastAutoBuildDate: null,
+  selectedWeekdays: [],
 };
 
 function parseClockMinute(value: unknown, fallback: string) {
@@ -1720,10 +1722,20 @@ function cleanAgendaSchedule(value: unknown): AgendaSchedule {
   const buildTime = typeof input.buildTime === "string" && /^\d{1,2}:\d{2}$/.test(input.buildTime)
     ? input.buildTime
     : DEFAULT_AGENDA_SCHEDULE.buildTime;
+  const selectedWeekdays = Array.isArray(input.selectedWeekdays)
+    ? Array.from(
+        new Set(
+          input.selectedWeekdays
+            .map(Number)
+            .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+        ),
+      ).sort((a, b) => a - b)
+    : DEFAULT_AGENDA_SCHEDULE.selectedWeekdays;
   return {
     autoBuildEnabled: input.autoBuildEnabled === true,
     buildTime,
     lastAutoBuildDate: typeof input.lastAutoBuildDate === "string" ? input.lastAutoBuildDate : null,
+    selectedWeekdays,
   };
 }
 
@@ -1766,6 +1778,11 @@ function addDaysIso(date: string, days: number) {
   if (Number.isNaN(parsed.getTime())) return date;
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
+}
+
+function weekdayForIsoDate(date: string) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getUTCDay();
 }
 
 function addMonthsIso(date: string, months: number) {
@@ -1882,11 +1899,17 @@ function scheduleTasks<T extends {
 }>(
   tasks: T[],
   busyByDate: Map<string, CalendarBusyBlock[]> = new Map(),
-  options: { timeZone?: string; today?: string; preferences?: AgendaPreferences; presorted?: boolean } = {},
+  options: { timeZone?: string; today?: string; preferences?: AgendaPreferences; presorted?: boolean; selectedWeekdays?: number[] } = {},
 ): AgendaItem[] {
   const timeZone = options.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE;
   const preferences = cleanAgendaPreferences(options.preferences ?? DEFAULT_AGENDA_PREFERENCES);
   const today = options.today ?? getZonedParts(new Date(), timeZone).date;
+  const todayWeekday = weekdayForIsoDate(today) ?? 0;
+  const allowedWeekdays = new Set(
+    (options.selectedWeekdays?.length ? options.selectedWeekdays : [todayWeekday])
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+  );
   const mutableBusy = cloneBusyByDate(busyByDate);
   const candidates = (options.presorted ? [...tasks] : sortTasks(tasks)).filter(
     (task) => task.status !== "completed" && task.status !== "denied",
@@ -1897,9 +1920,22 @@ function scheduleTasks<T extends {
   const nowParts = getZonedParts(new Date(), timeZone);
   const earliestTodayMinute = roundUpToHalfHour(nowParts.minute);
   const agendaByTaskId = new Map<string, AgendaItem>();
+  const isAllowedAgendaDate = (date: string) => {
+    const weekday = weekdayForIsoDate(date);
+    return weekday !== null && allowedWeekdays.has(weekday) && date >= today;
+  };
+  const firstAllowedDateOnOrAfter = (date: string) => {
+    const start = date >= today ? date : today;
+    for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
+      const candidate = addDaysIso(start, offset);
+      if (isAllowedAgendaDate(candidate)) return candidate;
+    }
+    return null;
+  };
 
   candidates.forEach((task, index) => {
     if (!task.dueDate || task.isAllDay) return;
+    if (!isAllowedAgendaDate(task.dueDate)) return;
     const fixedStart = timeToMinute(task.startTime ?? task.dueTime ?? null);
     if (fixedStart === null) return;
     if (task.dueDate === nowParts.date && fixedStart < earliestTodayMinute) return;
@@ -1927,9 +1963,24 @@ function scheduleTasks<T extends {
     const fixed = agendaByTaskId.get(String(task.id));
     if (fixed) return fixed;
     const estimate = Math.min(Math.max(task.estimatedMinutes, preferences.minimumBlockMinutes, 5), workdayMinutes);
-    const firstDate = task.dueDate && task.dueDate >= today ? task.dueDate : today;
+    const firstDate = firstAllowedDateOnOrAfter(task.dueDate && task.dueDate >= today ? task.dueDate : today);
+    if (!firstDate) {
+      return {
+        taskId: task.id,
+        order: index + 1,
+        title: task.title,
+        estimatedMinutes: estimate,
+        dueDate: task.dueDate,
+        urgency: task.urgency,
+        startAt: null,
+        endAt: null,
+        timeZone,
+        scheduleStatus: "unscheduled" as const,
+      };
+    }
     for (let offset = 0; offset < SCHEDULE_HORIZON_DAYS; offset += 1) {
       const date = addDaysIso(firstDate, offset);
+      if (!isAllowedAgendaDate(date)) continue;
       const slot = getFreeSlotsForDate(date, mutableBusy, preferences)
         .map((free) => ({
           ...free,
@@ -3498,9 +3549,10 @@ function buildClientAgenda(
   timeZone = DEFAULT_CALENDAR_TIME_ZONE,
   preferences = DEFAULT_AGENDA_PREFERENCES,
   taskOrder: string[] = [],
+  schedule = DEFAULT_AGENDA_SCHEDULE,
 ): AgendaItem[] {
   const ordered = applyAgendaTaskOrder(sortClientTasks(tasks), taskOrder);
-  return scheduleTasks(ordered, busyByDate, { timeZone, preferences, presorted: true });
+  return scheduleTasks(ordered, busyByDate, { timeZone, preferences, presorted: true, selectedWeekdays: schedule.selectedWeekdays });
 }
 
 type GoogleCalendarContext = {
@@ -3801,6 +3853,7 @@ async function buildAuthenticatedBootstrap(req: Request) {
       calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
       workspaceState.agenda.preferences,
       workspaceState.agenda.taskOrder,
+      workspaceState.agenda.schedule,
     ),
     integrations: getIntegrationStatus(),
   };
@@ -5298,6 +5351,7 @@ const workspaceStateSchema = z.discriminatedUnion("key", [
           autoBuildEnabled: z.boolean().optional(),
           buildTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
           lastAutoBuildDate: z.string().nullable().optional(),
+          selectedWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
         })
         .optional()
         .transform((value) => cleanAgendaSchedule(value)),
@@ -10836,6 +10890,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const visibleTasks = tasks.filter((task) => canViewSensitiveTask(task, auth.userId, actor));
         const agendaState = await store.getWorkspaceState(orgId, "agenda_state");
         const workspaceState = toClientWorkspaceState({ agenda: agendaState });
+        const selectedWeekdaysQuery = typeof req.query.selectedWeekdays === "string"
+          ? req.query.selectedWeekdays.split(",").map(Number)
+          : [];
+        const schedule = selectedWeekdaysQuery.length > 0
+          ? cleanAgendaSchedule({ ...workspaceState.agenda.schedule, selectedWeekdays: selectedWeekdaysQuery })
+          : workspaceState.agenda.schedule;
         const calendarContext = await tryBuildGoogleCalendarContext(store);
         res.json(
           buildClientAgenda(
@@ -10844,6 +10904,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             calendarContext?.timeZone ?? DEFAULT_CALENDAR_TIME_ZONE,
             workspaceState.agenda.preferences,
             workspaceState.agenda.taskOrder,
+            schedule,
           ),
         );
         return;
@@ -10885,12 +10946,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : new Set<string>();
       const preferences = cleanAgendaPreferences(req.body?.preferences);
       const taskOrder = cleanStringArray(req.body?.taskOrder, 500);
+      const schedule = cleanAgendaSchedule(req.body?.schedule);
       const agenda = buildClientAgenda(
         tasks.map(toClientTask),
         calendarContext.busyByDate,
         calendarContext.timeZone,
         preferences,
         taskOrder,
+        schedule,
       ).filter((item) => !excludedTaskIds.has(String(item.taskId)));
       let exported = 0;
       let skipped = 0;
