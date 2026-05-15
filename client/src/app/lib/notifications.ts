@@ -12,7 +12,13 @@ export type DerivedNotification = {
   suggestionId?: Id;
 };
 
-export function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[], events: TaskEvent[] = [], currentUserId?: Id): DerivedNotification[] {
+export function buildNotifications(
+  tasks: Task[],
+  suggestions: EmailSuggestion[],
+  events: TaskEvent[] = [],
+  currentUserId?: Id,
+  canSeeAdminAlerts = false,
+): DerivedNotification[] {
   const today = localDateIso();
   const soonIso = addLocalDays(2, today);
   const active = tasks.filter((task) => task.status !== "completed" && task.status !== "denied");
@@ -46,9 +52,11 @@ export function buildNotifications(tasks: Task[], suggestions: EmailSuggestion[]
       });
     }
     for (const event of events.filter((item) => item.type === "assistant_completed" || item.type === "assistant_failed")) {
+      if (event.type === "assistant_failed" && !canSeeAdminAlerts) continue;
       const task = tasks.find((candidate) => String(candidate.id) === String(event.taskId));
       if (!task) continue;
       const visibleToCurrentUser =
+        (event.type === "assistant_failed" && canSeeAdminAlerts) ||
         String(event.actorId) === String(currentUserId) ||
         String(task.assignedToId) === String(currentUserId) ||
         String(task.assignedById) === String(currentUserId) ||

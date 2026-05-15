@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2, HelpCircle, Loader2, Send } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, HelpCircle, Loader2, Send } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateWorkspace } from "@/app/lib/hooks";
@@ -88,6 +88,7 @@ export default function ChatPanel({
   const [message, setMessage] = useState("");
   const [cursorPosition, setCursorPosition] = useState(0);
   const [localAssistantMessage, setLocalAssistantMessage] = useState<ChatMessage | null>(null);
+  const [responseExpanded, setResponseExpanded] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(() => {
@@ -191,6 +192,10 @@ export default function ChatPanel({
       (latestAssistant.content.includes("?") || /which|who should|when is|what should|how urgent/i.test(latestAssistant.content)),
   );
   const latestAssistantCreatedTask = Boolean(latestAssistant?.taskId || /^I assigned\b/i.test(latestAssistant?.content ?? ""));
+
+  useEffect(() => {
+    if (latestAssistant?.id) setResponseExpanded(true);
+  }, [latestAssistant?.id]);
 
   const chat = useMutation({
     mutationFn: async (text: string) => {
@@ -418,20 +423,30 @@ export default function ChatPanel({
 
       {latestAssistant && (
         <div
-          className={`mt-2 flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+          className={`mt-2 flex min-h-10 gap-2 rounded-md border px-3 py-2 text-sm ${
             latestAssistantNeedsReply
               ? "border-amber-200 bg-amber-50 text-amber-950"
               : latestAssistantCreatedTask
                 ? "border-emerald-200 bg-emerald-50 text-emerald-950"
                 : "border-border bg-card text-foreground"
-          }`}
+          } ${responseExpanded ? "items-start" : "items-center"}`}
           data-testid="text-chat-latest-response"
         >
-          {latestAssistantNeedsReply ? <HelpCircle className="size-4 shrink-0" /> : <CheckCircle2 className="size-4 shrink-0" />}
+          {latestAssistantNeedsReply ? <HelpCircle className="mt-0.5 size-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0" />}
           <span className="shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.07em]">
             {latestAssistantNeedsReply ? "Reply needed" : latestAssistantCreatedTask ? "Task created" : "Donnit"}
           </span>
-          <span className="min-w-0 flex-1 truncate">{latestAssistant.content}</span>
+          <span className={`min-w-0 flex-1 ${responseExpanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+            {latestAssistant.content}
+          </span>
+          <button
+            type="button"
+            onClick={() => setResponseExpanded((current) => !current)}
+            className="rounded p-0.5 text-current opacity-70 transition hover:bg-black/5 hover:opacity-100"
+            aria-label={responseExpanded ? "Collapse Donnit response" : "Expand Donnit response"}
+          >
+            {responseExpanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
         </div>
       )}
 

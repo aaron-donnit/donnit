@@ -5197,6 +5197,8 @@ type PendingChatTask = z.infer<typeof pendingChatTaskSchema>;
 const pendingChatTaskMemory = new Map<string, PendingChatTask>();
 const pendingChatTaskMarker = "DONNIT_PENDING_CHAT_TASK:";
 const pendingChatTaskClearedMarker = "DONNIT_PENDING_CHAT_TASK_CLEARED";
+const DONNIT_AI_REVIEW_UNAVAILABLE_MESSAGE =
+  "Donnit AI couldn't complete that review yet. I notified an admin to check the AI connection and usage limits.";
 
 async function runDonnitTaskAutomation(input: {
   store: DonnitStore;
@@ -8275,7 +8277,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               });
               assistantContent = chatTaskAutomationOutcome(created, members, automation.output);
             } catch (error) {
-              assistantContent = `${assistantContent} Donnit AI could not complete its review yet: ${error instanceof Error ? error.message : String(error)}`;
+              assistantContent = `${assistantContent} ${DONNIT_AI_REVIEW_UNAVAILABLE_MESSAGE}`;
             }
           }
           const assistant = await store.createChatMessage(orgId, {
@@ -8519,7 +8521,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             });
             assistantContent = chatTaskAutomationOutcome(created, members, automation.output);
           } catch (error) {
-            assistantContent = `${assistantContent} Donnit AI could not complete its review yet: ${error instanceof Error ? error.message : String(error)}`;
+            assistantContent = `${assistantContent} ${DONNIT_AI_REVIEW_UNAVAILABLE_MESSAGE}`;
           }
         }
         const assistant = await store.createChatMessage(orgId, {
@@ -9539,7 +9541,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       res.status(502).json({
-        message: error instanceof Error ? error.message : "Could not run Donnit assistant.",
+        message: DONNIT_AI_REVIEW_UNAVAILABLE_MESSAGE,
         reason: reason === "postgrest_error" ? "assistant_run_failed" : reason,
       });
     }

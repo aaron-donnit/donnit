@@ -20,3 +20,6 @@ playwright-report/
 test-results/
 blob-report/
 supabase/.temp/
+
+.vercel
+.env*.local

@@ -858,9 +858,10 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
       new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     [],
   );
+  const canSeeAdminNotifications = currentWorkspaceUser?.role === "owner" || currentWorkspaceUser?.role === "admin";
   const rawNotifications = useMemo(
-    () => buildNotifications(notificationTasks, currentUserQueueSuggestions, data?.events ?? [], data?.currentUserId),
-    [notificationTasks, currentUserQueueSuggestions, data?.events, data?.currentUserId],
+    () => buildNotifications(notificationTasks, currentUserQueueSuggestions, data?.events ?? [], data?.currentUserId, canSeeAdminNotifications),
+    [notificationTasks, currentUserQueueSuggestions, data?.events, data?.currentUserId, canSeeAdminNotifications],
   );
   const notifications = useMemo(
     () => rawNotifications.filter((item) => !reviewedNotificationIds.has(item.id)),
