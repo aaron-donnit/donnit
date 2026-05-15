@@ -70,6 +70,12 @@ describe("chat task parser", () => {
     expect(__chatParserTest.parseDueDate(prompt)).toBe("2026-05-15");
   });
 
+  it("cleans @ mention selections from task titles", () => {
+    const prompt = "assign @Nina Patel to review the renewal by Friday";
+
+    expect(__chatParserTest.titleFromMessage(prompt, ["Nina Patel", "nina@example.com"])).toBe("Review the renewal");
+  });
+
   it("keeps contact names out of assignment routing for self-owned outreach", () => {
     expect(__chatParserTest.hasExplicitAssignmentIntent("call Maya tomorrow at noon")).toBe(false);
     expect(__chatParserTest.titleFromMessage("call Maya tomorrow at noon")).toBe("Call Maya");
@@ -109,6 +115,60 @@ describe("chat task parser", () => {
     expect(__chatParserTest.underspecifiedRelativeDatePhrase(prompt)).toMatchObject({
       phrase: "next month",
       question: "What exact due date in next month should I use?",
+    });
+  });
+
+  it("treats a follow-up due in a month as a precise clarification", () => {
+    vi.setSystemTime(new Date("2026-05-15T10:00:00-04:00"));
+
+    expect(__chatParserTest.parseDueDate("it is due in a month, verified")).toBe("2026-06-15");
+    expect(__chatParserTest.parseDueDate("due in 2 weeks")).toBe("2026-05-29");
+  });
+
+  it("recovers pending task context from the recent chat window", () => {
+    vi.setSystemTime(new Date("2026-05-15T10:00:00-04:00"));
+    const recovered = __chatParserTest.recoverPendingChatTaskFromRecentMessages({
+      messages: [
+        {
+          id: "m1",
+          org_id: "org",
+          user_id: "user-aaron",
+          role: "user",
+          content: "assign nina the project",
+          task_id: null,
+          created_at: "2026-05-15T14:00:00.000Z",
+        },
+        {
+          id: "m2",
+          org_id: "org",
+          user_id: "user-aaron",
+          role: "assistant",
+          content: "Nina Patel can own Project. When is this due?",
+          task_id: null,
+          created_at: "2026-05-15T14:00:01.000Z",
+        },
+        {
+          id: "m3",
+          org_id: "org",
+          user_id: "user-aaron",
+          role: "user",
+          content: "it is due in a month, verified",
+          task_id: null,
+          created_at: "2026-05-15T14:00:10.000Z",
+        },
+      ],
+      members: [
+        { user_id: "user-aaron", profile: { full_name: "Aaron Hassett", email: "aaron@example.com" } },
+        { user_id: "user-nina", profile: { full_name: "Nina Patel", email: "nina@example.com" } },
+      ] as never,
+      positionProfiles: [],
+      userId: "user-aaron",
+    });
+
+    expect(recovered).toMatchObject({
+      title: "Project",
+      assignedToId: "user-nina",
+      missing: ["dueDate"],
     });
   });
 

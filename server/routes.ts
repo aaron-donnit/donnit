@@ -36,6 +36,7 @@ import {
 } from "./auth-supabase";
 import {
   DonnitStore,
+  type DonnitChatMessage,
   type DonnitEmailSuggestion,
   type DonnitProfile,
   type DonnitPositionProfile,
@@ -436,6 +437,15 @@ function addDays(days: number, timeZone = DEFAULT_DONNIT_TIME_ZONE) {
   return addDaysIso(todayIso(timeZone), days);
 }
 
+function addMonths(months: number, timeZone = DEFAULT_DONNIT_TIME_ZONE) {
+  const [yearText, monthText, dayText] = todayIso(timeZone).split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const lastDay = new Date(Date.UTC(year, month - 1 + months + 1, 0)).getUTCDate();
+  return toIsoDate(year, month + months, Math.min(day, lastDay));
+}
+
 function nextWeekdayIso(targetDay: number, preferNextWeek = false) {
   const localToday = todayIso();
   const today = new Date(`${localToday}T00:00:00.000Z`).getUTCDay();
@@ -699,6 +709,15 @@ function parseDueDate(message: string) {
   if (/\b(?:eoy|end of year)\b/.test(text)) return endOfYearIso();
   if (text.includes("today")) return todayIso();
   if (text.includes("tomorrow")) return addDays(1);
+  const relativeOffset = text.match(/\bin\s+(?:(a|an|one)|(\d{1,2}))\s+(day|days|week|weeks|month|months)\b/);
+  if (relativeOffset) {
+    const amount = relativeOffset[1] ? 1 : Number(relativeOffset[2]);
+    if (Number.isInteger(amount) && amount > 0) {
+      if (relativeOffset[3].startsWith("day")) return addDays(amount);
+      if (relativeOffset[3].startsWith("week")) return addDays(amount * 7);
+      return addMonths(amount);
+    }
+  }
   if (text.includes("next week")) return addDays(7);
   const weekdayMatch = text.match(/\b(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
   if (weekdayMatch) {
@@ -4980,6 +4999,75 @@ async function getPendingChatTaskFromMessages(store: DonnitStore, orgId: string)
   return undefined;
 }
 
+function visibleRecentChatMessages(messages: DonnitChatMessage[], limit = 100) {
+  return messages
+    .filter((message) => {
+      if (message.role !== "system") return true;
+      return !message.content.startsWith(pendingChatTaskMarker) && !message.content.startsWith(pendingChatTaskClearedMarker);
+    })
+    .slice(-limit);
+}
+
+function latestClarificationSourceMessage(messages: DonnitChatMessage[]) {
+  const visible = visibleRecentChatMessages(messages, 100);
+  for (let index = visible.length - 2; index >= 0; index -= 1) {
+    const message = visible[index];
+    if (
+      message.role !== "assistant" ||
+      !message.content.includes("?") ||
+      !/\b(?:when is|what exact|who should|which|what should|how urgent|do you mean)\b/i.test(message.content)
+    ) {
+      continue;
+    }
+    for (let userIndex = index - 1; userIndex >= 0; userIndex -= 1) {
+      const previous = visible[userIndex];
+      if (previous.role === "user" && previous.content.trim().length >= 2) return previous;
+    }
+  }
+  return null;
+}
+
+function recoverPendingChatTaskFromRecentMessages(input: {
+  messages: DonnitChatMessage[];
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>;
+  positionProfiles: DonnitPositionProfile[];
+  userId: string;
+}) {
+  const source = latestClarificationSourceMessage(input.messages);
+  if (!source) return null;
+  const normalized = normalizeCommonTaskTypos(source.content);
+  const fallback = parseChatTaskAuthenticated(normalized, input.members, input.userId);
+  const explicitAssignment = hasExplicitAssignmentIntent(normalized);
+  const mentionedAssignee = explicitAssignment ? findMentionedMember(normalized, input.members) : null;
+  const assignedToId = mentionedAssignee?.user_id ?? fallback.assignedToId;
+  const profileResolution = resolveChatPositionProfile({
+    profiles: fallback.visibility === "personal" ? [] : input.positionProfiles,
+    assignedToId: String(assignedToId),
+    message: normalized,
+    visibility: fallback.visibility,
+  });
+  const missing: PendingChatMissingField[] = [];
+  const vagueDate = underspecifiedRelativeDatePhrase(normalized);
+  if (explicitAssignment && isGenericAssignmentTitle(fallback.title)) missing.push("title");
+  if (explicitAssignment && !mentionedAssignee && assignedToId === input.userId) missing.push("assignee");
+  if (vagueDate) missing.push("dueDatePrecision");
+  if (!fallback.dueDate && !vagueDate) missing.push("dueDate");
+  if (profileResolution.needsChoice) missing.push("positionProfile");
+  const uniqueMissing = Array.from(new Set(missing));
+  if (uniqueMissing.length === 0) return null;
+  return buildPendingFromTaskInput(
+    {
+      ...fallback,
+      description: `${fallback.description}\n\nRecovered from recent chat context: ${source.content}`,
+      assignedToId: String(assignedToId),
+      assignedById: String(fallback.assignedById),
+      positionProfileId: profileResolution.positionProfileId,
+      clarificationHint: normalized,
+    },
+    uniqueMissing,
+  );
+}
+
 function looksLikeClarificationReply(message: string) {
   const text = message.toLowerCase().trim();
   const hasDueOrUrgency = Boolean(parseDueDate(message) || parseExplicitUrgency(message));
@@ -6818,6 +6906,7 @@ export const __chatParserTest = {
   parseTaskTime,
   parseTaskRecurrence,
   repeatDetailsFromDescription,
+  recoverPendingChatTaskFromRecentMessages,
   resolveChatPositionProfile,
   rewriteRequesterReferencesInTitle,
   shouldLearnAliasPhrase,
@@ -8036,7 +8125,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.json({ assistant, pending: false });
           return;
         }
-        const pending = await getPendingChatTask(store, orgId);
+        let pending = await getPendingChatTask(store, orgId);
+        if (!pending && automationInstruction === null && looksLikeClarificationReply(taskMessage)) {
+          const [recentMessages, positionProfilesForRecovery] = await Promise.all([
+            store.listChatMessages(orgId),
+            store.listPositionProfiles(orgId),
+          ]);
+          pending = recoverPendingChatTaskFromRecentMessages({
+            messages: recentMessages,
+            members,
+            positionProfiles: positionProfilesForRecovery,
+            userId: auth.userId,
+          });
+          if (pending) await setPendingChatTask(store, orgId, pending);
+        }
         if (pending && automationInstruction !== null) {
           await clearPendingChatTask(store, orgId);
         } else if (pending) {

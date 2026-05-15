@@ -1763,7 +1763,12 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
                   onClick={() => setTaskStatusFilter((current) => current === "completed" ? null : "completed")}
                 />
               </div>
-              <ChatPanel messages={data.messages} onSlashCommand={handleChatSlashCommand} />
+              <ChatPanel
+                messages={data.messages}
+                users={data.users}
+                positionProfiles={positionProfiles}
+                onSlashCommand={handleChatSlashCommand}
+              />
               <TaskList
                 key={`home-tasks-${viewResetKeys.home}`}
                 tasks={scopedDisplayTasks}

@@ -4,7 +4,7 @@ import { CheckCircle2, HelpCircle, Loader2, Send } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateWorkspace } from "@/app/lib/hooks";
-import type { ChatMessage } from "@/app/types";
+import type { ChatMessage, Id, PositionProfile, User } from "@/app/types";
 
 type SlashCommand = {
   command: "memory";
@@ -35,9 +35,61 @@ const slashCommands: SlashCommandOption[] = [
 
 const SLASH_USAGE_KEY = "donnit.slashCommandUsage";
 
-export default function ChatPanel({ messages, onSlashCommand }: { messages: ChatMessage[]; onSlashCommand?: (command: SlashCommand) => void }) {
+type MentionOption = {
+  id: Id;
+  name: string;
+  email: string;
+  profileTitle: string;
+};
+
+type MentionTrigger = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+function findMentionTrigger(value: string, cursorPosition: number): MentionTrigger | null {
+  const beforeCursor = value.slice(0, cursorPosition);
+  const match = beforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!match) return null;
+  const atIndex = beforeCursor.lastIndexOf("@");
+  if (atIndex < 0) return null;
+  return {
+    start: atIndex,
+    end: cursorPosition,
+    query: match[1] ?? "",
+  };
+}
+
+function profileTitlesForUser(userId: Id, positionProfiles: PositionProfile[]) {
+  const titles = positionProfiles
+    .filter((profile) =>
+      profile.status !== "vacant" &&
+      [profile.currentOwnerId, profile.temporaryOwnerId, profile.delegateUserId]
+        .filter(Boolean)
+        .some((ownerId) => String(ownerId) === String(userId)),
+    )
+    .map((profile) => profile.title)
+    .filter(Boolean);
+  return Array.from(new Set(titles)).join(", ");
+}
+
+export default function ChatPanel({
+  messages,
+  users = [],
+  positionProfiles = [],
+  onSlashCommand,
+}: {
+  messages: ChatMessage[];
+  users?: User[];
+  positionProfiles?: PositionProfile[];
+  onSlashCommand?: (command: SlashCommand) => void;
+}) {
   const [message, setMessage] = useState("");
+  const [cursorPosition, setCursorPosition] = useState(0);
   const [localAssistantMessage, setLocalAssistantMessage] = useState<ChatMessage | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(() => {
     try {
       if (typeof window === "undefined") return {};
@@ -47,6 +99,39 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
     }
   });
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const mentionOptions = useMemo<MentionOption[]>(
+    () =>
+      users
+        .filter((user) => user.status !== "inactive")
+        .map((user) => ({
+          id: user.id,
+          name: user.name || user.email,
+          email: user.email,
+          profileTitle: profileTitlesForUser(user.id, positionProfiles) || user.role || "No Position Profile",
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [positionProfiles, users],
+  );
+  const mentionTrigger = useMemo(() => {
+    const boundedCursor = Math.max(0, Math.min(cursorPosition || message.length, message.length));
+    return findMentionTrigger(message, boundedCursor) ?? findMentionTrigger(message, message.length);
+  }, [cursorPosition, message]);
+  const visibleMentionOptions = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const query = mentionTrigger.query.toLowerCase();
+    return mentionOptions
+      .filter((option) => {
+        if (!query) return true;
+        return (
+          option.name.toLowerCase().includes(query) ||
+          option.email.toLowerCase().includes(query) ||
+          option.profileTitle.toLowerCase().includes(query)
+        );
+      })
+      .slice(0, 8);
+  }, [mentionOptions, mentionTrigger]);
+  const showMentionHelp = Boolean(mentionTrigger && !mentionDismissed);
 
   const parsedPreview = useMemo(() => {
     const rawText = message.trim();
@@ -178,6 +263,25 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
     ["Repeat", parsedPreview?.recurrence],
   ];
 
+  const updateMessage = (value: string, nextCursorPosition?: number) => {
+    setMessage(value);
+    setCursorPosition(nextCursorPosition ?? value.length);
+    setMentionDismissed(false);
+    setMentionIndex(0);
+  };
+
+  const insertMention = (option: MentionOption) => {
+    if (!mentionTrigger) return;
+    const inserted = `@${option.name} `;
+    const next = `${message.slice(0, mentionTrigger.start)}${inserted}${message.slice(mentionTrigger.end)}`;
+    const nextCursorPosition = mentionTrigger.start + inserted.length;
+    updateMessage(next, nextCursorPosition);
+    window.setTimeout(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(nextCursorPosition, nextCursorPosition);
+    }, 0);
+  };
+
   return (
     <div className="mb-5" data-testid="panel-chat">
       <div className="composer-box">
@@ -186,14 +290,39 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
           ref={taRef}
           value={message}
           rows={2}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => updateMessage(e.target.value, e.target.selectionStart)}
+          onClick={(e) => setCursorPosition(e.currentTarget.selectionStart)}
+          onFocus={(e) => setCursorPosition(e.currentTarget.selectionStart)}
+          onKeyUp={(e) => setCursorPosition(e.currentTarget.selectionStart)}
           onKeyDown={(e) => {
+            if (showMentionHelp && visibleMentionOptions.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setMentionIndex((current) => (current + 1) % visibleMentionOptions.length);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setMentionIndex((current) => (current - 1 + visibleMentionOptions.length) % visibleMentionOptions.length);
+                return;
+              }
+              if (e.key === "Tab" || e.key === "Enter") {
+                e.preventDefault();
+                insertMention(visibleMentionOptions[mentionIndex] ?? visibleMentionOptions[0]);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setMentionDismissed(true);
+                return;
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
             }
           }}
-          placeholder='Tell Donnit what to do, e.g. "Follow up with Linh on Q1 deck variance by Thursday, urgent", "/memory", or "/donnit prep an update"'
+          placeholder='Tell Donnit what to do, e.g. "Assign @Nina Patel the renewal by Thursday", "/memory", or "/donnit prep an update"'
           className="composer-input"
           data-testid="input-chat-message"
         />
@@ -223,6 +352,39 @@ export default function ChatPanel({ messages, onSlashCommand }: { messages: Chat
           </button>
         </div>
       </div>
+
+      {showMentionHelp && (
+        <div className="mt-2 rounded-md border border-border bg-card p-2 text-sm shadow-sm" data-testid="chat-mention-menu">
+          <div className="mb-1 flex items-center justify-between px-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            <span>People</span>
+            <span>{mentionTrigger?.query ? "Matching workspace" : "A-Z"}</span>
+          </div>
+          <div className="grid gap-1">
+            {visibleMentionOptions.length === 0 && (
+              <div className="rounded-md px-3 py-2 text-xs text-muted-foreground">
+                No matching people in this workspace.
+              </div>
+            )}
+            {visibleMentionOptions.map((option, index) => (
+              <button
+                key={String(option.id)}
+                type="button"
+                className={`rounded-md px-3 py-2 text-left ${index === mentionIndex ? "bg-muted" : "hover:bg-muted"}`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  insertMention(option);
+                }}
+              >
+                <span className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-foreground">{option.name}</span>
+                  <span className="truncate text-xs text-muted-foreground">{option.profileTitle}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">{option.email}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showSlashHelp && (
         <div className="mt-2 rounded-md border border-border bg-card p-2 text-sm shadow-sm" data-testid="chat-slash-command-menu">
