@@ -319,6 +319,149 @@ describe("chat task parser", () => {
     expect(__chatParserTest.selectTaskProfile(memories, { title: "Call Nina about candidate feedback" })).toBeNull();
   });
 
+  it("applies a matching Task Profile as ordered subtasks", async () => {
+    const createdSubtasks: Array<{ title: string; position: number }> = [];
+    const events: Array<{ type: string; note: string }> = [];
+    const store = {
+      userId: "user-admin",
+      listPositionProfileTaskMemories: async () => [
+        {
+          id: "profile-memory-finance",
+          position_profile_id: "profile-finance",
+          source_task_id: null,
+          title: "Monthly financial report",
+          objective: "Prepare payroll, P&L, revenue, and EBITDA reporting for leadership.",
+          cadence: "monthly",
+          due_rule: "First business day of the month",
+          start_offset_days: 5,
+          default_urgency: "high",
+          default_estimated_minutes: 60,
+          status: "active",
+          version: 1,
+          confidence_score: 0.9,
+          learned_from: {},
+          created_by: "user-admin",
+          org_id: "org-1",
+          created_at: "2026-05-15T00:00:00.000Z",
+          updated_at: "2026-05-15T00:00:00.000Z",
+          last_learned_at: "2026-05-15T00:00:00.000Z",
+          steps: [
+            { title: "Pull payroll report", position: 0 },
+            { title: "Prepare P&L summary", position: 1 },
+          ],
+        },
+      ],
+      listTaskSubtasks: async () => [],
+      createTaskSubtask: async (_orgId: string, input: { title: string; position: number }) => {
+        createdSubtasks.push({ title: input.title, position: input.position });
+        return { id: `subtask-${createdSubtasks.length}`, ...input };
+      },
+      addEvent: async (_orgId: string, input: { type: string; note: string }) => {
+        events.push({ type: input.type, note: input.note });
+        return { id: "event-1", ...input };
+      },
+    };
+
+    const result = await __chatParserTest.applyTaskProfileToTask(
+      store as never,
+      "org-1",
+      {
+        id: "task-1",
+        title: "Build the monthly financial report",
+        description: "Leadership needs payroll, P&L, revenue, and EBITDA reporting.",
+        position_profile_id: "profile-finance",
+        visibility: "work",
+        assigned_by: "user-admin",
+      } as never,
+    );
+
+    expect(result?.memory.id).toBe("profile-memory-finance");
+    expect(createdSubtasks).toEqual([
+      { title: "Pull payroll report", position: 0 },
+      { title: "Prepare P&L summary", position: 1 },
+    ]);
+    expect(events[0]?.type).toBe("task_profile_applied");
+  });
+
+  it("keeps same-day agenda blocks in future time slots", () => {
+    vi.setSystemTime(new Date("2026-05-15T15:10:00-04:00"));
+    const [item] = __chatParserTest.scheduleTasks(
+      [
+        {
+          id: "task-1",
+          title: "Prepare renewal notes",
+          estimatedMinutes: 30,
+          dueDate: "2026-05-15",
+          dueTime: "14:00",
+          startTime: null,
+          endTime: null,
+          isAllDay: false,
+          urgency: "normal",
+          status: "open",
+        },
+      ],
+      new Map(),
+      {
+        timeZone: "America/New_York",
+        today: "2026-05-15",
+        preferences: {
+          workdayStart: "09:00",
+          workdayEnd: "17:00",
+          lunchStart: "12:00",
+          lunchMinutes: 0,
+          meetingBufferMinutes: 0,
+          minimumBlockMinutes: 15,
+          focusBlockMinutes: 60,
+          morningPreference: "mixed",
+          afternoonPreference: "mixed",
+        },
+      },
+    );
+
+    expect(item?.scheduleStatus).toBe("scheduled");
+    expect(item?.startAt).toBe("2026-05-15T15:30:00");
+  });
+
+  it("rolls selected past weekdays to the following week", () => {
+    vi.setSystemTime(new Date("2026-05-15T10:00:00-04:00"));
+    const [item] = __chatParserTest.scheduleTasks(
+      [
+        {
+          id: "task-1",
+          title: "Draft team update",
+          estimatedMinutes: 30,
+          dueDate: "2026-05-15",
+          dueTime: null,
+          startTime: null,
+          endTime: null,
+          isAllDay: false,
+          urgency: "normal",
+          status: "open",
+        },
+      ],
+      new Map(),
+      {
+        timeZone: "America/New_York",
+        today: "2026-05-15",
+        selectedWeekdays: [4],
+        preferences: {
+          workdayStart: "09:00",
+          workdayEnd: "17:00",
+          lunchStart: "12:00",
+          lunchMinutes: 0,
+          meetingBufferMinutes: 0,
+          minimumBlockMinutes: 15,
+          focusBlockMinutes: 60,
+          morningPreference: "mixed",
+          afternoonPreference: "mixed",
+        },
+      },
+    );
+
+    expect(item?.scheduleStatus).toBe("scheduled");
+    expect(item?.startAt?.slice(0, 10)).toBe("2026-05-21");
+  });
+
   it("defaults to the assignee primary profile unless the text names a profile", () => {
     const profiles = [
       {

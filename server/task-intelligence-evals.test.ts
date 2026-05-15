@@ -504,6 +504,18 @@ const evalCases: Array<{
     },
   },
   {
+    name: "routes unique single-word profile tag over incidental task text",
+    message: "assign payroll reports to the intern by EOW",
+    profilesOverride: profilesWithTwoFinanceProfiles,
+    expected: {
+      assignedToId: "user-nina",
+      positionProfileId: "profile-finance-intern",
+      dueDate: "2026-05-15",
+      titleIncludes: "payroll reports",
+      titleExcludes: ["intern"],
+    },
+  },
+  {
     name: "asks when generated single-word profile tag is contested",
     message: "assign payroll reports to the intern by EOW",
     profilesOverride: profilesWithMultipleInterns,

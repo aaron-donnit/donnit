@@ -53,7 +53,12 @@ import {
 import { DONNIT_SCHEMA, DONNIT_TABLES, isSupabaseConfigured } from "./supabase";
 import { draftSuggestionReplyWithAgent } from "./intelligence/skills/reply-drafter";
 import { draftTaskUpdateWithAgent } from "./intelligence/skills/task-update-assistant";
-import { executeDonnitComposioReadTool, isComposioConfigured, listDonnitComposioTools } from "./intelligence/composio-client";
+import {
+  executeDonnitComposioReadTool,
+  getDonnitComposioEntityId,
+  isComposioConfigured,
+  listDonnitComposioTools,
+} from "./intelligence/composio-client";
 import { starterMemoryPromptBlock } from "./intelligence/donnit-starter-memory";
 import { englishSpellingClarification, normalizeEnglishSpelling } from "./intelligence/spellcheck";
 
@@ -4772,9 +4777,17 @@ function resolveChatPositionProfile(input: {
   visibility: "work" | "personal" | "confidential";
   aliases?: DonnitWorkspaceMemoryAlias[];
   requesterId?: string | null;
+  preferredProfile?: DonnitPositionProfile | null;
 }) {
   if (input.visibility === "personal") {
     return { positionProfileId: null as string | null, needsChoice: false, candidates: [] as DonnitPositionProfile[] };
+  }
+  if (
+    input.preferredProfile &&
+    isRoutablePositionProfile(input.preferredProfile) &&
+    ownerIdForPositionProfile(input.preferredProfile) === input.assignedToId
+  ) {
+    return { positionProfileId: input.preferredProfile.id, needsChoice: false, candidates: [input.preferredProfile] };
   }
   const explicitProfiles = findMentionedPositionProfileCandidates(
     input.message,
@@ -6843,7 +6856,9 @@ function evaluateDeterministicChatTask(input: {
   });
   const mentionedProfiles = workspaceResolution.missingAssignee
     ? []
-    : findMentionedPositionProfileCandidates(input.message, input.profiles, input.aliases ?? [], { requesterId: input.requesterId });
+    : workspaceResolution.profile
+      ? [workspaceResolution.profile]
+      : findMentionedPositionProfileCandidates(input.message, input.profiles, input.aliases ?? [], { requesterId: input.requesterId });
   const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
   const assignedToId = workspaceResolution.assignedToId ?? fallback.assignedToId;
   const resolvedTitle = titleFromMessage(input.message, [
@@ -6866,6 +6881,7 @@ function evaluateDeterministicChatTask(input: {
     visibility: fallback.visibility,
     aliases: input.aliases ?? [],
     requesterId: input.requesterId,
+    preferredProfile: workspaceResolution.profile,
   });
   const missing: PendingChatMissingField[] = [];
   const vagueDate = underspecifiedRelativeDatePhrase(input.message);
@@ -7117,8 +7133,10 @@ export const __chatParserTest = {
   taskContinuitySummary,
   taskMemoryMarkdown,
   taskMemoryTitleKey,
+  applyTaskProfileToTask,
   taskProfileScore,
   selectTaskProfile,
+  scheduleTasks,
   underspecifiedRelativeDatePhrase,
   languageClarificationFromMessage,
   normalizeCommonTaskTypos,
@@ -8183,10 +8201,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         tools: result.tools,
       });
     } catch (error) {
-      res.status(502).json({
+      console.warn("[donnit] composio tools status unavailable", {
+        userId: req.donnitAuth?.userId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.json({
         ok: false,
         configured: isComposioConfigured(),
-        message: error instanceof Error ? error.message : String(error),
+        entityId: req.donnitAuth ? getDonnitComposioEntityId("unknown", req.donnitAuth.userId) : null,
+        tools: [],
+        message: "Composio tools are not ready yet. Core Donnit task, agenda, and Position Profile workflows are still available.",
       });
     }
   });
@@ -8457,7 +8481,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         const mentionedProfiles = workspaceResolution.missingAssignee
           ? []
-          : findMentionedPositionProfileCandidates(interpretationMessage, positionProfilesForRouting, workspaceAliases, { requesterId: auth.userId });
+          : workspaceResolution.profile
+            ? [workspaceResolution.profile]
+            : findMentionedPositionProfileCandidates(interpretationMessage, positionProfilesForRouting, workspaceAliases, { requesterId: auth.userId });
         const mentionedProfile = workspaceResolution.profile ?? (mentionedProfiles.length === 1 ? mentionedProfiles[0] : null);
         const aiAssignee = ai && explicitAssignment && !workspaceResolution.missingAssignee
           ? members.find((member) => {
@@ -8551,6 +8577,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           visibility: taskInput.visibility ?? "work",
           aliases: workspaceAliases,
           requesterId: auth.userId,
+          preferredProfile: workspaceResolution.profile,
         });
         const missing: PendingChatMissingField[] = [];
         const vagueDate = underspecifiedRelativeDatePhrase(correctedTaskMessage);

@@ -117,7 +117,20 @@ test("Needs Review, agenda, and Position Profiles expose the MVP continuity cont
   await clickNav(page, "tasks");
   await expect(page.getByTestId("panel-tasks")).toBeVisible();
   await clickAfterCentering(page.getByTestId("button-task-view-review"));
-  await expect(page.getByTestId("task-group-head-review").or(page.getByText("Nothing needs review."))).toBeVisible();
+  const reviewHead = page.getByTestId("task-group-head-review");
+  await expect(reviewHead.or(page.getByText("Nothing needs review."))).toBeVisible();
+  if (await reviewHead.isVisible().catch(() => false)) {
+    const reviewCountText = (await reviewHead.locator(".task-group-count").innerText()).trim();
+    const reviewCount = Number.parseInt(reviewCountText, 10);
+    if (reviewCount > 0) {
+      await expect(reviewHead.locator(".task-group-count")).toHaveClass(/is-alert/);
+    }
+    if (reviewCount > 1) {
+      await expect(page.getByTestId("needs-review-carousel-controls")).toBeVisible();
+      await clickAfterCentering(page.getByTestId("button-needs-review-next"));
+      await clickAfterCentering(page.getByTestId("button-needs-review-previous"));
+    }
+  }
 
   await clickNav(page, "agenda");
   await expect(page.getByTestId("panel-agenda")).toBeVisible();
