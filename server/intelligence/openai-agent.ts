@@ -92,6 +92,18 @@ function tokenCounts(usage: ResponseUsage | undefined) {
   };
 }
 
+// Safe fallback when the configured DONNIT_AI_MODEL is unknown to the OpenAI
+// project. gpt-4o-mini is in MODEL_PRICES_PER_1M so cost tracking stays
+// accurate, and is generally available across OpenAI projects.
+export const DONNIT_FALLBACK_AI_MODEL = "gpt-4o-mini";
+
+export class OpenAiModelNotFoundError extends Error {
+  constructor(public readonly model: string, public readonly body: string) {
+    super(`OpenAI model not found: ${model}`);
+    this.name = "OpenAiModelNotFoundError";
+  }
+}
+
 export async function createOpenAiResponse(payload: ResponsesPayload, signal: AbortSignal) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
@@ -107,6 +119,9 @@ export async function createOpenAiResponse(payload: ResponsesPayload, signal: Ab
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     console.error("[donnit] OpenAI response failed", response.status, body.slice(0, 500));
+    if (response.status === 404 && body.toLowerCase().includes("model")) {
+      throw new OpenAiModelNotFoundError(String(payload.model ?? ""), body);
+    }
     throw new Error(openAiOperatorMessage(response.status, body));
   }
   return (await response.json()) as OpenAiResponse;
@@ -137,11 +152,17 @@ export async function runOpenAiToolLoop<T>(input: {
   const tools = input.registry.toOpenAiTools(input.toolNames);
   let lastResponse: OpenAiResponse | null = null;
   let totalToolSteps = 0;
+  // If the configured model is missing on the OpenAI project, fall back once
+  // to a known-good model so chat/email/Slack parsing degrades gracefully
+  // instead of failing every request.
+  let activeModel = input.model;
+  let usedModelFallback = false;
+  const fallbackModel = process.env.DONNIT_FALLBACK_AI_MODEL || DONNIT_FALLBACK_AI_MODEL;
 
   try {
     while (true) {
       const payload: ResponsesPayload = {
-        model: input.model,
+        model: activeModel,
         input: requestInput,
         tools,
         tool_choice: "auto",
@@ -160,18 +181,18 @@ export async function runOpenAiToolLoop<T>(input: {
         const counts = tokenCounts(lastResponse.usage);
         await input.observability.logModelCall({
           skillId: input.skillId,
-          model: input.model,
+          model: activeModel,
           requestPayload: payload,
           responsePayload: lastResponse,
           latencyMs: Date.now() - started,
           ...counts,
-          estimatedCostUsd: estimateOpenAiCost(input.model, lastResponse.usage),
+          estimatedCostUsd: estimateOpenAiCost(activeModel, lastResponse.usage),
           status: "success",
         });
       } catch (error) {
         await input.observability.logModelCall({
           skillId: input.skillId,
-          model: input.model,
+          model: activeModel,
           requestPayload: payload,
           responsePayload: {},
           latencyMs: Date.now() - started,
@@ -183,6 +204,12 @@ export async function runOpenAiToolLoop<T>(input: {
           status: "failed",
           errorMessage: error instanceof Error ? error.message : String(error),
         });
+        if (error instanceof OpenAiModelNotFoundError && !usedModelFallback && fallbackModel && fallbackModel !== activeModel) {
+          console.warn(`[donnit] OpenAI model "${activeModel}" not found, retrying with fallback "${fallbackModel}"`);
+          activeModel = fallbackModel;
+          usedModelFallback = true;
+          continue;
+        }
         throw error;
       }
 
