@@ -118,6 +118,125 @@ describe("chat task parser", () => {
     });
   });
 
+  it("builds live workspace context for AI task interpretation", () => {
+    vi.setSystemTime(new Date("2026-05-15T10:00:00-04:00"));
+    const context = __chatParserTest.buildChatAiWorkspaceContext({
+      orgId: "org-1",
+      requesterId: "user-aaron",
+      members: [
+        { user_id: "user-aaron", role: "admin", profile: { full_name: "Aaron Hassett", email: "aaron@example.com" } },
+        { user_id: "user-jordan", role: "member", profile: { full_name: "Jordan Lee", email: "jordan@example.com" } },
+      ] as never,
+      profiles: [
+        {
+          id: "profile-ea",
+          title: "Executive Assistant",
+          current_owner_id: "user-jordan",
+          temporary_owner_id: null,
+          delegate_user_id: null,
+          status: "active",
+        },
+      ] as never,
+      tasks: [
+        {
+          id: "task-1",
+          title: "Draft lease proposal",
+          status: "open",
+          assigned_to: "user-jordan",
+          due_date: "2026-05-20",
+          position_profile_id: "profile-ea",
+          created_at: "2026-05-15T13:00:00.000Z",
+        },
+      ] as never,
+      messages: [
+        { role: "user", content: "have the assistant draft the proposal", created_at: "2026-05-15T13:00:00.000Z" },
+      ] as never,
+      taskProfiles: [
+        {
+          id: "memory-1",
+          position_profile_id: "profile-ea",
+          title: "Lease proposal workflow",
+          objective: "Draft and route lease proposal",
+          cadence: "none",
+          status: "active",
+          steps: [{ title: "Collect lease details" }, { title: "Draft proposal" }],
+        },
+      ] as never,
+    });
+
+    expect(context.currentUser.name).toBe("Aaron Hassett");
+    expect(context.positionProfiles[0]).toMatchObject({
+      title: "Executive Assistant",
+      ownerId: "user-jordan",
+      ownerName: "Jordan Lee",
+    });
+    expect(context.positionProfiles[0].tags).toContain("assistant");
+    expect(context.recentMessages[0].content).toContain("assistant");
+    expect(context.taskProfiles[0].stepTitles).toEqual(["Collect lease details", "Draft proposal"]);
+  });
+
+  it("validation layer asks instead of trusting uncertain AI output", () => {
+    const message = "assign this to Jordan nect month";
+    const members = [
+      { user_id: "user-aaron", role: "admin", profile: { full_name: "Aaron Hassett", email: "aaron@example.com" } },
+      { user_id: "user-jordan", role: "member", profile: { full_name: "Jordan Lee", email: "jordan@example.com" } },
+    ] as never;
+    const workspaceResolution = __chatParserTest.resolveChatAssigneeFromWorkspace({
+      message: "assign this to Jordan next month",
+      members,
+      profiles: [],
+      aliases: [],
+      requesterId: "user-aaron",
+    });
+    const profileResolution = __chatParserTest.resolveChatPositionProfile({
+      profiles: [],
+      assignedToId: "user-jordan",
+      message,
+      visibility: "work",
+    });
+    const validation = __chatParserTest.validateChatTaskDraft({
+      ai: {
+        shouldCreateTask: false,
+        correctedText: "assign this to Jordan next month",
+        taskType: "assignment",
+        title: "this",
+        description: "",
+        urgency: "normal",
+        dueDate: null,
+        dueTime: null,
+        startTime: null,
+        endTime: null,
+        isAllDay: false,
+        estimatedMinutes: 30,
+        assigneeHint: "Jordan",
+        visibility: "work",
+        recurrence: "none",
+        reminderDaysBefore: 0,
+        replyNeeded: false,
+        replyIntent: null,
+        confidence: "low",
+        uncertainTerms: ["next month"],
+        missingFields: ["work_item", "due_date"],
+        clarificationQuestion: "What should Jordan do, and what exact due date in next month should I use?",
+        rationale: "The assignee is clear but the work item and date are incomplete.",
+        sourceExcerpt: message,
+      },
+      taskInput: {
+        title: "This",
+        dueDate: null,
+        visibility: "work",
+      },
+      correctedTaskMessage: "assign this to Jordan next month",
+      explicitAssignment: true,
+      workspaceResolution,
+      mentionedProfiles: [],
+      profileResolution,
+    });
+
+    expect(validation.missing).toEqual(expect.arrayContaining(["title", "dueDatePrecision", "aiClarification"]));
+    expect(validation.aiClarificationQuestion).toContain("Jordan");
+  });
+
   it("treats a follow-up due in a month as a precise clarification", () => {
     vi.setSystemTime(new Date("2026-05-15T10:00:00-04:00"));
 

@@ -4900,6 +4900,76 @@ function missingChatQuestion(
   return `${intro} How urgent is this task?`;
 }
 
+function normalizeAiMissingField(value: string): PendingChatMissingField | null {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (/assignee|owner|person|member|teammate|delegatee/.test(normalized)) return "assignee";
+  if (/due|deadline|date|timeframe|range/.test(normalized)) return "dueDate";
+  if (/profile|role|position/.test(normalized)) return "positionProfile";
+  if (/title|task|work_item|deliverable|object/.test(normalized)) return "title";
+  if (/time|meridiem|am|pm/.test(normalized)) return "timeMeridiem";
+  return null;
+}
+
+function validateChatTaskDraft(input: {
+  ai: AiTaskExtraction | null;
+  taskInput: {
+    title: string;
+    dueDate: string | null;
+    visibility: "work" | "personal" | "confidential";
+  };
+  correctedTaskMessage: string;
+  explicitAssignment: boolean;
+  workspaceResolution: ReturnType<typeof resolveChatAssigneeFromWorkspace>;
+  mentionedProfiles: DonnitPositionProfile[];
+  profileResolution: ReturnType<typeof resolveChatPositionProfile>;
+}) {
+  const missing = new Set<PendingChatMissingField>();
+  const vagueDate = underspecifiedRelativeDatePhrase(input.correctedTaskMessage);
+  const aiClarificationQuestion = input.ai?.clarificationQuestion?.trim() || null;
+
+  if (languageClarificationFromMessage(input.correctedTaskMessage)) missing.add("language");
+  if (input.explicitAssignment && isGenericAssignmentTitle(input.taskInput.title)) missing.add("title");
+  if (input.explicitAssignment && needsTaskScopeClarification(input.taskInput.title, input.correctedTaskMessage)) missing.add("title");
+  if (input.explicitAssignment && needsSpecificActionClarification(input.taskInput.title, input.correctedTaskMessage)) {
+    missing.add("aiClarification");
+  }
+  if (input.explicitAssignment && input.workspaceResolution.missingAssignee) missing.add("assignee");
+  if (
+    input.mentionedProfiles.length > 1 ||
+    input.workspaceResolution.ambiguousProfiles.length > 1 ||
+    input.profileResolution.needsChoice
+  ) {
+    missing.add("positionProfile");
+  }
+  if (vagueDate) missing.add("dueDatePrecision");
+  if (!input.taskInput.dueDate && !vagueDate) missing.add("dueDate");
+  if (ambiguousCompactClockTime(input.correctedTaskMessage)) missing.add("timeMeridiem");
+
+  if (input.ai) {
+    for (const field of input.ai.missingFields) {
+      const mapped = normalizeAiMissingField(field);
+      if (mapped) missing.add(mapped);
+    }
+    const uncertainButActionable =
+      input.ai.uncertainTerms.length > 0 &&
+      input.ai.confidence !== "high" &&
+      input.ai.uncertainTerms.some((term) => term.length >= 3);
+    if (input.ai.shouldCreateTask === false || input.ai.confidence === "low" || aiClarificationQuestion || uncertainButActionable) {
+      missing.add("aiClarification");
+    }
+  }
+
+  return {
+    missing: Array.from(missing),
+    vagueDate,
+    aiClarificationQuestion:
+      aiClarificationQuestion ??
+      (input.ai?.uncertainTerms.length && input.ai.confidence !== "high"
+        ? `Should I treat "${input.ai.uncertainTerms.slice(0, 2).join(", ")}" as written, or should it be corrected?`
+        : null),
+  };
+}
+
 function lowercaseFirst(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return trimmed;
@@ -5833,6 +5903,56 @@ type AiTaskExtraction = {
   sourceExcerpt: string;
 };
 
+type ChatAiWorkspaceContext = {
+  currentUser: {
+    id: string;
+    name: string;
+    email: string | null;
+    role: string | null;
+  };
+  workspace: {
+    id: string;
+    today: string;
+    timezone: string;
+  };
+  members: Array<{
+    id: string;
+    name: string;
+    email: string | null;
+    role: string | null;
+  }>;
+  positionProfiles: Array<{
+    id: string;
+    title: string;
+    ownerId: string | null;
+    ownerName: string | null;
+    status: string;
+    tags: string[];
+  }>;
+  recentTasks: Array<{
+    id: string;
+    title: string;
+    assigneeId: string | null;
+    assigneeName: string | null;
+    status: string;
+    dueDate: string | null;
+    positionProfileId: string | null;
+  }>;
+  recentMessages: Array<{
+    role: string;
+    content: string;
+    createdAt: string;
+  }>;
+  taskProfiles: Array<{
+    id: string;
+    positionProfileId: string;
+    title: string;
+    objective: string;
+    cadence: string;
+    stepTitles: string[];
+  }>;
+};
+
 const aiTaskExtractionSchema = z.object({
   shouldCreateTask: z.boolean(),
   correctedText: z.string().trim().min(2).max(1200),
@@ -5871,6 +5991,128 @@ const aiTaskExtractionSchema = z.object({
   rationale: z.string().trim().max(400),
   sourceExcerpt: z.string().trim().max(300),
 });
+
+const donnitChatToolCatalog = [
+  {
+    name: "create_task",
+    description: "Create a task in the current workspace after assignee, title, and date confidence are validated by Donnit.",
+    required: ["title"],
+    parameters: ["title", "description", "assignee_id", "due_date", "due_time", "priority", "position_profile_id", "recurrence", "visibility"],
+  },
+  {
+    name: "ask_clarification",
+    description: "Ask one short question when a person, profile, task, date, typo correction, or intended action is ambiguous.",
+    required: ["question"],
+    parameters: ["question", "missing_field", "candidate_ids"],
+  },
+  {
+    name: "search_users",
+    description: "Resolve people only from workspace members. If a name maps to multiple members, ask instead of choosing.",
+    required: ["query"],
+    parameters: ["query"],
+  },
+  {
+    name: "search_position_profiles",
+    description: "Resolve role references using active assigned Position Profile titles, owners, aliases, and generated title tags.",
+    required: ["query"],
+    parameters: ["query"],
+  },
+  {
+    name: "search_task_profiles",
+    description: "Find reusable Task Profiles for outcome-to-sequence work inside the matched Position Profile.",
+    required: ["query", "position_profile_id"],
+    parameters: ["query", "position_profile_id"],
+  },
+  {
+    name: "update_task",
+    description: "Update an existing task only after Donnit has resolved the task ID from workspace-scoped recent tasks or search results.",
+    required: ["task_id"],
+    parameters: ["task_id", "title", "description", "due_date", "status", "assignee_id"],
+  },
+];
+
+function buildChatAiWorkspaceContext(input: {
+  orgId: string;
+  requesterId: string;
+  members: Awaited<ReturnType<DonnitStore["listOrgMembers"]>>;
+  profiles: DonnitPositionProfile[];
+  tasks?: DonnitTask[];
+  messages?: DonnitChatMessage[];
+  taskProfiles?: DonnitPositionProfileTaskMemory[];
+}): ChatAiWorkspaceContext {
+  const currentMember =
+    input.members.find((member) => String(member.user_id) === String(input.requesterId)) ??
+    input.members[0] ??
+    null;
+  const memberNameById = new Map(
+    input.members.map((member) => [String(member.user_id), memberDisplayName(member)]),
+  );
+  return {
+    currentUser: {
+      id: String(input.requesterId),
+      name: currentMember ? memberDisplayName(currentMember) : "Current user",
+      email: currentMember?.profile?.email ?? null,
+      role: currentMember?.role ?? null,
+    },
+    workspace: {
+      id: input.orgId,
+      today: todayIso(),
+      timezone: DEFAULT_CALENDAR_TIME_ZONE,
+    },
+    members: input.members.slice(0, 80).map((member) => ({
+      id: String(member.user_id),
+      name: memberDisplayName(member),
+      email: member.profile?.email ?? null,
+      role: member.role ?? null,
+    })),
+    positionProfiles: input.profiles
+      .filter(isRoutablePositionProfile)
+      .slice(0, 80)
+      .map((profile) => {
+        const ownerId = ownerIdForPositionProfile(profile);
+        return {
+          id: profile.id,
+          title: profile.title,
+          ownerId,
+          ownerName: ownerId ? memberNameById.get(String(ownerId)) ?? null : null,
+          status: profile.status ?? "active",
+          tags: roleAliasesForProfile(profile).slice(0, 16),
+        };
+      }),
+    recentTasks: (input.tasks ?? [])
+      .filter((task) => task.status !== "completed" && task.status !== "denied")
+      .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+      .slice(0, 25)
+      .map((task) => ({
+        id: String(task.id),
+        title: task.title,
+        assigneeId: task.assigned_to ? String(task.assigned_to) : null,
+        assigneeName: task.assigned_to ? memberNameById.get(String(task.assigned_to)) ?? null : null,
+        status: task.status,
+        dueDate: task.due_date ?? null,
+        positionProfileId: task.position_profile_id ?? null,
+      })),
+    recentMessages: (input.messages ?? [])
+      .filter((message) => message.role !== "system")
+      .slice(-100)
+      .map((message) => ({
+        role: message.role,
+        content: compactTaskText(message.content, 500),
+        createdAt: message.created_at,
+      })),
+    taskProfiles: (input.taskProfiles ?? [])
+      .filter((memory) => memory.status === "active")
+      .slice(0, 40)
+      .map((memory) => ({
+        id: memory.id,
+        positionProfileId: memory.position_profile_id,
+        title: memory.title,
+        objective: memory.objective,
+        cadence: memory.cadence,
+        stepTitles: (memory.steps ?? []).slice(0, 8).map((step) => step.title),
+      })),
+  };
+}
 
 const suggestionPatchSchema = z.object({
   suggestedTitle: z.string().trim().min(2).max(160).optional(),
@@ -5964,6 +6206,7 @@ async function extractTaskWithAi(input: {
   source: SuggestionSource | "chat";
   text: string;
   memberLabels?: string[];
+  workspaceContext?: ChatAiWorkspaceContext | null;
   from?: string;
   subject?: string;
   channel?: string;
@@ -6004,6 +6247,16 @@ async function extractTaskWithAi(input: {
     SLA: "service level agreement",
     RFP: "request for proposal",
   };
+  const chatSystemPrompt = [
+    donnitTaskExtractionPolicy.join(" "),
+    "You are inside Donnit, a multi-user task-led workforce continuity tool.",
+    "Use the supplied liveWorkspaceContext as the only source of truth for workspace members, Position Profiles, recent conversation, recent tasks, and Task Profiles.",
+    "Treat toolCatalog as the actions Donnit can perform. You are producing a structured draft for those tools; the backend will validate and execute.",
+    "All references are tenant-scoped to liveWorkspaceContext.workspace.id. Never infer or mention data outside that context.",
+    "Resolve people by workspace member names, emails, aliases, and role/profile context. If one name or role maps to multiple possible members or profiles, lower confidence and ask one clarifying question.",
+    "Correct obvious spelling and grammar before intent detection. One-edit typos like assistnt/assistant, poposal/proposal, reveiw/review, nect/next, projekt/project should be corrected when context supports the correction.",
+    "Do not guess past ambiguity. If a date phrase like next month is not precise enough, return a clarification question instead of inventing a specific day.",
+  ].join(" ");
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -6017,7 +6270,7 @@ async function extractTaskWithAi(input: {
         input: [
           {
             role: "system",
-            content: donnitTaskExtractionPolicy.join(" "),
+            content: chatSystemPrompt,
           },
           {
             role: "user",
@@ -6035,6 +6288,8 @@ async function extractTaskWithAi(input: {
               donnitStarterMemory: starterMemoryPromptBlock(),
               workplaceAbbreviations,
               interpretationLexicon: donnitLanguageLexicon,
+              toolCatalog: input.source === "chat" ? donnitChatToolCatalog : undefined,
+              liveWorkspaceContext: input.workspaceContext ?? null,
             }),
           },
         ],
@@ -6131,8 +6386,17 @@ async function extractTaskWithAi(input: {
   }
 }
 
-async function extractChatTaskWithAi(message: string, memberLabels: string[]): Promise<AiTaskExtraction | null> {
-  return extractTaskWithAi({ source: "chat", text: message, memberLabels });
+async function extractChatTaskWithAi(input: {
+  message: string;
+  memberLabels: string[];
+  workspaceContext?: ChatAiWorkspaceContext | null;
+}): Promise<AiTaskExtraction | null> {
+  return extractTaskWithAi({
+    source: "chat",
+    text: input.message,
+    memberLabels: input.memberLabels,
+    workspaceContext: input.workspaceContext ?? null,
+  });
 }
 
 function matchAiAssignee<T extends { name?: string; email?: string; id?: string | number }>(
@@ -7127,6 +7391,7 @@ export const __chatParserTest = {
   parseTaskRecurrence,
   repeatDetailsFromDescription,
   recoverPendingChatTaskFromRecentMessages,
+  resolveChatAssigneeFromWorkspace,
   resolveChatPositionProfile,
   rewriteRequesterReferencesInTitle,
   shouldLearnAliasPhrase,
@@ -7140,6 +7405,8 @@ export const __chatParserTest = {
   underspecifiedRelativeDatePhrase,
   languageClarificationFromMessage,
   normalizeCommonTaskTypos,
+  buildChatAiWorkspaceContext,
+  validateChatTaskDraft,
   needsSpecificActionClarification,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
@@ -8460,18 +8727,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           res.json({ assistant, pending: false });
           return;
         }
-        const ai = await extractChatTaskWithAi(
-          taskMessage,
-          members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
+        const [positionProfilesForRouting, workspaceAliases, recentTasks, recentMessages] = await Promise.all([
+          store.listPositionProfiles(orgId),
+          store.listWorkspaceMemoryAliases(orgId),
+          store.listTasks(orgId),
+          store.listChatMessages(orgId),
+        ]);
+        const taskProfileGroups = await Promise.all(
+          positionProfilesForRouting
+            .filter(isRoutablePositionProfile)
+            .slice(0, 12)
+            .map((profile) => store.listPositionProfileTaskMemories(orgId, profile.id).catch(() => [])),
         );
+        const liveWorkspaceContext = buildChatAiWorkspaceContext({
+          orgId,
+          requesterId: auth.userId,
+          members,
+          profiles: positionProfilesForRouting,
+          tasks: recentTasks,
+          messages: recentMessages,
+          taskProfiles: taskProfileGroups.flat(),
+        });
+        const ai = await extractChatTaskWithAi({
+          message: taskMessage,
+          memberLabels: members.map((m) => `${m.profile?.full_name ?? ""} ${m.profile?.email ?? ""}`.trim()).filter(Boolean),
+          workspaceContext: liveWorkspaceContext,
+        });
         const correctedTaskMessage = ai?.correctedText?.trim() || normalizeCommonTaskTypos(taskMessage);
         const interpretationMessage = correctedTaskMessage && correctedTaskMessage !== taskMessage
           ? `${taskMessage}\n${correctedTaskMessage}`
           : correctedTaskMessage || taskMessage;
         const fallbackInput = parseChatTaskAuthenticated(correctedTaskMessage, members, auth.userId);
         const explicitAssignment = hasExplicitAssignmentIntent(interpretationMessage);
-        const positionProfilesForRouting = await store.listPositionProfiles(orgId);
-        const workspaceAliases = await store.listWorkspaceMemoryAliases(orgId);
         const workspaceResolution = resolveChatAssigneeFromWorkspace({
           message: interpretationMessage,
           members,
@@ -8579,20 +8866,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           requesterId: auth.userId,
           preferredProfile: workspaceResolution.profile,
         });
-        const missing: PendingChatMissingField[] = [];
-        const vagueDate = underspecifiedRelativeDatePhrase(correctedTaskMessage);
-        const aiClarificationQuestion = ai?.clarificationQuestion?.trim() || null;
-        if (languageClarificationFromMessage(correctedTaskMessage)) missing.push("language");
-        const aiNeedsTaskClarification = Boolean(ai && (ai.shouldCreateTask === false || ai.confidence === "low"));
-        if ((explicitAssignment && isGenericAssignmentTitle(taskInput.title)) || aiNeedsTaskClarification) missing.push("title");
-        if (explicitAssignment && needsTaskScopeClarification(taskInput.title, correctedTaskMessage)) missing.push("title");
-        if (explicitAssignment && (needsSpecificActionClarification(taskInput.title, correctedTaskMessage) || aiClarificationQuestion)) missing.push("aiClarification");
-        if (explicitAssignment && workspaceResolution.missingAssignee) missing.push("assignee");
-        if (mentionedProfiles.length > 1 || workspaceResolution.ambiguousProfiles.length > 1) missing.push("positionProfile");
-        if (vagueDate) missing.push("dueDatePrecision");
-        if (!taskInput.dueDate && !vagueDate) missing.push("dueDate");
-        if (ambiguousCompactClockTime(correctedTaskMessage)) missing.push("timeMeridiem");
-        if (profileResolution.needsChoice) missing.push("positionProfile");
+        const validation = validateChatTaskDraft({
+          ai,
+          taskInput,
+          correctedTaskMessage,
+          explicitAssignment,
+          workspaceResolution,
+          mentionedProfiles,
+          profileResolution,
+        });
+        const missing = validation.missing;
         if (missing.length > 0) {
           const pendingTask = buildPendingFromTaskInput(
             {
@@ -8602,7 +8885,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               positionProfileId: profileResolution.positionProfileId,
               assistantInstruction: automationInstruction,
               clarificationHint: correctedTaskMessage,
-              aiClarificationQuestion: aiClarificationQuestion ?? specificActionClarificationQuestion(taskInput.title),
+              aiClarificationQuestion: validation.aiClarificationQuestion ?? specificActionClarificationQuestion(taskInput.title),
             },
             missing,
           );
@@ -8703,10 +8986,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const users = await storage.listUsers();
-    const ai = await extractChatTaskWithAi(
-      parsed.data.message,
-      users.map((user) => `${user.name} ${user.email}`),
-    );
+    const ai = await extractChatTaskWithAi({
+      message: parsed.data.message,
+      memberLabels: users.map((user) => `${user.name} ${user.email}`),
+    });
     const correctedTaskMessage = ai?.correctedText?.trim() || normalizeCommonTaskTypos(parsed.data.message);
     const interpretationMessage = correctedTaskMessage && correctedTaskMessage !== parsed.data.message
       ? `${parsed.data.message}\n${correctedTaskMessage}`
