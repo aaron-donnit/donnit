@@ -283,8 +283,14 @@ export function buildPositionProfiles(
     const record = persistedProfiles.find((item) => String(item.currentOwnerId) === String(profile.owner.id));
     if (!record) return profile;
     usedRecordIds.add(record.id);
+    // Role profiles never surface personal or confidential work. Confidential
+    // tasks are intentionally excluded so they do not flow into role-handover
+    // continuity context — they must be migrated through an explicit channel.
     const profileTasks = tasks.filter(
-      (task) => task.visibility !== "personal" && String(task.positionProfileId ?? "") === record.id,
+      (task) =>
+        task.visibility !== "personal" &&
+        task.visibility !== "confidential" &&
+        String(task.positionProfileId ?? "") === record.id,
     );
     return mergeProfileRecord(
       {
@@ -301,7 +307,10 @@ export function buildPositionProfiles(
     const profile = buildEmptyPositionProfile(record, users);
     if (profile) {
       const linkedTasks = tasks.filter(
-        (task) => task.visibility !== "personal" && String(task.positionProfileId ?? "") === String(record.id),
+        (task) =>
+          task.visibility !== "personal" &&
+          task.visibility !== "confidential" &&
+          String(task.positionProfileId ?? "") === String(record.id),
       );
       merged.push(profileWithLinkedTasks(profile, record, linkedTasks, users, events, today));
     }
