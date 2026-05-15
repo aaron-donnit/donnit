@@ -7247,7 +7247,7 @@ async function logChatResolutionEvent(input: {
   latencyMs?: number;
 }) {
   try {
-    await input.store.createTaskResolutionEvent(input.orgId, {
+    const resolutionEvent = await input.store.createTaskResolutionEvent(input.orgId, {
       source: "chat",
       original_text: input.originalText,
       parsed_slots: chatResolutionParsedSlots(input.originalText),
@@ -7275,6 +7275,42 @@ async function logChatResolutionEvent(input: {
       latency_ms: input.latencyMs ?? 0,
       model: process.env.DONNIT_AI_MODEL ?? null,
       cost_usd: 0,
+    });
+    const profileId = input.positionProfileId ?? input.workspaceResolution.profile?.id ?? null;
+    await input.store.createLearningEvent(input.orgId, {
+      source: "chat",
+      event_type: input.decision === "created" ? "chat_task_created" : "chat_clarification_requested",
+      scope_type: profileId ? "position_profile" : input.createdTaskId ? "task" : "workspace",
+      scope_id: profileId ?? input.createdTaskId ?? null,
+      position_profile_id: profileId,
+      task_id: input.createdTaskId ?? null,
+      source_ref_type: "task_resolution_event",
+      source_ref_id: resolutionEvent?.id ?? null,
+      raw_text: input.originalText,
+      normalized_text: normalizeCommonTaskTypos(input.originalText),
+      interpretation: {
+        parsedSlots: chatResolutionParsedSlots(input.originalText),
+        resolutionOutput: {
+          title: input.taskInput?.title ?? null,
+          assignedToId: input.taskInput?.assignedToId ?? input.workspaceResolution.assignedToId,
+          positionProfileId: profileId,
+          dueDate: input.taskInput?.dueDate ?? null,
+          urgency: input.taskInput?.urgency ?? null,
+          recurrence: input.taskInput?.recurrence ?? null,
+          visibility: input.taskInput?.visibility ?? null,
+          missing: input.missing,
+          decision: input.decision,
+        },
+      },
+      signal: {
+        decision: input.decision,
+        missing: input.missing,
+        matchedPhrase: input.workspaceResolution.matchedPhrase,
+        resolvedAssigneeId: input.taskInput?.assignedToId ?? input.workspaceResolution.assignedToId,
+        resolvedPositionProfileId: profileId,
+      },
+      confidence_score: input.workspaceResolution.confidence,
+      signal_strength: input.decision === "created" ? 0.3 : 0.5,
     });
   } catch (error) {
     console.error("[donnit] chat resolution event log failed", error instanceof Error ? error.message : String(error));
@@ -7335,6 +7371,159 @@ async function learnAliasesFromChatResolution(input: {
     }
   } catch (error) {
     console.error("[donnit] workspace alias learning failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function summarizeTaskForLearning(task: DonnitTask) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    urgency: task.urgency,
+    dueDate: task.due_date,
+    dueTime: task.due_time ?? task.start_time ?? null,
+    assignedTo: task.assigned_to,
+    assignedBy: task.assigned_by,
+    positionProfileId: task.position_profile_id,
+    recurrence: task.recurrence,
+    reminderDaysBefore: task.reminder_days_before,
+    estimatedMinutes: task.estimated_minutes,
+    visibility: task.visibility,
+    source: task.source,
+  };
+}
+
+function taskLearningChangedFields(before: DonnitTask, after: DonnitTask) {
+  const pairs: Array<[string, unknown, unknown]> = [
+    ["title", before.title, after.title],
+    ["description", before.description, after.description],
+    ["status", before.status, after.status],
+    ["urgency", before.urgency, after.urgency],
+    ["due_date", before.due_date, after.due_date],
+    ["due_time", before.due_time, after.due_time],
+    ["start_time", before.start_time, after.start_time],
+    ["end_time", before.end_time, after.end_time],
+    ["estimated_minutes", before.estimated_minutes, after.estimated_minutes],
+    ["assigned_to", before.assigned_to, after.assigned_to],
+    ["delegated_to", before.delegated_to, after.delegated_to],
+    ["recurrence", before.recurrence, after.recurrence],
+    ["reminder_days_before", before.reminder_days_before, after.reminder_days_before],
+    ["position_profile_id", before.position_profile_id, after.position_profile_id],
+    ["visibility", before.visibility, after.visibility],
+    ["completion_notes", before.completion_notes, after.completion_notes],
+  ];
+  return pairs.filter(([, oldValue, newValue]) => JSON.stringify(oldValue ?? null) !== JSON.stringify(newValue ?? null)).map(([field]) => field);
+}
+
+function taskLearningSignalFromChange(input: {
+  before: DonnitTask;
+  after: DonnitTask;
+  eventType: string;
+  note?: string;
+}) {
+  const changedFields = taskLearningChangedFields(input.before, input.after);
+  const completed = input.after.status === "completed" && input.before.status !== "completed";
+  const dueDateChanged = input.before.due_date !== input.after.due_date;
+  const recurrenceChanged =
+    input.before.recurrence !== input.after.recurrence ||
+    input.before.reminder_days_before !== input.after.reminder_days_before;
+  const relationshipChanged =
+    input.before.assigned_to !== input.after.assigned_to ||
+    input.before.delegated_to !== input.after.delegated_to ||
+    input.before.position_profile_id !== input.after.position_profile_id;
+  const signalStrength = completed
+    ? 0.4
+    : dueDateChanged || recurrenceChanged
+      ? 0.7
+      : relationshipChanged
+        ? 0.7
+        : input.eventType === "note_added"
+          ? 0.55
+          : 0.45;
+  return {
+    eventType: `task_${input.eventType}`,
+    changedFields,
+    signalStrength,
+    confidenceScore: completed ? 0.82 : dueDateChanged || recurrenceChanged ? 0.76 : relationshipChanged ? 0.74 : 0.64,
+    signal: {
+      type: input.eventType,
+      changedFields,
+      note: input.note ?? "",
+      completed,
+      dueDateChanged,
+      recurrenceChanged,
+      relationshipChanged,
+      oldDueDate: input.before.due_date,
+      newDueDate: input.after.due_date,
+      oldRecurrence: input.before.recurrence,
+      newRecurrence: input.after.recurrence,
+      oldReminderDaysBefore: input.before.reminder_days_before,
+      newReminderDaysBefore: input.after.reminder_days_before,
+    },
+  };
+}
+
+async function recordTaskLearningEvent(input: {
+  store: DonnitStore;
+  orgId: string;
+  actorId: string;
+  before: DonnitTask;
+  after: DonnitTask;
+  eventType: string;
+  note?: string;
+}) {
+  if (input.after.visibility === "personal") return;
+  try {
+    const derived = taskLearningSignalFromChange(input);
+    const event = await input.store.createLearningEvent(input.orgId, {
+      actor_id: input.actorId,
+      source: input.after.source === "automation" ? "automation" : "manual",
+      event_type: derived.eventType,
+      scope_type: input.after.position_profile_id ? "position_profile" : "task",
+      scope_id: input.after.position_profile_id ?? input.after.id,
+      position_profile_id: input.after.position_profile_id,
+      task_id: input.after.id,
+      source_ref_type: "task",
+      source_ref_id: input.after.id,
+      raw_text: input.note ?? input.after.completion_notes ?? input.after.description ?? "",
+      normalized_text: normalizeCommonTaskTypos(input.note ?? input.after.completion_notes ?? input.after.description ?? ""),
+      interpretation: {
+        before: summarizeTaskForLearning(input.before),
+        after: summarizeTaskForLearning(input.after),
+      },
+      signal: derived.signal,
+      confidence_score: derived.confidenceScore,
+      signal_strength: derived.signalStrength,
+    });
+    if (event && input.after.position_profile_id && (derived.signal.dueDateChanged || derived.signal.recurrenceChanged || derived.signal.relationshipChanged)) {
+      const candidateType = derived.signal.recurrenceChanged
+        ? "recurrence_rule"
+        : derived.signal.dueDateChanged
+          ? "due_rule"
+          : "owner_rule";
+      await input.store.createLearningCandidate(input.orgId, {
+        scope_type: "position_profile",
+        scope_id: input.after.position_profile_id,
+        candidate_type: candidateType,
+        proposed_policy: {
+          taskId: input.after.id,
+          taskTitle: input.after.title,
+          dueDate: input.after.due_date,
+          recurrence: input.after.recurrence,
+          reminderDaysBefore: input.after.reminder_days_before,
+          assignedTo: input.after.assigned_to,
+          changedFields: derived.changedFields,
+        },
+        evidence_event_ids: [event.id],
+        signal_count: 1,
+        confidence_score: derived.confidenceScore,
+        status: "pending_review",
+        rationale: "User changed a task field that may represent a durable Position Profile operating rule.",
+        created_by: input.actorId,
+      });
+    }
+  } catch (error) {
+    console.error("[donnit] task learning event log failed", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -7407,6 +7596,9 @@ export const __chatParserTest = {
   normalizeCommonTaskTypos,
   buildChatAiWorkspaceContext,
   validateChatTaskDraft,
+  summarizeTaskForLearning,
+  taskLearningChangedFields,
+  taskLearningSignalFromChange,
   needsSpecificActionClarification,
   workspaceAliasNormalizedForm,
   chatTaskOutcome,
@@ -9385,6 +9577,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           templateId: data.templateId ?? null,
           description: data.description ?? "",
         });
+        await store.createLearningEvent(orgId, {
+          actor_id: auth.userId,
+          source: data.source === "automation" ? "automation" : data.source === "email" ? "email" : data.source === "slack" ? "slack" : "manual",
+          event_type: "task_created",
+          scope_type: created.position_profile_id ? "position_profile" : "task",
+          scope_id: created.position_profile_id ?? created.id,
+          position_profile_id: created.position_profile_id,
+          task_id: created.id,
+          source_ref_type: "task",
+          source_ref_id: created.id,
+          raw_text: data.description ?? data.title,
+          normalized_text: normalizeCommonTaskTypos(data.description ?? data.title),
+          interpretation: { after: summarizeTaskForLearning(created) },
+          signal: {
+            type: "created",
+            title: created.title,
+            recurrence: created.recurrence,
+            dueDate: created.due_date,
+            assignedTo: created.assigned_to,
+            positionProfileId: created.position_profile_id,
+          },
+          confidence_score: 0.72,
+          signal_strength: 0.45,
+        });
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: data.description ?? "" });
         res.status(201).json(toClientTask(created));
         return;
@@ -9521,6 +9737,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           task_id: updated.id,
           actor_id: auth.userId,
           type: eventType,
+          note: eventNote,
+        });
+        await recordTaskLearningEvent({
+          store,
+          orgId: updated.org_id,
+          actorId: auth.userId,
+          before: existing,
+          after: updated,
+          eventType,
           note: eventNote,
         });
         await enrichPositionProfileMemoryFromTask({
@@ -9821,6 +10046,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           task_id: updated.id,
           actor_id: auth.userId,
           type: eventType,
+          note: eventNote,
+        });
+        await recordTaskLearningEvent({
+          store,
+          orgId: updated.org_id,
+          actorId: auth.userId,
+          before: existing,
+          after: updated,
+          eventType,
           note: eventNote,
         });
         const memoryEventType =
@@ -10196,6 +10430,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(409).json({ message: "Task Profile storage is not available. Apply the latest Supabase migration." });
         return;
       }
+      await store.createLearningEvent(orgId, {
+        actor_id: auth.userId,
+        source: "manual",
+        event_type: "task_profile_created",
+        scope_type: "position_profile",
+        scope_id: profile.id,
+        position_profile_id: profile.id,
+        task_id: input.sourceTaskId ?? null,
+        source_ref_type: "task_profile",
+        source_ref_id: memory.id,
+        raw_text: `${input.title}\n${input.objective}\n${input.guidelines ?? ""}\n${input.importantInformation ?? ""}`,
+        normalized_text: normalizeCommonTaskTypos(`${input.title} ${input.objective}`),
+        interpretation: {
+          taskProfile: {
+            id: memory.id,
+            title: memory.title,
+            objective: memory.objective,
+            cadence: memory.cadence,
+            dueRule: memory.due_rule,
+            steps: (memory.steps ?? []).map((step) => ({
+              title: step.title,
+              position: step.position,
+              toolName: step.tool_name,
+              relativeDueOffsetDays: step.relative_due_offset_days,
+            })),
+          },
+        },
+        signal: {
+          type: "task_profile_created",
+          stepCount: memory.steps?.length ?? 0,
+          cadence: memory.cadence,
+          confidenceScore: memory.confidence_score,
+          sourceTaskId: input.sourceTaskId ?? null,
+        },
+        confidence_score: memory.confidence_score,
+        signal_strength: 0.8,
+      });
       res.status(201).json(toClientPositionProfileTaskMemory(memory));
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });

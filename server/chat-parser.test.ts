@@ -681,4 +681,54 @@ describe("chat task parser", () => {
     expect(__chatParserTest.shouldLearnAliasPhrase("Jordan Lee", "Jordan Lee")).toBe(false);
     expect(__chatParserTest.shouldLearnAliasPhrase("it", "Board Packet")).toBe(false);
   });
+
+  it("builds task learning signals from meaningful task changes", () => {
+    const before = {
+      id: "task-1",
+      org_id: "org-1",
+      title: "Build board packet",
+      description: "Old description",
+      status: "open",
+      urgency: "normal",
+      due_date: "2026-05-15",
+      due_time: null,
+      start_time: null,
+      end_time: null,
+      is_all_day: false,
+      estimated_minutes: 30,
+      assigned_to: "user-1",
+      assigned_by: "user-2",
+      delegated_to: null,
+      collaborator_ids: [],
+      source: "manual",
+      recurrence: "none",
+      reminder_days_before: 0,
+      position_profile_id: "profile-1",
+      visibility: "work",
+      visible_from: null,
+      accepted_at: null,
+      denied_at: null,
+      completed_at: null,
+      completion_notes: "",
+      created_at: "2026-05-15T12:00:00.000Z",
+    } as never;
+    const after = {
+      ...before,
+      due_date: "2026-05-22",
+      recurrence: "weekly",
+      reminder_days_before: 3,
+    } as never;
+
+    const signal = __chatParserTest.taskLearningSignalFromChange({
+      before,
+      after,
+      eventType: "updated",
+      note: "Start the packet three days before it is due.",
+    });
+
+    expect(signal.eventType).toBe("task_updated");
+    expect(signal.changedFields).toEqual(["due_date", "recurrence", "reminder_days_before"]);
+    expect(signal.signal.recurrenceChanged).toBe(true);
+    expect(signal.signalStrength).toBeGreaterThanOrEqual(0.7);
+  });
 });

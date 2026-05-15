@@ -494,6 +494,60 @@ export type DonnitTaskResolutionEvent = {
   created_at: string;
 };
 
+export type DonnitLearningEvent = {
+  id: string;
+  org_id: string;
+  actor_id: string | null;
+  source: "chat" | "manual" | "email" | "slack" | "sms" | "document" | "automation" | "assistant" | "system";
+  event_type: string;
+  scope_type: "workspace" | "user" | "position_profile" | "task_profile" | "task" | "member";
+  scope_id: string | null;
+  position_profile_id: string | null;
+  task_id: string | null;
+  source_ref_type: string | null;
+  source_ref_id: string | null;
+  raw_text: string;
+  normalized_text: string;
+  interpretation: Record<string, unknown>;
+  signal: Record<string, unknown>;
+  confidence_score: number | null;
+  signal_strength: number | null;
+  created_at: string;
+};
+
+export type DonnitLearningCandidate = {
+  id: string;
+  org_id: string;
+  scope_type: "workspace" | "user" | "position_profile" | "task_profile" | "task" | "member";
+  scope_id: string | null;
+  candidate_type: "alias" | "task_profile_step" | "recurrence_rule" | "due_rule" | "owner_rule" | "position_memory" | "preference";
+  proposed_policy: Record<string, unknown>;
+  evidence_event_ids: string[];
+  signal_count: number;
+  confidence_score: number;
+  status: "pending_review" | "approved" | "rejected" | "promoted" | "archived";
+  rationale: string;
+  created_by: string | null;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
+  promoted_at: string | null;
+};
+
+export type DonnitPolicyVersion = {
+  id: string;
+  org_id: string;
+  scope_type: "workspace" | "user" | "position_profile" | "task_profile" | "task" | "member";
+  scope_id: string | null;
+  policy_type: string;
+  version: number;
+  policy: Record<string, unknown>;
+  source_candidate_id: string | null;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+};
+
 export class DonnitStore {
   constructor(private readonly client: SupabaseClient, public readonly userId: string) {}
 
@@ -1679,5 +1733,84 @@ export class DonnitStore {
       throw wrapSupabaseError("create task_resolution_event failed", error);
     }
     return data as DonnitTaskResolutionEvent;
+  }
+
+  async createLearningEvent(
+    orgId: string,
+    input: Omit<DonnitLearningEvent, "id" | "org_id" | "actor_id" | "created_at"> &
+      Partial<Pick<DonnitLearningEvent, "actor_id">>,
+  ): Promise<DonnitLearningEvent | null> {
+    const payload = {
+      org_id: orgId,
+      actor_id: input.actor_id ?? this.userId,
+      source: input.source,
+      event_type: input.event_type,
+      scope_type: input.scope_type ?? "workspace",
+      scope_id: input.scope_id ?? null,
+      position_profile_id: input.position_profile_id ?? null,
+      task_id: input.task_id ?? null,
+      source_ref_type: input.source_ref_type ?? null,
+      source_ref_id: input.source_ref_id ?? null,
+      raw_text: input.raw_text ?? "",
+      normalized_text: input.normalized_text ?? "",
+      interpretation: input.interpretation ?? {},
+      signal: input.signal ?? {},
+      confidence_score: input.confidence_score ?? null,
+      signal_strength: input.signal_strength ?? null,
+    };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.learningEvents)
+      .insert(payload)
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("create learning_event failed", error);
+    }
+    return data as DonnitLearningEvent;
+  }
+
+  async createLearningCandidate(
+    orgId: string,
+    input: Omit<
+      DonnitLearningCandidate,
+      | "id"
+      | "org_id"
+      | "created_at"
+      | "updated_at"
+      | "promoted_at"
+      | "status"
+      | "reviewed_by"
+      | "created_by"
+      | "signal_count"
+      | "confidence_score"
+      | "rationale"
+    > &
+      Partial<Pick<DonnitLearningCandidate, "status" | "reviewed_by" | "created_by" | "signal_count" | "confidence_score" | "rationale">>,
+  ): Promise<DonnitLearningCandidate | null> {
+    const payload = {
+      org_id: orgId,
+      scope_type: input.scope_type ?? "workspace",
+      scope_id: input.scope_id ?? null,
+      candidate_type: input.candidate_type,
+      proposed_policy: input.proposed_policy ?? {},
+      evidence_event_ids: input.evidence_event_ids ?? [],
+      signal_count: input.signal_count ?? 1,
+      confidence_score: input.confidence_score ?? 0.5,
+      status: input.status ?? "pending_review",
+      rationale: input.rationale ?? "",
+      created_by: input.created_by ?? this.userId,
+      reviewed_by: input.reviewed_by ?? null,
+    };
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.learningCandidates)
+      .insert(payload)
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("create learning_candidate failed", error);
+    }
+    return data as DonnitLearningCandidate;
   }
 }
