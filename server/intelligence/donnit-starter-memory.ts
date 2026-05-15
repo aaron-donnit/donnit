@@ -76,8 +76,8 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
   {
     key: "memory_layers.conflict_resolution",
     category: "memory_layers",
-    title: "Resolve memory conflicts by scope, authority, recency, then confidence",
-    body: "When memory records conflict, Donnit must enforce tenant isolation first. Then prefer the most specific applicable scope, policy-level facts over preferences, explicit/admin/user-confirmed facts over inferred facts, the latest confirmed fact within the same scope, and confidence only as the final tie-breaker. If those rules do not produce a safe winner, ask for clarification instead of guessing.",
+    title: "Resolve memory conflicts by scope, recency, authority, then confidence",
+    body: "When memory records conflict, Donnit must enforce tenant isolation first so one workspace can never read or overwrite another workspace's memory. Then prefer the most specific applicable scope, the most recent confirmed fact within that scope, source authority, and confidence only as the final tie-breaker. Hard policies, safety rules, compliance rules, approval rules, OOO/holiday/calendar constraints, and admin settings can still block or constrain an action even when newer convenience preferences exist. If those rules do not produce a safe winner, ask for clarification instead of guessing.",
     examples: [
       "Workspace says EOD is 6 PM and global starter memory says 5 PM -> workspace wins",
       "Workspace policy requires approval but a user prefers auto-send -> policy wins",

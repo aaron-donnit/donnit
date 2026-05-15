@@ -1,6 +1,6 @@
 # Donnit Memory Conflict Policy
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 This policy governs how Donnit resolves conflicting memory facts while preserving tenant isolation and role continuity.
 
@@ -12,11 +12,12 @@ Donnit must never invent a cross-workspace truth from tenant-specific memory. Gl
 
 1. **Tenant isolation**: only memory from the current workspace can be read or written.
 2. **Scope specificity**: user-scoped memory can override workspace memory for that user; workspace memory can override global defaults; Position Profile memory governs role procedures.
-3. **Policy authority**: workspace policies, safety rules, compliance rules, approval rules, OOO/holiday/calendar constraints, and admin settings override convenience preferences.
-4. **Explicit confirmation**: admin/manual/user-confirmed facts beat model inference and low-confidence learned aliases.
-5. **Recency**: within the same scope and authority level, the latest confirmed fact wins unless the older fact is marked policy-level or permanent.
-6. **Confidence**: confidence breaks ties only after scope, authority, and recency.
-7. **Clarification**: unresolved or unsafe conflicts require one targeted question.
+3. **Recency**: within the applicable scope, the latest confirmed fact wins unless the older fact is marked policy-level, permanent, safety-critical, or compliance-critical.
+4. **Source authority**: when recency does not settle the conflict, admin/manual/user-confirmed facts beat model inference and low-confidence learned aliases.
+5. **Confidence**: confidence breaks ties only after tenant isolation, scope, recency, and source authority.
+6. **Clarification**: unresolved or unsafe conflicts require one targeted question.
+
+Hard workspace policies, safety rules, compliance rules, approval rules, OOO/holiday/calendar constraints, and admin settings are guardrails. They can block or constrain an action even when a newer convenience preference exists.
 
 ## Conflict Examples
 
@@ -47,7 +48,7 @@ The chat resolver applies these rules to workspace memory aliases by:
 
 - filtering user-scoped aliases to the current user only;
 - ignoring expired aliases when the optional expiry field exists;
-- scoring scope before source authority, recency, and confidence;
+- scoring scope before recency, source authority, and confidence;
 - treating contested aliases as weaker signals;
 - preserving tenant isolation through `org_id`-scoped Supabase queries.
 

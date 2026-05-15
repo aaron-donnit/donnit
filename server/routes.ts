@@ -4295,6 +4295,7 @@ function workspaceMemoryAliasScore(
   const sourceAuthority = memoryAliasSourceAuthorityRank(alias);
   const recency = memoryAliasRecencyRank(alias);
   const confidence = Math.max(0, Math.min(1, Number(alias.confidence_score ?? 0.65)));
+  const policyGuardrail = sourceAuthority >= 5 ? 1.5 : 0;
   const contestedPenalty = alias.status === "contested" ? 1.5 : 0;
 
   return Math.max(
@@ -4303,8 +4304,9 @@ function workspaceMemoryAliasScore(
       10,
       surface +
         (scopeRank - 2) * 1.6 +
-        sourceAuthority * 0.45 +
-        recency * 0.8 +
+        recency * 1.3 +
+        sourceAuthority * 0.25 +
+        policyGuardrail +
         confidence * 0.35 -
         contestedPenalty,
     ),
