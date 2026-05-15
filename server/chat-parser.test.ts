@@ -261,6 +261,64 @@ describe("chat task parser", () => {
     );
   });
 
+  it("matches a position task profile from outcome language", () => {
+    const memories = [
+      {
+        id: "profile-memory-recruiting",
+        position_profile_id: "profile-hr",
+        source_task_id: null,
+        title: "Standard recruiting workflow",
+        objective: "Produce a consistent recruiting process from intake through candidate handoff.",
+        cadence: "none",
+        due_rule: "",
+        start_offset_days: 0,
+        default_urgency: "high",
+        default_estimated_minutes: 45,
+        status: "active",
+        version: 1,
+        confidence_score: 0.9,
+        learned_from: {},
+        created_by: "user-1",
+        org_id: "org-1",
+        created_at: "2026-05-15T00:00:00.000Z",
+        updated_at: "2026-05-15T00:00:00.000Z",
+        last_learned_at: "2026-05-15T00:00:00.000Z",
+        steps: [
+          { title: "Confirm role intake", position: 0 },
+          { title: "Post job description", position: 1 },
+        ],
+      },
+      {
+        id: "profile-memory-finance",
+        position_profile_id: "profile-finance",
+        source_task_id: null,
+        title: "Monthly financial report",
+        objective: "Prepare payroll, P&L, revenue, and EBITDA reporting for leadership.",
+        cadence: "monthly",
+        due_rule: "",
+        start_offset_days: 5,
+        default_urgency: "high",
+        default_estimated_minutes: 60,
+        status: "active",
+        version: 1,
+        confidence_score: 0.9,
+        learned_from: {},
+        created_by: "user-1",
+        org_id: "org-1",
+        created_at: "2026-05-15T00:00:00.000Z",
+        updated_at: "2026-05-15T00:00:00.000Z",
+        last_learned_at: "2026-05-15T00:00:00.000Z",
+        steps: [{ title: "Pull payroll report", position: 0 }],
+      },
+    ] as never;
+
+    expect(__chatParserTest.selectTaskProfile(memories, { title: "Build out a standard recruiting workflow" })?.id).toBe(
+      "profile-memory-recruiting",
+    );
+    expect(__chatParserTest.taskProfileScore(memories[0], { title: "Build out a standard recruiting workflow" })).toBeGreaterThan(28);
+    expect(__chatParserTest.selectTaskProfile(memories, { title: "Call Nina about candidate feedback" })).toBeNull();
+  });
+
   it("defaults to the assignee primary profile unless the text names a profile", () => {
     const profiles = [
       {

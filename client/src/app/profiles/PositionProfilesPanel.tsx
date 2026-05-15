@@ -487,14 +487,14 @@ export default function PositionProfilesPanel({
       setSheetOpen(true);
       setSheetTab("recurring");
       toast({
-        title: uploadFailures.length > 0 ? "Task Memory saved, attachment issue" : "Task Memory created",
+        title: uploadFailures.length > 0 ? "Task Profile saved, attachment issue" : "Task Profile created",
         description: uploadFailures.length > 0 ? uploadFailures[0] : `${memory.title} is ready as a reusable workflow.`,
         variant: uploadFailures.length > 0 ? "destructive" : undefined,
       });
     },
     onError: (error: unknown) => {
       toast({
-        title: "Could not create Task Memory",
+        title: "Could not create Task Profile",
         description: error instanceof Error ? error.message : "Check the workflow details and try again.",
         variant: "destructive",
       });
@@ -544,11 +544,11 @@ export default function PositionProfilesPanel({
     },
     onSuccess: async (memory) => {
       await queryClient.invalidateQueries({ queryKey: ["position-profile-task-memory", selectedProfile?.id ?? ""] });
-      toast({ title: "Task Memory saved", description: `${memory.title} now has a reusable role sequence.` });
+      toast({ title: "Task Profile saved", description: `${memory.title} now has a reusable role sequence.` });
     },
     onError: (error: unknown) => {
       toast({
-        title: "Could not save Task Memory",
+        title: "Could not save Task Profile",
         description: error instanceof Error ? error.message : "Apply the latest Supabase migration and try again.",
         variant: "destructive",
       });
@@ -1131,7 +1131,7 @@ export default function PositionProfilesPanel({
                             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">Manage this profile</p>
                             <div className="flex flex-wrap gap-2">
                               <ActionButton icon={<Eye className="size-4" />} label="View profile" onClick={() => openProfileSheet(profile.id)} testId={`button-position-profile-view-${profile.id}`} />
-                              <ActionButton icon={<ShieldCheck className="size-4" />} label="Task Memory" onClick={() => openProfileSheet(profile.id, "recurring")} testId={`button-position-profile-task-memory-${profile.id}`} />
+                              <ActionButton icon={<ShieldCheck className="size-4" />} label="Task Profiles" onClick={() => openProfileSheet(profile.id, "recurring")} testId={`button-position-profile-task-memory-${profile.id}`} />
                               <ActionButton icon={<ListPlus className="size-4" />} label="Add workflow" onClick={() => openTaskMemoryBuilder(profile)} disabled={!canManageTaskMemoryForProfile(profile, currentUser, currentUserId, users)} testId={`button-position-profile-add-task-memory-${profile.id}`} />
                               <ActionButton icon={<UserCog className="size-4" />} label="Transfer ownership" primary onClick={() => openAssignment("transfer", profile)} disabled={!canManageProfiles} />
                               <ActionButton icon={<Edit3 className="size-4" />} label="Edit details" onClick={() => { setSelectedProfileId(profile.id); setEditTitle(profile.title); setEditStatus(profile.status); setEditOpen(true); }} disabled={!canManageProfiles} />
@@ -1316,7 +1316,7 @@ export default function PositionProfilesPanel({
               )}
               {sheetTab === "recurring" && (
                 <div className="space-y-3">
-                  <InfoCard title="Task Memory" icon={<ShieldCheck className="size-4" />}>
+                  <InfoCard title="Task Profiles" icon={<ShieldCheck className="size-4" />}>
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-3 rounded-md bg-brand-green/5 px-3 py-2">
                         <p className="text-xs leading-5 text-muted-foreground">
@@ -1331,7 +1331,7 @@ export default function PositionProfilesPanel({
                         <p className="text-xs text-muted-foreground">Loading stored task sequences...</p>
                       ) : taskMemories.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          No Task Memory has been saved for this profile yet. Convert recurring work below to preserve the sequence, timing, and how-to context.
+                          No Task Profile has been saved for this profile yet. Convert recurring work below to preserve the sequence, timing, and how-to context.
                         </p>
                       ) : (
                         taskMemories.map((memory) => (
@@ -1400,7 +1400,7 @@ export default function PositionProfilesPanel({
                     tasks={selectedProfile.recurringTasks}
                     empty="No recurring tasks are tied to this profile yet."
                     onTaskOpen={(task) => setSelectedProfileTaskId(String(task.id))}
-                    actionLabel="Save as Task Memory"
+                    actionLabel="Save as Task Profile"
                     actionPendingId={createTaskMemoryFromTask.isPending ? "pending" : null}
                     onTaskAction={canManageSelectedTaskMemory ? (task) => createTaskMemoryFromTask.mutate(task) : undefined}
                   />
@@ -1487,7 +1487,7 @@ export default function PositionProfilesPanel({
       <Dialog open={taskMemoryOpen} onOpenChange={setTaskMemoryOpen}>
         <DialogContent className={`${dialogShellClass} sm:max-w-5xl`}>
           <DialogHeader className={dialogHeaderClass}>
-            <DialogTitle>Add Task Memory workflow</DialogTitle>
+            <DialogTitle>Add Task Profile workflow</DialogTitle>
             <DialogDescription>
               Save a repeatable task sequence for {selectedProfile?.title ?? "this profile"} so future holders can complete the outcome step by step.
             </DialogDescription>
@@ -1497,11 +1497,11 @@ export default function PositionProfilesPanel({
             onSubmit={(event) => {
               event.preventDefault();
               if (!taskMemoryDraft.title.trim()) {
-                toast({ title: "Name the workflow", description: "Task Memory needs a clear outcome title.", variant: "destructive" });
+                toast({ title: "Name the workflow", description: "Task Profile needs a clear outcome title.", variant: "destructive" });
                 return;
               }
               if (!taskMemoryDraft.steps.some((step) => step.title.trim())) {
-                toast({ title: "Add at least one step", description: "Task Memory should guide the next person through the work.", variant: "destructive" });
+                toast({ title: "Add at least one step", description: "Task Profile should guide the next person through the work.", variant: "destructive" });
                 return;
               }
               createTaskMemory.mutate(taskMemoryDraft);
@@ -1707,7 +1707,7 @@ export default function PositionProfilesPanel({
                           ))}
                         </div>
                       ) : (
-                        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">Chosen files are recorded with this Task Memory workflow.</p>
+                        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">Chosen files are recorded with this Task Profile workflow.</p>
                       )}
                     </div>
                   </div>
@@ -2483,7 +2483,7 @@ function TaskMemorySummaryCard({
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="flex items-center gap-2 text-xs font-semibold text-foreground">
           <ShieldCheck className="size-4 text-brand-green" />
-          Task Memory
+          Task Profiles
         </p>
         <span className="rounded-md bg-background px-2 py-1 text-[11px] text-muted-foreground">
           {sequenceCount} source{sequenceCount === 1 ? "" : "s"}

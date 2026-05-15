@@ -28,7 +28,7 @@ const slashCommands: SlashCommandOption[] = [
   {
     id: "memory",
     label: "/memory",
-    description: "Create a Task Memory workflow for a Position Profile.",
+    description: "Create a Task Profile workflow for a Position Profile.",
     insertText: "/memory ",
   },
 ];
@@ -140,10 +140,10 @@ export default function ChatPanel({
     if (/^\/memory\b/i.test(rawText)) {
       const text = rawText.replace(/^\/memory\b\s*/i, "").trim();
       return {
-        title: text || "Create Task Memory workflow",
+        title: text || "Create Task Profile workflow",
         urgency: "Workflow",
         due: "Profile",
-        recurrence: "Task Memory",
+        recurrence: "Task Profile",
         assignee: "Position Profile",
         isDonnitCommand: false,
         isMemoryCommand: true,

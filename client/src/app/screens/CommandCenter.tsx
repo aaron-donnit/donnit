@@ -1187,7 +1187,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     if (!canManagePositionProfiles) {
       toast({
         title: "Position Profiles are admin-only right now",
-        description: "Task Memory workflows currently open from the Position Profiles workspace.",
+        description: "Task Profile workflows currently open from the Position Profiles workspace.",
         variant: "destructive",
       });
       return;
@@ -1199,7 +1199,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     if (!preferredProfile) {
       toast({
         title: "Create a Position Profile first",
-        description: "Task Memory needs a profile to store the workflow under.",
+        description: "Task Profile needs a profile to store the workflow under.",
         variant: "destructive",
       });
       return;
@@ -1211,7 +1211,7 @@ function CommandCenter({ auth }: { auth: AuthedContext }) {
     setFocusedProfileRequestKey((current) => current + 1);
     toast({
       title: "/memory",
-      description: command.text ? "Opening Task Memory with your prompt as context." : "Opening the Task Memory workflow builder.",
+      description: command.text ? "Opening Task Profile with your prompt as context." : "Opening the Task Profile workflow builder.",
     });
   };
   const goHome = () => {

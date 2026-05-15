@@ -365,10 +365,22 @@ export const donnitStarterMemory: DonnitStarterMemoryItem[] = [
     missingMemoryBehavior: "If profile tags are missing for an active profile, derive them from the profile title, department, owner title, and confirmed aliases before asking the user.",
   },
   {
+    key: "position_profiles.task_profiles",
+    category: "position_profiles",
+    title: "Task Profiles turn outcomes into ordered work",
+    body: "Task Profiles are reusable workflow playbooks stored inside a Position Profile. A Position Profile owns the role responsibility; each Task Profile stores a desired outcome, recurrence/timing rules, tools, attachments, guidelines, and the ordered task steps needed to produce that outcome consistently. When a matching assignment or recurrence appears, Donnit should use the active Task Profile to create the sequential work for the current profile owner.",
+    examples: [
+      "Financial report outcome -> Task Profile with payroll report, P&L, revenue report, EBITDA, deck update, and final review steps",
+      "Board packet outcome -> Task Profile with agenda collection, financials, CEO update, board deck, and distribution steps",
+      "New hire onboarding outcome -> Task Profile with account creation, paperwork, welcome email, orientation, and manager check-in steps",
+    ],
+    missingMemoryBehavior: "If Donnit sees a repeatable outcome but no Task Profile exists, suggest creating one or ask the owner for the missing sequence before guessing.",
+  },
+  {
     key: "position_profiles.memory_capture",
     category: "position_profiles",
     title: "What Position Profile memory should capture",
-    body: "Position Profile memory should capture recurring responsibilities, how-to notes, completion patterns, source evidence, stakeholders, tools, decision rules, critical dates, risks, current incomplete work, and historical completed tasks. It should preserve institutional knowledge without exposing personal tasks.",
+    body: "Position Profile memory should capture Task Profiles, recurring responsibilities, how-to notes, completion patterns, source evidence, stakeholders, tools, decision rules, critical dates, risks, current incomplete work, and historical completed tasks. It should preserve institutional knowledge without exposing personal tasks.",
     examples: [
       "Completed payroll report with notes -> how-to memory for payroll process",
       "Recurring quarterly board packet -> recurring responsibility and critical date",

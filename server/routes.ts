@@ -2898,6 +2898,140 @@ async function applyTaskTemplateToTask(
   return { template, subtasks: createdSubtasks };
 }
 
+const TASK_PROFILE_MATCH_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "it",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "the",
+  "this",
+  "to",
+  "with",
+]);
+
+function normalizeTaskProfileMatchText(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function taskProfileTokens(value: string | null | undefined) {
+  return Array.from(
+    new Set(
+      normalizeTaskProfileMatchText(value)
+        .split(" ")
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !TASK_PROFILE_MATCH_STOPWORDS.has(token)),
+    ),
+  );
+}
+
+function taskProfileScore(memory: DonnitPositionProfileTaskMemory, input: { title: string; description?: string | null }) {
+  if (memory.status !== "active") return 0;
+  const haystackText = normalizeTaskProfileMatchText(`${input.title} ${input.description ?? ""}`);
+  const haystackTokens = new Set(taskProfileTokens(haystackText));
+  if (haystackTokens.size === 0) return 0;
+
+  const profilePhrases = [memory.title, memory.objective, memory.due_rule]
+    .map(normalizeTaskProfileMatchText)
+    .filter((phrase) => phrase.length >= 3);
+  let score = 0;
+  for (const phrase of profilePhrases) {
+    if (phrase.length >= 4 && haystackText.includes(phrase)) {
+      score = Math.max(score, phrase.length + (memory.steps?.length ?? 0) * 4);
+    }
+  }
+
+  const profileTokens = new Set(taskProfileTokens(profilePhrases.join(" ")));
+  let overlap = 0;
+  for (const token of Array.from(profileTokens)) {
+    if (haystackTokens.has(token)) overlap += 1;
+  }
+  const coverage = profileTokens.size > 0 ? overlap / profileTokens.size : 0;
+  if (overlap >= 2) score = Math.max(score, overlap * 12 + Math.round(coverage * 20) + (memory.steps?.length ?? 0) * 2);
+  if (memory.source_task_id && String(memory.source_task_id) === String((input as { sourceTaskId?: string }).sourceTaskId ?? "")) score += 25;
+  return score;
+}
+
+function selectTaskProfile(
+  memories: DonnitPositionProfileTaskMemory[],
+  input: { title: string; description?: string | null },
+) {
+  const ranked = memories
+    .map((memory) => ({ memory, score: taskProfileScore(memory, input) }))
+    .filter((item) => item.score >= 28)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.memory ?? null;
+}
+
+async function applyTaskProfileToTask(
+  store: DonnitStore,
+  orgId: string,
+  task: DonnitTask,
+  input: { description?: string | null } = {},
+) {
+  const profileId = (task as { position_profile_id?: string | null }).position_profile_id;
+  if (!profileId || task.visibility === "personal") return null;
+  const adminClient = createSupabaseAdminClient();
+  const workflowStore = adminClient ? new DonnitStore(adminClient, store.userId) : store;
+  const memories = await workflowStore.listPositionProfileTaskMemories(orgId, profileId);
+  if (memories.length === 0) return null;
+  const memory = selectTaskProfile(memories, {
+    title: task.title,
+    description: input.description ?? task.description,
+  });
+  if (!memory || !memory.steps || memory.steps.length === 0) return null;
+
+  const existingSubtasks = (await workflowStore.listTaskSubtasks(orgId)).filter((subtask) => String(subtask.task_id) === String(task.id));
+  const existingTitles = new Set(existingSubtasks.map((subtask) => normalizeTaskProfileMatchText(subtask.title)));
+  const createdSubtasks = [];
+  for (const step of [...memory.steps].sort((a, b) => a.position - b.position)) {
+    if (existingTitles.has(normalizeTaskProfileMatchText(step.title))) continue;
+    createdSubtasks.push(
+      await workflowStore.createTaskSubtask(orgId, {
+        task_id: task.id,
+        title: step.title,
+        position: step.position,
+      }),
+    );
+  }
+  if (createdSubtasks.length === 0) return null;
+  await workflowStore.addEvent(orgId, {
+    task_id: task.id,
+    actor_id: task.assigned_by,
+    type: "task_profile_applied",
+    note: `Applied Task Profile: ${memory.title}. ${createdSubtasks.length} step${createdSubtasks.length === 1 ? "" : "s"} created from the Position Profile workflow.`,
+  });
+  return { memory, subtasks: createdSubtasks };
+}
+
+async function applyBestTaskWorkflowToTask(
+  store: DonnitStore,
+  orgId: string,
+  task: DonnitTask,
+  input: { templateId?: string | null; description?: string | null } = {},
+) {
+  if (input.templateId) return applyTaskTemplateToTask(store, orgId, task, input);
+  return (await applyTaskProfileToTask(store, orgId, task, input)) ?? applyTaskTemplateToTask(store, orgId, task, input);
+}
+
 function compactMemoryText(value: string | null | undefined, max = 280) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -6981,6 +7115,8 @@ export const __chatParserTest = {
   taskContinuitySummary,
   taskMemoryMarkdown,
   taskMemoryTitleKey,
+  taskProfileScore,
+  selectTaskProfile,
   underspecifiedRelativeDatePhrase,
   languageClarificationFromMessage,
   normalizeCommonTaskTypos,
@@ -8261,7 +8397,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               reminder_days_before: merged.reminderDaysBefore,
             }),
           });
-          await applyTaskTemplateToTask(store, orgId, created, { description: merged.description });
+          await applyBestTaskWorkflowToTask(store, orgId, created, { description: merged.description });
           await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: merged.description });
           await clearPendingChatTask(store, orgId);
           let automation: Awaited<ReturnType<typeof runDonnitTaskAutomation>> | null = null;
@@ -8506,7 +8642,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           workspaceResolution,
           createdTaskId: created.id,
         });
-        await applyTaskTemplateToTask(store, orgId, created, { description: taskInput.description });
+        await applyBestTaskWorkflowToTask(store, orgId, created, { description: taskInput.description });
         await enrichPositionProfileMemoryFromTask({ store, orgId, task: created, eventType: "created", note: taskInput.description });
         let automation: Awaited<ReturnType<typeof runDonnitTaskAutomation>> | null = null;
         let assistantContent = chatTaskOutcome(created, members);
@@ -8933,7 +9069,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             reminder_days_before: data.reminderDaysBefore ?? 0,
           }),
         });
-        await applyTaskTemplateToTask(store, orgId, created, {
+        await applyBestTaskWorkflowToTask(store, orgId, created, {
           templateId: data.templateId ?? null,
           description: data.description ?? "",
         });
@@ -9671,7 +9807,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const canView = canManagePositionProfileTaskMemory(profile, auth.userId, actor, members);
       if (!canView) {
-        res.status(403).json({ message: "You do not have access to this Position Profile task memory." });
+        res.status(403).json({ message: "You do not have access to this Position Profile Task Profile." });
         return;
       }
       const memories = await store.listPositionProfileTaskMemories(orgId, profile.id);
@@ -9684,7 +9820,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/position-profiles/:id/task-memory", requireDonnitAuth, async (req: Request, res: Response) => {
     const parsed = taskMemoryCreateSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: "Task Memory details are incomplete." });
+      res.status(400).json({ message: "Task Profile details are incomplete." });
       return;
     }
     try {
@@ -9707,7 +9843,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
-        res.status(403).json({ message: "Only the profile owner, manager, or admin can create Position Profile Task Memory." });
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can create Position Profile Task Profiles." });
         return;
       }
       const input = parsed.data;
@@ -9745,7 +9881,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         })),
       });
       if (!memory) {
-        res.status(409).json({ message: "Task Memory storage is not available. Apply the latest Supabase migration." });
+        res.status(409).json({ message: "Task Profile storage is not available. Apply the latest Supabase migration." });
         return;
       }
       res.status(201).json(toClientPositionProfileTaskMemory(memory));
@@ -9764,7 +9900,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const auth = req.donnitAuth!;
       const admin = createSupabaseAdminClient();
       if (!admin) {
-        res.status(503).json({ message: "Task Memory file storage needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        res.status(503).json({ message: "Task Profile file storage needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
         return;
       }
       const store = new DonnitStore(admin, auth.userId);
@@ -9782,11 +9918,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const profile = profiles.find((item) => item.id === String(req.params.id));
       const memory = memories.find((item) => item.id === String(req.params.memoryId));
       if (!profile || !memory) {
-        res.status(404).json({ message: "Task Memory workflow not found." });
+        res.status(404).json({ message: "Task Profile workflow not found." });
         return;
       }
       if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
-        res.status(403).json({ message: "Only the profile owner, manager, or admin can upload Task Memory attachments." });
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can upload Task Profile attachments." });
         return;
       }
       const input = parsed.data;
@@ -9821,7 +9957,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       if (!attachment) {
         await admin.storage.from(bucketId).remove([storagePath]);
-        res.status(409).json({ message: "Task Memory attachment table is not available. Apply the latest Supabase migration." });
+        res.status(409).json({ message: "Task Profile attachment table is not available. Apply the latest Supabase migration." });
         return;
       }
       res.status(201).json(toClientPositionProfileTaskMemoryAttachment(attachment));
@@ -9835,7 +9971,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const auth = req.donnitAuth!;
       const admin = createSupabaseAdminClient();
       if (!admin) {
-        res.status(503).json({ message: "Task Memory file downloads need SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        res.status(503).json({ message: "Task Profile file downloads need SUPABASE_SERVICE_ROLE_KEY in Vercel." });
         return;
       }
       const store = new DonnitStore(admin, auth.userId);
@@ -9859,7 +9995,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
-        res.status(403).json({ message: "You do not have access to this Task Memory attachment." });
+        res.status(403).json({ message: "You do not have access to this Task Profile attachment." });
         return;
       }
       const { data, error } = await admin.storage
@@ -9880,7 +10016,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const auth = req.donnitAuth!;
       const admin = createSupabaseAdminClient();
       if (!admin) {
-        res.status(503).json({ message: "Task Memory file management needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
+        res.status(503).json({ message: "Task Profile file management needs SUPABASE_SERVICE_ROLE_KEY in Vercel." });
         return;
       }
       const store = new DonnitStore(admin, auth.userId);
@@ -9904,7 +10040,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       if (!canManagePositionProfileTaskMemory(profile, auth.userId, actor, members)) {
-        res.status(403).json({ message: "Only the profile owner, manager, or admin can delete Task Memory attachments." });
+        res.status(403).json({ message: "Only the profile owner, manager, or admin can delete Task Profile attachments." });
         return;
       }
       await admin.storage.from(attachment.bucket_id).remove([attachment.storage_path]);
@@ -10446,7 +10582,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           recurrence: "none",
           reminder_days_before: 0,
         });
-        await applyTaskTemplateToTask(store, suggestion.org_id, task, {
+        await applyBestTaskWorkflowToTask(store, suggestion.org_id, task, {
           description: `${suggestion.subject} ${suggestion.preview} ${(suggestion.action_items ?? []).join(" ")} ${suggestion.body ?? ""}`,
         });
         await enrichPositionProfileMemoryFromTask({
