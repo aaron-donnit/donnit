@@ -1755,6 +1755,25 @@ export class DonnitStore {
     return data as DonnitTaskResolutionEvent;
   }
 
+  async getLatestTaskResolutionEvent(
+    orgId: string,
+    taskId: string,
+  ): Promise<DonnitTaskResolutionEvent | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.taskResolutionEvents)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("created_task_id", taskId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("get task_resolution_event failed", error);
+    }
+    return (data as DonnitTaskResolutionEvent | null) ?? null;
+  }
+
   async createLearningEvent(
     orgId: string,
     input: Omit<DonnitLearningEvent, "id" | "org_id" | "actor_id" | "created_at"> &

@@ -69,6 +69,7 @@ import {
   buildKnowledgeMarkdown,
   slugifyPositionTitle,
 } from "./intelligence/brain-export";
+import { adminResolutionView, memberResolutionView } from "./intelligence/task-resolution-view";
 import archiver from "archiver";
 
 const DEMO_USER_ID = 1;
@@ -10362,6 +10363,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks/:id/postpone-week", (req, res) => handleTaskAction(req, res, "postpone_week"));
   app.post("/api/tasks/:id/accept", (req, res) => handleTaskAction(req, res, "accept"));
   app.post("/api/tasks/:id/deny", (req, res) => handleTaskAction(req, res, "deny"));
+
+  app.get("/api/tasks/:id/resolution", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((m) => m.user_id === auth.userId);
+      if (!actor) {
+        res.status(403).json({ message: "Not a member of this workspace." });
+        return;
+      }
+      const taskId = String(req.params.id ?? "").trim();
+      if (!taskId) {
+        res.status(400).json({ message: "Task id is required." });
+        return;
+      }
+      const event = await store.getLatestTaskResolutionEvent(orgId, taskId);
+      if (!event) {
+        res.status(404).json({ message: "No resolution event recorded for this task." });
+        return;
+      }
+      const isAdmin = ["owner", "admin"].includes(String(actor.role ?? ""));
+      const view = isAdmin ? adminResolutionView(event) : memberResolutionView(event);
+      res.json(view);
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   app.post("/api/tasks/:id/assistant-runs", requireDonnitAuth, async (req: Request, res: Response) => {
     const parsed = assistantRunRequestSchema.safeParse(req.body);

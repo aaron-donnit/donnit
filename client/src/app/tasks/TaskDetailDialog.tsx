@@ -22,6 +22,7 @@ import { profilePrimaryOwnerId, profileAssignmentLabel } from "@/app/lib/profile
 import { invalidateWorkspace } from "@/app/lib/hooks";
 import { statusLabels } from "@/app/lib/urgency";
 import RichNoteEditor from "@/app/tasks/RichNoteEditor";
+import TaskResolutionAccordion from "@/app/tasks/TaskResolutionAccordion";
 
 type CapturedAttachment = {
   name: string;
@@ -617,6 +618,11 @@ export default function TaskDetailDialog({
             {delegate ? `, delegated to ${delegate.name}` : ""}.
             {readOnly ? " You are viewing this as a manager; changes are disabled." : ""}
           </DialogDescription>
+          {task?.id && (
+            <div className="mt-3">
+              <TaskResolutionAccordion taskId={task.id} />
+            </div>
+          )}
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="grid gap-4">
