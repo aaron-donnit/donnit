@@ -1,9 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlertTriangle, BookOpen, Loader2 } from "lucide-react";
+import { AlertTriangle, BookOpen, Download, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
+import { toast } from "@/hooks/use-toast";
 import type { Id } from "@/app/types";
 
 // Mirrors the server-side ordering in server/intelligence/position-brain.ts.
@@ -106,6 +108,8 @@ interface BrainTabProps {
 }
 
 export default function BrainTab({ positionId, enabled }: BrainTabProps) {
+  const [downloading, setDownloading] = useState(false);
+
   const query = useQuery<BrainResponse>({
     queryKey: ["position-brain", String(positionId)],
     enabled: enabled && Boolean(positionId),
@@ -119,6 +123,36 @@ export default function BrainTab({ positionId, enabled }: BrainTabProps) {
     if (!query.data) return [] as Array<[string, BrainKnowledgeRow[]]>;
     return Object.entries(query.data.knowledgeByKind);
   }, [query.data]);
+
+  async function handleDownload() {
+    if (downloading || !positionId) return;
+    setDownloading(true);
+    try {
+      const res = await apiRequest("GET", `/api/positions/${positionId}/brain/export`);
+      const blob = await res.blob();
+      const dispositionHeader = res.headers.get("content-disposition") ?? "";
+      const match = dispositionHeader.match(/filename="?([^";]+)"?/i);
+      const filename = match?.[1] ?? `position-${positionId}-brain.zip`;
+
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+      toast({ title: "Vault download started", description: filename });
+    } catch (err) {
+      toast({
+        title: "Could not download vault",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   if (query.isLoading) {
     return (
@@ -153,10 +187,23 @@ export default function BrainTab({ positionId, enabled }: BrainTabProps) {
 
   return (
     <div className="space-y-5">
-      <p className="text-xs text-muted-foreground">
-        {query.data.totalCount} memory {query.data.totalCount === 1 ? "row" : "rows"} across {groupedEntries.length} {groupedEntries.length === 1 ? "kind" : "kinds"}.
-        Markdown body is canonical; structured fields below are derived.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {query.data.totalCount} memory {query.data.totalCount === 1 ? "row" : "rows"} across {groupedEntries.length} {groupedEntries.length === 1 ? "kind" : "kinds"}.
+          Markdown body is canonical; structured fields below are derived.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={handleDownload}
+          disabled={downloading || query.data.totalCount === 0}
+          data-testid="button-brain-export"
+        >
+          {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          Download Obsidian vault
+        </Button>
+      </div>
 
       {groupedEntries.map(([kind, rows]) => (
         <section key={kind} className="space-y-2">

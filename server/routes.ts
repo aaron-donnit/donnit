@@ -62,6 +62,14 @@ import {
 import { starterMemoryPromptBlock } from "./intelligence/donnit-starter-memory";
 import { englishSpellingClarification, normalizeEnglishSpelling } from "./intelligence/spellcheck";
 import { groupPositionKnowledgeByKind } from "./intelligence/position-brain";
+import {
+  POSITION_BRAIN_EXPORT_LIMIT,
+  buildExportZipFilename,
+  buildKnowledgeFilePath,
+  buildKnowledgeMarkdown,
+  slugifyPositionTitle,
+} from "./intelligence/brain-export";
+import archiver from "archiver";
 
 const DEMO_USER_ID = 1;
 
@@ -8121,6 +8129,70 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/positions/:id/brain/export", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only workspace admins can export a position's brain." });
+        return;
+      }
+      const positionId = String(req.params.id ?? "").trim();
+      if (!positionId) {
+        res.status(400).json({ message: "Position id is required." });
+        return;
+      }
+
+      const positions = await store.listPositionProfiles(orgId);
+      const position = positions.find((p) => p.id === positionId);
+      if (!position) {
+        res.status(404).json({ message: "Position not found in this workspace." });
+        return;
+      }
+
+      const knowledge = await store.listPositionProfileKnowledge(orgId, positionId);
+      if (knowledge.length > POSITION_BRAIN_EXPORT_LIMIT) {
+        res.status(413).json({
+          message: `This position has ${knowledge.length} memory rows; export caps at ${POSITION_BRAIN_EXPORT_LIMIT}. Archive or filter rows before re-exporting.`,
+        });
+        return;
+      }
+
+      const filename = buildExportZipFilename(position);
+      const positionSlug = slugifyPositionTitle(position.title ?? "", position.id);
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      // Cache-control: this is org-private content; do not let intermediaries cache it.
+      res.setHeader("Cache-Control", "private, no-store");
+
+      const archive = archiver("zip", { zlib: { level: 9 } });
+      archive.on("error", (err) => {
+        if (!res.headersSent) {
+          res.status(500).json({ message: err.message });
+        } else {
+          try { res.destroy(err); } catch { /* ignore */ }
+        }
+      });
+      archive.pipe(res);
+      for (const row of knowledge) {
+        archive.append(buildKnowledgeMarkdown(row), { name: buildKnowledgeFilePath(positionSlug, row) });
+      }
+      await archive.finalize();
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+      }
     }
   });
 
