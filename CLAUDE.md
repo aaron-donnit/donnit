@@ -66,7 +66,7 @@ The promotion gate that decides how aggressively `learning_candidates` auto-appl
 - **Balanced** (default for MVP): low-risk, high-confidence patterns auto-promote with an audit row in `policy_versions`. High-impact changes (decision rules, removing routing rules, changing handoff notes) still require human approval.
 - **Automatic:** high-confidence workflow changes auto-promote. Reserved for mature orgs.
 
-Phase-1 D4 adds `donnit.organizations.learning_mode` + check constraint and wires the existing candidate-promotion code to respect it. Mode switches log a `learning_events` row.
+The mode is stored as a versioned policy row in `donnit.policy_versions` with `policy_type = 'memory_learning_settings'` and `scope_type = 'workspace'` — **not** as a column on `donnit.organizations`. Read it via the `/api/auth/bootstrap` response (`workspaceLearningPolicy`) or `DonnitStore.getWorkspaceLearningPolicy`; write it via `PATCH /api/workspace/learning-policy` (admin-only). Each mode change is itself a new `policy_versions` row with `active = true` and the prior row deactivated, so the table is its own audit log. The candidate-promotion gate at `server/routes.ts:~7570` branches on `policy.autoPromoteHighConfidenceRules` (and related flags) when deciding `status: 'promoted' | 'pending_review'`.
 
 ---
 
@@ -100,7 +100,7 @@ Phase-1 D4 adds `donnit.organizations.learning_mode` + check constraint and wire
 - Never expose raw markdown content to a default user in the main flow. Render it.
 - Never write a query against any `donnit.*` table without an `org_id` filter. RLS will save you, but defense in depth.
 - Never trust a structured column for authority — the markdown body is canonical.
-- Never let `learning_candidates` auto-apply without the gate that respects the org's `learning_mode`.
+- Never let `learning_candidates` auto-apply without the gate that respects the org's current learning policy (the active `policy_versions` row with `policy_type='memory_learning_settings'`).
 - Never use `workspace_id` in new SQL or TypeScript. DB column is `org_id`. UI strings may say "workspace."
 - Never modify `learning_events` rows; insert new ones for corrections.
 - Never switch the assistant `provider` default without a deliberate product decision and a benchmark on the eval set.
@@ -154,7 +154,7 @@ The infrastructure is built. Phase 1 makes it **visible**, **exportable**, and *
 1. **CLAUDE.md** (this file) — unified mental-model map.
 2. **Brain tab on Position Profile** — admin-only React view that renders `position_profile_knowledge` rows grouped by `kind`, with rendered markdown, source chips, confidence/importance pills. Read-only first.
 3. **Obsidian-compatible vault export** — `GET /api/positions/:id/brain/export` → zip of `.md` files with frontmatter. One file per knowledge row. The moat made tangible.
-4. **Learning Modes setting** — `donnit.organizations.learning_mode` column + admin-settings dropdown. Wires the existing `learning_candidates` promotion gate to respect it.
+4. **Learning Modes setting** — versioned policy row in `donnit.policy_versions` (`policy_type='memory_learning_settings'`, `scope_type='workspace'`) + admin-settings dropdown in `WorkspaceSettingsDialog`. Read via `/api/auth/bootstrap.workspaceLearningPolicy`, written via `PATCH /api/workspace/learning-policy`. Wires the existing `learning_candidates` promotion gate at `server/routes.ts:~7570`. **Already shipped on `origin/main` prior to Phase 1 — Phase 1 marked it complete without adding new infrastructure.**
 5. **"Why did Donnit route this?" accordion** — task-detail panel that surfaces the `task_resolution_events` row for assistant-touched tasks.
 6. **Anthropic provider unlock** — migration adding `'anthropic'` to `assistant_runs.provider` check + env-driven provider routing. Default stays OpenAI.
 
