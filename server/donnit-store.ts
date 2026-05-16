@@ -341,6 +341,24 @@ export type DonnitPositionProfileKnowledge = {
   created_by?: string | null;
   updated_at?: string;
   archived_at?: string | null;
+  // Phase 3 D1 — optimistic-locking counter, default 1 in DB. Always present
+  // for rows fetched after the 20260516200000 migration; older code paths
+  // that pre-date the migration still type-check thanks to optional.
+  version?: number;
+};
+
+export type DonnitPositionProfileKnowledgeVersion = {
+  id: string;
+  knowledge_id: string;
+  org_id: string;
+  position_profile_id: string;
+  version: number;
+  snapshot: Record<string, unknown>;
+  written_by: string | null;
+  written_by_agent: boolean;
+  agent_run_id: string | null;
+  reason: string | null;
+  created_at: string;
 };
 
 export type DonnitUserWorkspaceState = {
@@ -1555,6 +1573,162 @@ export class DonnitStore {
       throw wrapSupabaseError("upsert position_profile_knowledge failed", error);
     }
     return data as DonnitPositionProfileKnowledge;
+  }
+
+  // Phase 3 D2 — Writeable Brain: read by id (used by patch flow + audit).
+  async getPositionProfileKnowledgeById(
+    orgId: string,
+    knowledgeId: string,
+  ): Promise<DonnitPositionProfileKnowledge | null> {
+    const { data, error } = await this.client
+      .from(DONNIT_TABLES.positionProfileKnowledge)
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("id", knowledgeId)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) return null;
+      throw wrapSupabaseError("get position_profile_knowledge failed", error);
+    }
+    return (data as DonnitPositionProfileKnowledge | null) ?? null;
+  }
+
+  // Phase 3 D2 — Writeable Brain: optimistic patch with version increment +
+  // history snapshot. Returns { status } on negotiated outcomes; throws on
+  // hard SQL errors. The caller (route handler) maps the result to HTTP.
+  async patchPositionProfileKnowledge(
+    orgId: string,
+    knowledgeId: string,
+    baseVersion: number,
+    patch: Partial<
+      Pick<
+        DonnitPositionProfileKnowledge,
+        "title" | "markdown_body" | "body" | "kind" | "importance" | "status"
+      >
+    >,
+    actorId: string | null,
+    reason: string,
+  ): Promise<
+    | { status: "ok"; row: DonnitPositionProfileKnowledge; changedFields: string[]; priorVersion: number }
+    | { status: "stale"; current: DonnitPositionProfileKnowledge }
+    | { status: "not_found" }
+  > {
+    const current = await this.getPositionProfileKnowledgeById(orgId, knowledgeId);
+    if (!current) return { status: "not_found" };
+    const currentVersion = current.version ?? 1;
+    if (currentVersion !== baseVersion) {
+      return { status: "stale", current };
+    }
+
+    // Capture the prior state for the snapshot BEFORE mutating.
+    const snapshot = { ...current } as Record<string, unknown>;
+
+    // Build the new row state — only fields the caller actually included.
+    const now = new Date().toISOString();
+    const nextVersion = currentVersion + 1;
+    const updates: Record<string, unknown> = { version: nextVersion, updated_at: now, last_seen_at: now };
+    const changedFields: string[] = [];
+    if (patch.title !== undefined && patch.title !== current.title) {
+      updates.title = patch.title;
+      changedFields.push("title");
+    }
+    if (patch.markdown_body !== undefined && patch.markdown_body !== current.markdown_body) {
+      updates.markdown_body = patch.markdown_body;
+      changedFields.push("markdown_body");
+    }
+    if (patch.body !== undefined && patch.body !== current.body) {
+      updates.body = patch.body;
+      changedFields.push("body");
+    }
+    if (patch.kind !== undefined && patch.kind !== current.kind) {
+      updates.kind = patch.kind;
+      changedFields.push("kind");
+    }
+    if (patch.importance !== undefined && patch.importance !== current.importance) {
+      updates.importance = patch.importance;
+      changedFields.push("importance");
+    }
+    if (patch.status !== undefined && patch.status !== current.status) {
+      updates.status = patch.status;
+      changedFields.push("status");
+      if (patch.status === "archived" && !current.archived_at) {
+        updates.archived_at = now;
+        changedFields.push("archived_at");
+      }
+      if (patch.status === "active" && current.archived_at) {
+        updates.archived_at = null;
+        changedFields.push("archived_at");
+      }
+    }
+
+    // No-op edit: bump version anyway so the client's baseVersion check stays
+    // honest about "the row was touched at time X." Cheaper than the round-
+    // trip dance of telling the client nothing changed.
+    if (changedFields.length === 0) {
+      // Nothing to write. Return current row but indicate empty change set.
+      return { status: "ok", row: current, changedFields: [], priorVersion: currentVersion };
+    }
+
+    // Best-effort: snapshot first so the audit trail is intact even if the
+    // update fails mid-flight. Snapshot table requires service_role insert.
+    const snapshotPayload = {
+      knowledge_id: knowledgeId,
+      org_id: orgId,
+      position_profile_id: current.position_profile_id,
+      version: currentVersion,
+      snapshot,
+      written_by: actorId,
+      written_by_agent: false,
+      reason,
+    };
+    const { error: snapshotError } = await this.client
+      .from(DONNIT_TABLES.positionProfileKnowledgeVersions)
+      .insert(snapshotPayload);
+    if (snapshotError && !isMissingRelationError(snapshotError) && !isMissingColumnError(snapshotError)) {
+      throw wrapSupabaseError("snapshot position_profile_knowledge_versions failed", snapshotError);
+    }
+
+    const { data, error: updateError } = await this.client
+      .from(DONNIT_TABLES.positionProfileKnowledge)
+      .update(updates)
+      .eq("id", knowledgeId)
+      .eq("org_id", orgId)
+      .eq("version", currentVersion) // double-check at write time in case of concurrent writers
+      .select("*")
+      .maybeSingle();
+    if (updateError) {
+      throw wrapSupabaseError("update position_profile_knowledge failed", updateError);
+    }
+    if (!data) {
+      // A concurrent writer beat us between read and update. Fetch the fresh
+      // row and report stale.
+      const refreshed = await this.getPositionProfileKnowledgeById(orgId, knowledgeId);
+      if (!refreshed) return { status: "not_found" };
+      return { status: "stale", current: refreshed };
+    }
+    return {
+      status: "ok",
+      row: data as DonnitPositionProfileKnowledge,
+      changedFields,
+      priorVersion: currentVersion,
+    };
+  }
+
+  // Phase 3 D2 — Convenience wrapper for archive (the common case).
+  async archivePositionProfileKnowledge(
+    orgId: string,
+    knowledgeId: string,
+    baseVersion: number,
+    actorId: string | null,
+  ) {
+    return this.patchPositionProfileKnowledge(
+      orgId,
+      knowledgeId,
+      baseVersion,
+      { status: "archived" },
+      actorId,
+      "archived",
+    );
   }
 
   async listWorkspaceMemoryAliases(orgId: string, normalizedForm?: string): Promise<DonnitWorkspaceMemoryAlias[]> {

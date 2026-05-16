@@ -159,6 +159,39 @@ export const completionMemorySchema = z.object({
   memoryNote: z.string().trim().max(2000).optional(),
 });
 
+// Phase 3 D2 — Writeable Brain optimistic-edit payload. `baseVersion` is
+// the version the client read; the server returns 409 with `current` when
+// it doesn't match. Other fields are all optional — clients send only what
+// changed. Kept restrictive (no source_kind, evidence, confidence_score)
+// because those are system-set and shouldn't be admin-editable.
+export const positionKnowledgeKindEnum = z.enum([
+  "how_to",
+  "decision_rule",
+  "recurring_responsibility",
+  "process",
+  "tool",
+  "relationship",
+  "stakeholder",
+  "preference",
+  "historical_note",
+  "handoff_note",
+  "risk",
+  "critical_date",
+]);
+
+export const brainEditSchema = z.object({
+  baseVersion: z.number().int().positive(),
+  title: z.string().trim().min(1).max(200).optional(),
+  markdownBody: z.string().max(50000).optional(),
+  body: z.string().max(50000).optional(),
+  kind: positionKnowledgeKindEnum.optional(),
+  importance: z.number().int().min(0).max(100).optional(),
+});
+
+export const brainArchiveSchema = z.object({
+  baseVersion: z.number().int().positive(),
+});
+
 export const externalTaskSuggestionSchema = z.object({
   text: z.string().trim().min(2).max(4000),
   from: z.string().trim().max(200).optional(),

@@ -25,6 +25,7 @@ export const DONNIT_TABLES = {
   positionProfiles: "position_profiles",
   positionProfileAssignments: "position_profile_assignments",
   positionProfileKnowledge: "position_profile_knowledge",
+  positionProfileKnowledgeVersions: "position_profile_knowledge_versions",
   taskTemplates: "task_templates",
   taskTemplateSubtasks: "task_template_subtasks",
   userWorkspaceState: "user_workspace_state",

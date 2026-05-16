@@ -2,6 +2,8 @@ import type { Express, Request, Response } from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
 import {
+  brainArchiveSchema,
+  brainEditSchema,
   chatRequestSchema,
   completionMemorySchema,
   externalTaskSuggestionSchema,
@@ -8169,6 +8171,166 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         knowledgeByKind,
         totalCount: knowledge.length,
       });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // Phase 3 D2 — Writeable Brain: optimistic PATCH per row. baseVersion must
+  // match current; otherwise 409 with the latest row so the client can rebase.
+  // Admin-only via the same gate as the read endpoint.
+  app.patch("/api/positions/:positionId/brain/:knowledgeId", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const userStore = new DonnitStore(auth.client, auth.userId);
+      const orgId = await userStore.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await userStore.listOrgMembers(orgId);
+      const actor = members.find((m) => m.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only workspace admins can edit a position's brain." });
+        return;
+      }
+      const positionId = String(req.params.positionId ?? "").trim();
+      const knowledgeId = String(req.params.knowledgeId ?? "").trim();
+      if (!positionId || !knowledgeId) {
+        res.status(400).json({ message: "Position id and knowledge id are required." });
+        return;
+      }
+      const parsed = brainEditSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ message: "Edit payload is invalid.", issues: parsed.error.issues });
+        return;
+      }
+      // Snapshot inserts require service_role (the client-RLS policy blocks
+      // authenticated inserts on the versions table).
+      const adminClient = createSupabaseAdminClient();
+      const writeStore = adminClient ? new DonnitStore(adminClient, auth.userId) : userStore;
+      const result = await writeStore.patchPositionProfileKnowledge(
+        orgId,
+        knowledgeId,
+        parsed.data.baseVersion,
+        {
+          title: parsed.data.title,
+          markdown_body: parsed.data.markdownBody,
+          body: parsed.data.body ?? parsed.data.markdownBody,
+          kind: parsed.data.kind as DonnitPositionProfileKnowledge["kind"] | undefined,
+          importance: parsed.data.importance,
+        },
+        auth.userId,
+        "edited",
+      );
+      if (result.status === "not_found") {
+        res.status(404).json({ message: "Memory row not found in this workspace." });
+        return;
+      }
+      if (result.status === "stale") {
+        res.status(409).json({
+          message: "This memory row was updated elsewhere. Refresh to see the latest before saving again.",
+          conflict: true,
+          current: result.current,
+        });
+        return;
+      }
+      if (result.changedFields.length > 0) {
+        await writeStore.createLearningEvent(orgId, {
+          source: "manual",
+          event_type: "memory_doc_edited",
+          scope_type: "position_profile",
+          scope_id: positionId,
+          position_profile_id: positionId,
+          task_id: null,
+          source_ref_type: "position_profile_knowledge",
+          source_ref_id: knowledgeId,
+          raw_text: "",
+          normalized_text: "",
+          interpretation: {
+            changedFields: result.changedFields,
+            fromVersion: result.priorVersion,
+            toVersion: result.row.version,
+          },
+          signal: {},
+          confidence_score: null,
+          signal_strength: null,
+        }).catch((err) => {
+          console.error("[donnit] memory_doc_edited audit log failed", err instanceof Error ? err.message : String(err));
+        });
+      }
+      res.json({ row: result.row, changedFields: result.changedFields });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // Phase 3 D2 — Writeable Brain: archive a row (status='archived', archived_at=now()).
+  // Same optimistic-locking semantics + admin gate as PATCH.
+  app.post("/api/positions/:positionId/brain/:knowledgeId/archive", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const userStore = new DonnitStore(auth.client, auth.userId);
+      const orgId = await userStore.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await userStore.listOrgMembers(orgId);
+      const actor = members.find((m) => m.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only workspace admins can archive a memory row." });
+        return;
+      }
+      const positionId = String(req.params.positionId ?? "").trim();
+      const knowledgeId = String(req.params.knowledgeId ?? "").trim();
+      const parsed = brainArchiveSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ message: "Archive payload is invalid.", issues: parsed.error.issues });
+        return;
+      }
+      const adminClient = createSupabaseAdminClient();
+      const writeStore = adminClient ? new DonnitStore(adminClient, auth.userId) : userStore;
+      const result = await writeStore.archivePositionProfileKnowledge(
+        orgId,
+        knowledgeId,
+        parsed.data.baseVersion,
+        auth.userId,
+      );
+      if (result.status === "not_found") {
+        res.status(404).json({ message: "Memory row not found in this workspace." });
+        return;
+      }
+      if (result.status === "stale") {
+        res.status(409).json({
+          message: "This memory row was updated elsewhere. Refresh before archiving.",
+          conflict: true,
+          current: result.current,
+        });
+        return;
+      }
+      await writeStore.createLearningEvent(orgId, {
+        source: "manual",
+        event_type: "memory_doc_archived",
+        scope_type: "position_profile",
+        scope_id: positionId,
+        position_profile_id: positionId,
+        task_id: null,
+        source_ref_type: "position_profile_knowledge",
+        source_ref_id: knowledgeId,
+        raw_text: "",
+        normalized_text: "",
+        interpretation: {
+          fromVersion: result.priorVersion,
+          toVersion: result.row.version,
+        },
+        signal: {},
+        confidence_score: null,
+        signal_strength: null,
+      }).catch((err) => {
+        console.error("[donnit] memory_doc_archived audit log failed", err instanceof Error ? err.message : String(err));
+      });
+      res.json({ row: result.row });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }
