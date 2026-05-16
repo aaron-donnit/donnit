@@ -52,9 +52,10 @@ import { canAdministerProfiles, isActiveUser } from "@/app/lib/permissions";
 import { profileAssignmentLabel, profilePrimaryOwnerId, profilesForUser } from "@/app/lib/profiles";
 import { richNoteToPlainText } from "@/app/lib/rich-notes";
 import TaskDetailDialog from "@/app/tasks/TaskDetailDialog";
+import BrainTab from "./BrainTab";
 
 type ProfileFilter = "all" | "active" | "at_risk" | "vacant" | "archived";
-type SheetTab = "overview" | "work" | "recurring" | "memory" | "tools" | "activity";
+type SheetTab = "overview" | "work" | "recurring" | "memory" | "brain" | "tools" | "activity";
 type ConfirmAction = "archive" | "delete" | null;
 type TaskMemoryFormStep = {
   title: string;
@@ -1253,6 +1254,9 @@ export default function PositionProfilesPanel({
                 ["work", "Open work"],
                 ["recurring", "Recurring"],
                 ["memory", "How-to memory"],
+                // Admin-only Brain tab surfaces position_profile_knowledge as a rendered
+                // markdown vault. Hidden from members; the API also gates with 403.
+                ...((canManageProfiles ? [["brain", "Brain"]] : []) as Array<[SheetTab, string]>),
                 ["tools", "Tools & access"],
                 ["activity", "Activity"],
               ] as Array<[SheetTab, string]>).map(([id, label]) => (
@@ -1423,6 +1427,9 @@ export default function PositionProfilesPanel({
                     </div>
                   )}
                 </div>
+              )}
+              {sheetTab === "brain" && canManageProfiles && (
+                <BrainTab positionId={selectedProfile.id} enabled={sheetOpen} />
               )}
               {sheetTab === "memory" && (
                 <div className="space-y-3">

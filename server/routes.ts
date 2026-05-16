@@ -61,6 +61,7 @@ import {
 } from "./intelligence/composio-client";
 import { starterMemoryPromptBlock } from "./intelligence/donnit-starter-memory";
 import { englishSpellingClarification, normalizeEnglishSpelling } from "./intelligence/spellcheck";
+import { groupPositionKnowledgeByKind } from "./intelligence/position-brain";
 
 const DEMO_USER_ID = 1;
 
@@ -8085,6 +8086,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
       res.json({ ok: true, policy });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/positions/:id/brain", requireDonnitAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = req.donnitAuth!;
+      const store = new DonnitStore(auth.client, auth.userId);
+      const orgId = await store.getDefaultOrgId();
+      if (!orgId) {
+        res.status(409).json({ message: "Workspace not bootstrapped." });
+        return;
+      }
+      const members = await store.listOrgMembers(orgId);
+      const actor = members.find((member) => member.user_id === auth.userId);
+      if (!["owner", "admin"].includes(String(actor?.role ?? ""))) {
+        res.status(403).json({ message: "Only workspace admins can view a position's brain." });
+        return;
+      }
+      const positionId = String(req.params.id ?? "").trim();
+      if (!positionId) {
+        res.status(400).json({ message: "Position id is required." });
+        return;
+      }
+      const knowledge = await store.listPositionProfileKnowledge(orgId, positionId);
+      const knowledgeByKind = groupPositionKnowledgeByKind(knowledge);
+      res.json({
+        orgId,
+        positionProfileId: positionId,
+        knowledgeByKind,
+        totalCount: knowledge.length,
+      });
     } catch (error) {
       res.status(500).json({ message: error instanceof Error ? error.message : String(error) });
     }
