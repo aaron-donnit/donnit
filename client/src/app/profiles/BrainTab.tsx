@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlertTriangle, BookOpen, Download, Loader2 } from "lucide-react";
+import { AlertTriangle, Archive, BookOpen, Download, Loader2, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 import type { Id } from "@/app/types";
@@ -67,7 +71,27 @@ export type BrainKnowledgeRow = {
   confidence_score: number;
   last_seen_at: string;
   updated_at: string;
+  // Phase 3 D1 — optimistic-locking counter. Server returns 1 for rows that
+  // pre-date the migration; client always carries it in the edit payload.
+  version?: number;
 };
+
+// Phase 3 D3 — kinds editable from the UI. Source of truth is
+// positionKnowledgeKindEnum in shared/schema.ts; mirrored here as labels.
+const EDITABLE_KINDS: Array<{ value: string; label: string }> = [
+  { value: "handoff_note", label: "Handoff note" },
+  { value: "decision_rule", label: "Decision rule" },
+  { value: "recurring_responsibility", label: "Recurring responsibility" },
+  { value: "process", label: "Process" },
+  { value: "how_to", label: "How-to" },
+  { value: "relationship", label: "Relationship" },
+  { value: "stakeholder", label: "Stakeholder" },
+  { value: "tool", label: "Tool" },
+  { value: "preference", label: "Preference" },
+  { value: "risk", label: "Risk" },
+  { value: "critical_date", label: "Critical date" },
+  { value: "historical_note", label: "Historical note" },
+];
 
 export type BrainResponse = {
   orgId: string;
@@ -109,6 +133,9 @@ interface BrainTabProps {
 
 export default function BrainTab({ positionId, enabled }: BrainTabProps) {
   const [downloading, setDownloading] = useState(false);
+  const [editingRow, setEditingRow] = useState<BrainKnowledgeRow | null>(null);
+  const [archivingRow, setArchivingRow] = useState<BrainKnowledgeRow | null>(null);
+  const queryClient = useQueryClient();
 
   const query = useQuery<BrainResponse>({
     queryKey: ["position-brain", String(positionId)],
@@ -118,6 +145,10 @@ export default function BrainTab({ positionId, enabled }: BrainTabProps) {
       return (await res.json()) as BrainResponse;
     },
   });
+
+  function refreshBrain() {
+    queryClient.invalidateQueries({ queryKey: ["position-brain", String(positionId)] });
+  }
 
   const groupedEntries = useMemo(() => {
     if (!query.data) return [] as Array<[string, BrainKnowledgeRow[]]>;
@@ -227,6 +258,32 @@ export default function BrainTab({ positionId, enabled }: BrainTabProps) {
                         {row.status}
                       </span>
                     )}
+                    <div className="ml-auto flex gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        onClick={() => setEditingRow(row)}
+                        title="Edit this memory row"
+                        aria-label="Edit"
+                        data-testid={`button-brain-edit-${row.id}`}
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        onClick={() => setArchivingRow(row)}
+                        title="Archive this memory row"
+                        aria-label="Archive"
+                        data-testid={`button-brain-archive-${row.id}`}
+                      >
+                        <Archive className="size-3.5" />
+                      </Button>
+                    </div>
                   </header>
 
                   {row.markdown_body ? (
@@ -259,6 +316,256 @@ export default function BrainTab({ positionId, enabled }: BrainTabProps) {
           </div>
         </section>
       ))}
+
+      <EditMemoryDialog
+        row={editingRow}
+        positionId={String(positionId)}
+        onClose={() => setEditingRow(null)}
+        onSaved={() => {
+          setEditingRow(null);
+          refreshBrain();
+        }}
+      />
+
+      <ArchiveMemoryDialog
+        row={archivingRow}
+        positionId={String(positionId)}
+        onClose={() => setArchivingRow(null)}
+        onArchived={() => {
+          setArchivingRow(null);
+          refreshBrain();
+        }}
+      />
     </div>
+  );
+}
+
+// Phase 3 D3 — edit dialog. Carries the row's version as baseVersion in
+// every save; on 409 the server returns conflict + current row and we
+// surface a toast that nudges the admin to refresh.
+function EditMemoryDialog(props: {
+  row: BrainKnowledgeRow | null;
+  positionId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { row, positionId, onClose, onSaved } = props;
+  const queryClient = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [kind, setKind] = useState("");
+  const [importance, setImportance] = useState(50);
+  const [markdownBody, setMarkdownBody] = useState("");
+
+  useEffect(() => {
+    if (!row) return;
+    setTitle(row.title ?? "");
+    setKind(row.kind ?? "how_to");
+    setImportance(typeof row.importance === "number" ? row.importance : 50);
+    setMarkdownBody(row.markdown_body ?? row.body ?? "");
+  }, [row]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!row) throw new Error("No row selected.");
+      const baseVersion = row.version ?? 1;
+      const res = await apiRequest("PATCH", `/api/positions/${positionId}/brain/${row.id}`, {
+        baseVersion,
+        title,
+        markdownBody,
+        body: markdownBody,
+        kind,
+        importance,
+      });
+      return res;
+    },
+    onSuccess: () => {
+      toast({ title: "Memory row saved", description: title.slice(0, 100) });
+      onSaved();
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      // apiRequest serializes the status code into the error message via
+      // throwIfResNotOk; detect the 409 case so we can prompt a refresh.
+      if (message.startsWith("409")) {
+        toast({
+          title: "This row changed elsewhere",
+          description: "Someone else saved an edit while you were typing. Refreshing the Brain tab.",
+          variant: "destructive",
+        });
+        queryClient.invalidateQueries({ queryKey: ["position-brain", positionId] });
+        onClose();
+        return;
+      }
+      toast({
+        title: "Could not save",
+        description: message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const open = Boolean(row);
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit memory row</DialogTitle>
+          <DialogDescription>
+            Changes are versioned. Every save snapshots the prior state.
+            Version <span className="font-mono">{row?.version ?? 1}</span>.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="brain-edit-title">Title</Label>
+            <Input
+              id="brain-edit-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={200}
+              data-testid="input-brain-edit-title"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="brain-edit-kind">Kind</Label>
+              <select
+                id="brain-edit-kind"
+                value={kind}
+                onChange={(e) => setKind(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                data-testid="select-brain-edit-kind"
+              >
+                {EDITABLE_KINDS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="brain-edit-importance">Importance <span className="font-mono text-xs text-muted-foreground">{importance}</span></Label>
+              <input
+                id="brain-edit-importance"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={importance}
+                onChange={(e) => setImportance(Number(e.target.value))}
+                className="w-full"
+                data-testid="input-brain-edit-importance"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="brain-edit-body">Markdown body</Label>
+            <Textarea
+              id="brain-edit-body"
+              value={markdownBody}
+              onChange={(e) => setMarkdownBody(e.target.value)}
+              maxLength={50000}
+              rows={10}
+              className="font-mono text-xs"
+              placeholder="# Headings, **bold**, lists, etc. Rendered in the Brain tab."
+              data-testid="textarea-brain-edit-body"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
+            <X className="size-4" />
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => save.mutate()}
+            disabled={save.isPending || !title.trim()}
+            data-testid="button-brain-edit-save"
+          >
+            {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Phase 3 D3 — archive confirmation dialog. Soft-deletes the row by setting
+// status='archived' and archived_at; the row stays in the version history
+// for audit and disappears from the default Brain tab view.
+function ArchiveMemoryDialog(props: {
+  row: BrainKnowledgeRow | null;
+  positionId: string;
+  onClose: () => void;
+  onArchived: () => void;
+}) {
+  const { row, positionId, onClose, onArchived } = props;
+  const queryClient = useQueryClient();
+
+  const archive = useMutation({
+    mutationFn: async () => {
+      if (!row) throw new Error("No row selected.");
+      const baseVersion = row.version ?? 1;
+      await apiRequest("POST", `/api/positions/${positionId}/brain/${row.id}/archive`, { baseVersion });
+    },
+    onSuccess: () => {
+      toast({ title: "Archived", description: row?.title ?? "Memory row archived." });
+      onArchived();
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith("409")) {
+        toast({
+          title: "This row changed elsewhere",
+          description: "Refreshing the Brain tab before archiving.",
+          variant: "destructive",
+        });
+        queryClient.invalidateQueries({ queryKey: ["position-brain", positionId] });
+        onClose();
+        return;
+      }
+      toast({ title: "Could not archive", description: message, variant: "destructive" });
+    },
+  });
+
+  const open = Boolean(row);
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Archive this memory row?</DialogTitle>
+          <DialogDescription>
+            It won&apos;t appear in the Brain tab anymore. The full version history stays so you can audit or restore later.
+          </DialogDescription>
+        </DialogHeader>
+
+        <p className="rounded-md bg-muted/40 px-3 py-2 text-sm font-medium text-foreground">
+          {row?.title || "(untitled)"}
+        </p>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={archive.isPending}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => archive.mutate()}
+            disabled={archive.isPending}
+            data-testid="button-brain-archive-confirm"
+          >
+            {archive.isPending ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
+            Archive
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
