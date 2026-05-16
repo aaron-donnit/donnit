@@ -23,6 +23,7 @@ import { invalidateWorkspace } from "@/app/lib/hooks";
 import { statusLabels } from "@/app/lib/urgency";
 import RichNoteEditor from "@/app/tasks/RichNoteEditor";
 import TaskResolutionAccordion from "@/app/tasks/TaskResolutionAccordion";
+import { queryClient } from "@/lib/queryClient";
 
 type CapturedAttachment = {
   name: string;
@@ -88,6 +89,9 @@ export default function TaskDetailDialog({
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
   const [showRoleContext, setShowRoleContext] = useState(false);
+  // Phase 2 D2: one-tap memory capture on completion. Optional; empty
+  // submission writes nothing.
+  const [memoryNote, setMemoryNote] = useState("");
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -117,6 +121,7 @@ export default function TaskDetailDialog({
     setNewSubtaskTitle("");
     setShowInheritedHistory(false);
     setShowRoleContext(false);
+    setMemoryNote("");
     if (authenticated) {
       setLocalSubtasks([]);
       return;
@@ -269,12 +274,31 @@ export default function TaskDetailDialog({
     mutationFn: async () => {
       if (!task) throw new Error("No task selected.");
       if (readOnly) throw new Error("This team view is read-only.");
-      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, { note: noteWithAttachments() || "Donnit." });
-      return (await res.json()) as Task;
+      const trimmedMemory = memoryNote.trim();
+      const res = await apiRequest("POST", `/api/tasks/${task.id}/complete`, {
+        note: noteWithAttachments() || "Donnit.",
+        memoryNote: trimmedMemory.length > 0 ? trimmedMemory : undefined,
+      });
+      return { task: (await res.json()) as Task, memoryNoteSnapshot: trimmedMemory };
     },
-    onSuccess: async () => {
+    onSuccess: async ({ memoryNoteSnapshot }) => {
       await invalidateWorkspace();
-      toast({ title: "Donnit", description: "Task completed." });
+      // Phase 2 D2: when the user added a wisdom note, refresh the Brain tab
+      // for that position so an admin opening it immediately sees the new row.
+      if (memoryNoteSnapshot.length > 0 && task?.positionProfileId) {
+        queryClient.invalidateQueries({ queryKey: ["position-brain", String(task.positionProfileId)] });
+        const positionName = positionProfiles.find(
+          (p) => String(p.id) === String(task.positionProfileId),
+        )?.title ?? "this position";
+        toast({
+          title: `Captured to ${positionName}'s brain`,
+          description: memoryNoteSnapshot.length > 100
+            ? `${memoryNoteSnapshot.slice(0, 100)}…`
+            : memoryNoteSnapshot,
+        });
+      } else {
+        toast({ title: "Donnit", description: "Task completed." });
+      }
       onOpenChange(false);
     },
     onError: (error: unknown) => {
@@ -1141,6 +1165,25 @@ export default function TaskDetailDialog({
           </div>
         </div>
         <DialogFooter className="flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
+          {task?.positionProfileId && !readOnly && task.status !== "completed" && (
+            <div className="w-full sm:order-3 sm:basis-full sm:pt-2">
+              <Label htmlFor="task-memory-note" className="text-xs font-medium text-muted-foreground">
+                Anything important for the next person in this role?
+                <span className="ml-1 font-normal italic">Optional — captured to the position's brain.</span>
+              </Label>
+              <Textarea
+                id="task-memory-note"
+                value={memoryNote}
+                onChange={(event) => setMemoryNote(event.target.value)}
+                placeholder="e.g. Always pass UTC to the export — there's a timezone bug otherwise."
+                rows={2}
+                maxLength={2000}
+                disabled={readOnly || donnit.isPending}
+                className="mt-1 text-sm"
+                data-testid="input-task-memory-note"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-2 sm:flex-row">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
