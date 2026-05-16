@@ -150,6 +150,15 @@ export const noteRequestSchema = z.object({
   note: z.string().trim().min(1).max(4000),
 });
 
+// Used by POST /api/tasks/:id/complete only. `note` is the existing
+// completion note. `memoryNote` is the optional one-tap user-elective
+// wisdom that gets captured into position_profile_knowledge as a separate
+// `kind: 'how_to'` row alongside the structural process row.
+export const completionMemorySchema = z.object({
+  note: z.string().trim().max(4000).optional(),
+  memoryNote: z.string().trim().max(2000).optional(),
+});
+
 export const externalTaskSuggestionSchema = z.object({
   text: z.string().trim().min(2).max(4000),
   from: z.string().trim().max(200).optional(),

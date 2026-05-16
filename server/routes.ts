@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import crypto from "node:crypto";
 import {
   chatRequestSchema,
+  completionMemorySchema,
   externalTaskSuggestionSchema,
   noteRequestSchema,
   taskCreateRequestSchema,
@@ -70,6 +71,7 @@ import {
   slugifyPositionTitle,
 } from "./intelligence/brain-export";
 import { adminResolutionView, memberResolutionView } from "./intelligence/task-resolution-view";
+import { captureUserWisdomFromCompletion } from "./intelligence/completion-memory";
 import archiver from "archiver";
 
 const DEMO_USER_ID = 1;
@@ -10264,6 +10266,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           eventType: memoryEventType,
           note: eventNote,
         });
+        if (action === "complete") {
+          // Phase 2 D1: user-elective wisdom capture on completion. The
+          // existing enrichPositionProfileMemoryFromTask above captures the
+          // structural 'process' row; this captures a separate 'how_to' row
+          // ONLY when the user typed a memoryNote. Empty -> no-op. Failures
+          // never break completion.
+          const completionParsed = completionMemorySchema.safeParse(req.body);
+          const memoryNote = completionParsed.success ? completionParsed.data.memoryNote : undefined;
+          const positionProfileId = (updated as { position_profile_id?: string | null }).position_profile_id ?? null;
+          const visibility = (updated as { visibility?: string }).visibility ?? "work";
+          if (memoryNote && memoryNote.trim().length > 0 && positionProfileId) {
+            try {
+              await captureUserWisdomFromCompletion({
+                store,
+                orgId: updated.org_id,
+                taskId: updated.id,
+                positionProfileId,
+                actorId: auth.userId,
+                taskTitle: updated.title,
+                memoryNote,
+                visibility,
+              });
+            } catch (err) {
+              console.error(
+                "[donnit] task completion memory capture failed",
+                err instanceof Error ? err.message : String(err),
+              );
+            }
+          }
+        }
         if (action === "complete" && existing.status !== "completed") {
           await createNextRecurringOccurrenceFromTask({
             store,
