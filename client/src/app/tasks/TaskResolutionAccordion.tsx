@@ -46,12 +46,23 @@ type AdminView = BaseResolutionView & {
 type ResolutionView = MemberView | AdminView;
 
 const PHRASE_LABELS: Record<string, string> = {
+  // Canonical future-architecture keys (kept so a future resolver upgrade
+  // doesn't regress this UI).
   assignee_phrase: "Who",
   object_phrase: "What",
   temporal_phrase: "When",
-  priority_phrase: "Priority phrase",
-  privacy_phrase: "Privacy phrase",
+  priority_phrase: "Priority",
+  privacy_phrase: "Privacy",
   recurrence_phrase: "Recurrence",
+  // Current chat-logger keys (server/routes.ts:chatResolutionParsedSlots).
+  explicitAssignment: "Assignment intent",
+  targetPhrases: "Target",
+  dueDate: "Due",
+  dueTimeAmbiguous: "Time (ambiguous)",
+  urgency: "Urgency",
+  recurrence: "Recurrence",
+  visibility: "Privacy",
+  estimateMinutes: "Estimate (min)",
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -60,8 +71,13 @@ const FIELD_LABELS: Record<string, string> = {
   due: "Due",
   position_profile: "Position profile",
   recurrence: "Recurrence",
+  urgency: "Urgency",
+  visibility: "Privacy",
   intent: "Intent",
 };
+
+// Phrase keys whose value isn't worth showing when empty/false/zero.
+const PHRASE_BLANK_WHEN_FALSY = new Set(["explicitAssignment", "dueTimeAmbiguous", "estimateMinutes"]);
 
 function formatPercent(n: number | null): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
@@ -71,12 +87,27 @@ function formatPercent(n: number | null): string {
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
+    return value.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).join(", ");
+  }
   try {
     return JSON.stringify(value);
   } catch {
     return "(value)";
   }
+}
+
+function shouldRenderPhrase(key: string, value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (PHRASE_BLANK_WHEN_FALSY.has(key)) {
+    if (value === false || value === 0) return false;
+  }
+  if (Array.isArray(value) && value.length === 0) return false;
+  if (typeof value === "string" && value.trim() === "") return false;
+  return true;
 }
 
 interface TaskResolutionAccordionProps {
@@ -131,22 +162,23 @@ export default function TaskResolutionAccordion({ taskId }: TaskResolutionAccord
       {open && (
         <div className="space-y-4 border-t border-border px-3 py-3">
           {/* Parsed phrases */}
-          {Object.keys(data.parsed_slots ?? {}).length > 0 && (
-            <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Parsed phrases</p>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(data.parsed_slots).map(([key, value]) => {
-                  if (!value) return null;
-                  return (
+          {(() => {
+            const entries = Object.entries(data.parsed_slots ?? {}).filter(([k, v]) => shouldRenderPhrase(k, v));
+            if (entries.length === 0) return null;
+            return (
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Parsed phrases</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {entries.map(([key, value]) => (
                     <span key={key} className="inline-flex items-baseline gap-1 rounded-md bg-muted px-2 py-0.5 text-xs">
                       <span className="text-muted-foreground">{PHRASE_LABELS[key] ?? key}:</span>
                       <span className="font-medium text-foreground">{formatValue(value)}</span>
                     </span>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Resolved entities */}
           {data.resolved.length > 0 && (

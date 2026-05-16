@@ -66,6 +66,54 @@ describe("summarizeResolvedEntities", () => {
     const out = summarizeResolvedEntities({ resolved: { intent: "create_task" } });
     expect(out[0]).toMatchObject({ field: "intent", value: "create_task", confidence: null, inferred: false });
   });
+
+  // Regression coverage for audit concern #2 (2026-05-16): the chat resolver
+  // writes a flat resolution_output instead of the canonical nested shape.
+  // The adapter has to recognize and project it into ResolvedEntitySummary[].
+  it("adapts the flat chat-resolver shape into canonical summaries", () => {
+    const out = summarizeResolvedEntities({
+      title: "Prepare the board packet",
+      assignedToId: "user-jordan",
+      positionProfileId: "profile-ea-ceo",
+      dueDate: "2026-05-22",
+      urgency: "high",
+      recurrence: "none",
+      visibility: "work",
+      missing: [],
+      decision: "created",
+    }, 0.92);
+    const byField = Object.fromEntries(out.map((s) => [s.field, s]));
+    expect(byField.title).toMatchObject({ value: "Prepare the board packet", confidence: null });
+    expect(byField.assignee).toMatchObject({ value: "user-jordan", confidence: 0.92 });
+    expect(byField.position_profile).toMatchObject({ value: "profile-ea-ceo", confidence: 0.92 });
+    expect(byField.due).toMatchObject({ value: "2026-05-22", confidence: null });
+    expect(byField.urgency).toMatchObject({ value: "high", confidence: null });
+    expect(byField.recurrence).toMatchObject({ value: "none", confidence: null });
+    expect(byField.visibility).toMatchObject({ value: "work", confidence: null });
+  });
+
+  it("skips flat-shape fields whose value is null/undefined", () => {
+    const out = summarizeResolvedEntities({
+      title: "X",
+      assignedToId: null,
+      positionProfileId: undefined,
+      dueDate: null,
+    }, 0.9);
+    expect(out.map((s) => s.field)).toEqual(["title"]);
+  });
+
+  it("prefers the nested shape when both nested and flat fields are present", () => {
+    const out = summarizeResolvedEntities({
+      resolved: {
+        assignee: { value: "user-from-nested", confidence: 0.99, inferred: false },
+      },
+      // Flat keys are also present but should be ignored.
+      assignedToId: "user-from-flat",
+      title: "should-not-appear",
+    }, 0.5);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ field: "assignee", value: "user-from-nested", confidence: 0.99 });
+  });
 });
 
 describe("previewCandidates", () => {
@@ -90,6 +138,35 @@ describe("previewCandidates", () => {
   it("respects the limit", () => {
     const snapshot = { assignee: [{ display_name: "A" }, { display_name: "B" }, { display_name: "C" }, { display_name: "D" }] };
     expect(previewCandidates(snapshot, 2)).toHaveLength(2);
+  });
+
+  // Regression coverage for audit concern #2/#3 (2026-05-16): the chat
+  // resolver writes a candidate_snapshot keyed by resolvedMember /
+  // resolvedProfile / ambiguousMembers etc., NOT by canonical field names.
+  it("recognizes the chat-resolver candidate snapshot shape", () => {
+    const out = previewCandidates({
+      matchedPhrase: "the assistant",
+      confidence: 0.92,
+      resolvedMember: { id: "u-jordan", name: "Jordan Lee", email: "j@example.com" },
+      resolvedProfile: { id: "p-ea", title: "Executive Assistant" },
+      ambiguousMembers: [{ id: "u-other", name: "Jordan Other" }],
+      ambiguousProfiles: [],
+      mentionedProfiles: [],
+    }, 3);
+    expect(out).toHaveLength(3);
+    const fields = out.map((c) => c.field);
+    expect(fields).toContain("assignee");
+    expect(fields).toContain("position_profile");
+    // The matched-phrase context is exposed via the source label for traceability.
+    const resolvedAssignee = out.find((c) => c.field === "assignee" && c.display_name === "Jordan Lee");
+    expect(resolvedAssignee).toBeDefined();
+    expect(resolvedAssignee?.source).toMatch(/the assistant/);
+    expect(resolvedAssignee?.confidence).toBe(0.92);
+  });
+
+  it("falls back gracefully when the chat snapshot has only confidence/matchedPhrase", () => {
+    const out = previewCandidates({ matchedPhrase: "x", confidence: 0.5 }, 3);
+    expect(out).toEqual([]);
   });
 });
 
