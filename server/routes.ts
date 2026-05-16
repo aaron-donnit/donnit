@@ -72,6 +72,7 @@ import {
 } from "./intelligence/brain-export";
 import { adminResolutionView, memberResolutionView } from "./intelligence/task-resolution-view";
 import { captureUserWisdomFromCompletion } from "./intelligence/completion-memory";
+import { estimateOpenAiCost, type ResponseUsage } from "./intelligence/openai-agent";
 import archiver from "archiver";
 
 const DEMO_USER_ID = 1;
@@ -5949,6 +5950,17 @@ type AiTaskExtraction = {
   clarificationQuestion: string | null;
   rationale: string;
   sourceExcerpt: string;
+  // Phase 1 D5 audit fix (2026-05-16): attach real per-call telemetry so
+  // logChatResolutionEvent can record the actual model and estimated cost
+  // instead of falling back to DONNIT_AI_MODEL + 0. Optional because not
+  // every path through this type populates it (e.g. fallback parsers).
+  _telemetry?: {
+    model: string;
+    latencyMs: number;
+    estimatedCostUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+  };
 };
 
 type ChatAiWorkspaceContext = {
@@ -6305,6 +6317,8 @@ async function extractTaskWithAi(input: {
     "Correct obvious spelling and grammar before intent detection. One-edit typos like assistnt/assistant, poposal/proposal, reveiw/review, nect/next, projekt/project should be corrected when context supports the correction.",
     "Do not guess past ambiguity. If a date phrase like next month is not precise enough, return a clarification question instead of inventing a specific day.",
   ].join(" ");
+  const startedAt = Date.now();
+  const modelName = process.env.DONNIT_AI_MODEL ?? "gpt-5-mini";
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -6314,7 +6328,7 @@ async function extractTaskWithAi(input: {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.DONNIT_AI_MODEL ?? "gpt-5-mini",
+        model: modelName,
         input: [
           {
             role: "system",
@@ -6426,7 +6440,19 @@ async function extractTaskWithAi(input: {
     const text = extractOutputText(json);
     if (!text) return null;
     const parsed = aiTaskExtractionSchema.safeParse(JSON.parse(text));
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    const usage = (json as { usage?: ResponseUsage }).usage;
+    const inputTokens = usage?.input_tokens ?? 0;
+    const outputTokens = usage?.output_tokens ?? 0;
+    const data = parsed.data as AiTaskExtraction;
+    data._telemetry = {
+      model: modelName,
+      latencyMs: Date.now() - startedAt,
+      estimatedCostUsd: estimateOpenAiCost(modelName, usage),
+      inputTokens,
+      outputTokens,
+    };
+    return data;
   } catch {
     return null;
   } finally {
@@ -7293,6 +7319,17 @@ async function logChatResolutionEvent(input: {
   decision: "created" | "asked";
   createdTaskId?: string | null;
   latencyMs?: number;
+  // Audit fix #4 (2026-05-16): real per-call telemetry from extractTaskWithAi.
+  // Falls back to env-config defaults when the deterministic resolver fired
+  // alone (no LLM call), so admin observability stays honest about which
+  // routings actually went through Claude/GPT vs. pure scoring.
+  telemetry?: {
+    model: string;
+    latencyMs: number;
+    estimatedCostUsd: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  };
 }) {
   try {
     const resolutionEvent = await input.store.createTaskResolutionEvent(input.orgId, {
@@ -7320,9 +7357,11 @@ async function logChatResolutionEvent(input: {
       correction: {},
       signal_type: input.decision === "created" ? "implicit_acceptance" : null,
       signal_strength: input.decision === "created" ? 0.3 : null,
-      latency_ms: input.latencyMs ?? 0,
-      model: process.env.DONNIT_AI_MODEL ?? null,
-      cost_usd: 0,
+      latency_ms: input.telemetry?.latencyMs ?? input.latencyMs ?? 0,
+      // Audit fix #4: prefer real per-call telemetry when the LLM was invoked.
+      // null model + 0 cost means the deterministic resolver handled it alone.
+      model: input.telemetry?.model ?? null,
+      cost_usd: input.telemetry?.estimatedCostUsd ?? 0,
     });
     const profileId = input.positionProfileId ?? input.workspaceResolution.profile?.id ?? null;
     await input.store.createLearningEvent(input.orgId, {
@@ -9282,6 +9321,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             missing,
             decision: "asked",
             latencyMs: Date.now() - chatResolutionStartedAt,
+            telemetry: ai?._telemetry,
           });
           await setPendingChatTask(store, orgId, pendingTask);
           const assistant = await store.createChatMessage(orgId, {
@@ -9328,6 +9368,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           decision: "created",
           createdTaskId: created.id,
           latencyMs: Date.now() - chatResolutionStartedAt,
+          telemetry: ai?._telemetry,
         });
         await learnAliasesFromChatResolution({
           store,
